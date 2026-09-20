@@ -35,7 +35,16 @@ export function runSmoke(): void {
       }
     });
 
-  GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+  const ALLOWED = Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW;
+  let tries = 0;
+  GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
+    if (((Main.actionMode as Shell.ActionMode) & ALLOWED) === 0) {
+      if (++tries < 60)
+        return GLib.SOURCE_CONTINUE;
+      console.log(`${TAG} FAIL (actionMode never NORMAL/OVERVIEW; last=${Main.actionMode})`);
+      return GLib.SOURCE_REMOVE;
+    }
+    console.log(`${TAG} actionMode=${Main.actionMode} sessionMode=${Main.sessionMode.currentMode}`);
     const seat = Clutter.get_default_backend().get_default_seat();
     const keyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
     const now = () => GLib.get_monotonic_time();

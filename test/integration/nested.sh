@@ -28,6 +28,7 @@ cat > "$SANDBOX/config/glib-2.0/settings/keyfile" <<'EOF'
 [org/gnome/shell]
 enabled-extensions=['i3-shell@troja']
 disable-user-extensions=false
+welcome-dialog-last-shown-version='999.0'
 EOF
 
 export I3SHELL_SANDBOX="$SANDBOX" I3SHELL_VISIBLE="$VISIBLE" I3SHELL_ROOT="$ROOT"
