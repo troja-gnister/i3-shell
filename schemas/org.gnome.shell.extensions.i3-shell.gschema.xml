@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="i3-shell">
+  <schema id="org.gnome.shell.extensions.i3-shell" path="/org/gnome/shell/extensions/i3-shell/">
+    <key name="config-path" type="s">
+      <default>''</default>
+      <summary>Path of the i3 config file</summary>
+      <description>Empty means ~/.config/i3/config.</description>
+    </key>
+    <key name="overridden-settings" type="s">
+      <default>'{}'</default>
+      <summary>Snapshot of GNOME settings this extension overrode</summary>
+      <description>JSON object {schema: {key: originalValue}}; restored when the extension is disabled.</description>
+    </key>
+  </schema>
+</schemalist>

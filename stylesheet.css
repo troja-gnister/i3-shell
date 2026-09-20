@@ -1,0 +1,15 @@
+.i3-shell-bar {
+  spacing: 2px;
+}
+.i3-shell-ws {
+  padding: 0 8px;
+  margin: 3px 1px;
+  border-radius: 4px;
+  font-weight: bold;
+}
+.i3-shell-mode {
+  padding: 0 8px;
+  margin: 3px 4px;
+  border-radius: 4px;
+  font-weight: bold;
+}

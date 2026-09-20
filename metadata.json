@@ -1,0 +1,10 @@
+{
+  "uuid": "i3-shell@troja",
+  "name": "i3-shell",
+  "description": "The i3 experience in GNOME: workspaces, keybindings and tree tiling driven by ~/.config/i3/config",
+  "shell-version": ["50"],
+  "session-modes": ["user", "unlock-dialog"],
+  "settings-schema": "org.gnome.shell.extensions.i3-shell",
+  "url": "https://github.com/troja-gnister/i3-shell",
+  "version-name": "0.1.0"
+}
