@@ -184,7 +184,7 @@ i3 combos become Mutter accelerator strings: `Mod4` → `<Super>`, `Mod1` → `<
 
 ### 6.5 Variables
 
-`set $name value` — textual substitution, longest name first, anywhere on subsequent lines (i3 semantics). Quoted values keep their quotes (`set $ws1 "1:I"` → `workspace number "1:I"`).
+`set $name value` — textual substitution, longest name first, anywhere in the file (i3 semantics: every `set` line is collected in a first pass, then substituted, so definition order does not matter; expansion is not recursive). Quoted values keep their quotes (`set $ws1 "1:I"` → `workspace number "1:I"`).
 
 ### 6.6 Reload semantics
 
