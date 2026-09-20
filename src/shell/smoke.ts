@@ -42,6 +42,8 @@ export function runSmoke(): void {
       if (++tries < 60)
         return GLib.SOURCE_CONTINUE;
       console.log(`${TAG} FAIL (actionMode never NORMAL/OVERVIEW; last=${Main.actionMode})`);
+      global.display.disconnect(signalId);
+      global.display.ungrab_accelerator(action);
       return GLib.SOURCE_REMOVE;
     }
     console.log(`${TAG} actionMode=${Main.actionMode} sessionMode=${Main.sessionMode.currentMode}`);
