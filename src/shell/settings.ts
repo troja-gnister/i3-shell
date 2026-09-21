@@ -93,7 +93,7 @@ export class SettingsOverrides implements SettingsPort {
     return cleared;
   }
 
-  /** Puts every snapshotted value back and empties the snapshot. */
+  /** Restores saved values; keeps failed or unavailable entries persisted for a later retry. */
   restoreAll(): void {
     for (const [schemaId, keys] of Object.entries(this._snapshot)) {
       const settings = this._settings(schemaId);
@@ -101,20 +101,26 @@ export class SettingsOverrides implements SettingsPort {
         continue;
       for (const [key, value] of Object.entries(keys)) {
         try {
+          let restored: boolean;
           if (Array.isArray(value))
-            settings.set_strv(key, value);
+            restored = settings.set_strv(key, value);
           else if (typeof value === 'string')
-            settings.set_string(key, value);
+            restored = settings.set_string(key, value);
           else if (typeof value === 'boolean')
-            settings.set_boolean(key, value);
+            restored = settings.set_boolean(key, value);
           else
-            settings.set_int(key, value);
+            restored = settings.set_int(key, value);
+          if (restored)
+            delete keys[key];
+          else
+            log.warn(`could not restore ${schemaId} ${key}; original kept for retry`);
         } catch (e) {
           log.error(`could not restore ${schemaId} ${key}`, e);
         }
       }
+      if (Object.keys(keys).length === 0)
+        delete this._snapshot[schemaId];
     }
-    this._snapshot = {};
     this._saveSnapshot();
   }
 
