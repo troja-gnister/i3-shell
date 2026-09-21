@@ -37,5 +37,5 @@ export GSETTINGS_BACKEND=keyfile
 
 status=0
 dbus-run-session -- bash "$ROOT/test/integration/inside.sh" "$@" || status=$?
-if [[ $KEEP -eq 1 ]]; then echo "sandbox kept: $SANDBOX"; else rm -rf "$SANDBOX"; fi
+if [[ $KEEP -eq 1 ]]; then echo "sandbox kept: $SANDBOX"; else rm -rf "$SANDBOX" 2>/dev/null || true; fi
 exit $status
