@@ -9,7 +9,7 @@ with directional navigation. Three things are the non-negotiable core: **workspa
 **shortcuts**, **dynamic tiling**. Phases 1 and 2 deliver that core; Phases 3 and 4 add appearance and
 fidelity.
 
-**State (2026-09-21):** Phase 1 (Foundation) is implemented and reviewed on branch `phase-1`. Phases 2–4
+**State (2026-09-21):** Phase 1 (Foundation) is implemented, reviewed and merged into `main` (commit `463ca10`). Phases 2–4
 are designed (spec) but not planned in detail or built. The live acceptance walk of Phase 1 on the real
 desktop has not been done yet.
 
@@ -94,11 +94,11 @@ Key semantics already decided (spec §19 decisions log): parse the real i3 confi
 
 ## 5. What is done — Phase 1 (Foundation)
 
-Delivered on `phase-1` (30 commits over `main`): toolchain; config lexer/parser/resolver with the golden test against the real config (65 default + 11 resize-mode bindings, zero diagnostics); command parser; engine; accelerator binder; dynamic GNOME override + snapshot/restore; static workspaces with names; pill indicator; lock handling; config loader; D-Bus; nested-shell harness with automated scenarios; README and checklist.
+Delivered in 31 commits (`e4628e2..463ca10`, now on `main`; the `phase-1` branch was merged and deleted): toolchain; config lexer/parser/resolver with the golden test against the real config (65 default + 11 resize-mode bindings, zero diagnostics); command parser; engine; accelerator binder; dynamic GNOME override + snapshot/restore; static workspaces with names; pill indicator; lock handling; config loader; D-Bus; nested-shell harness with automated scenarios; README and checklist.
 
 Verification: unit 52/52; typecheck both programs; `npm run test:integration` green (workspace switching by real key press, `exec`, resize-mode entry/exit with bare-key grabs, reload rejection and acceptance with a newly grabbed binding, lock/unlock). A whole-branch review ended "with fixes"; the fix wave landed and re-reviewed clean.
 
-**Not done for Phase 1:** the human walk of `docs/acceptance/phase-1.md` on the live desktop (A1–A7, especially A2 pills, A3 XF86 keys, A6 restore-on-disable). Phase 1 counts as complete only when that checklist is ticked. Then merge `phase-1` into `main`.
+**Not done for Phase 1:** the human walk of `docs/acceptance/phase-1.md` on the live desktop (A1–A7, especially A2 pills, A3 XF86 keys, A6 restore-on-disable). Phase 1 counts as complete only when that checklist is ticked; fixes it produces go straight onto `main` or a `phase-1-fixes` branch.
 
 Small items deferred from Phase 1 are listed in the carry-forward doc; the first one to do in Phase 2 is a fake-`Gio.Settings` unit test for `SettingsOverrides` (the only component that can damage the user's settings).
 
@@ -127,7 +127,7 @@ The hard one; it is what makes this "i3".
 
 ## 7. How to continue (process that worked)
 
-1. Do the Phase 1 live walk; fix anything it finds on `phase-1`; merge to `main`.
+1. Do the Phase 1 live walk; fix anything it finds.
 2. Write the Phase 2 plan with the `superpowers:writing-plans` skill from spec §7–§8 + the carry-forward doc, keeping Layer 0 pure and TDD-first (property tests are the backbone of the tree).
 3. Execute with `superpowers:subagent-driven-development`: one implementer per task, a reviewer per task, a whole-branch review at the end. Expect the plan's code to have defects; the review loop is what catches them. Keep a ledger; record every ruling.
 4. Verify claims before trusting them: type-check GNOME API usage against `@girs` in a scratch project, extract the shell's JS to check behaviour, and run the nested shell for anything runtime-dependent.
