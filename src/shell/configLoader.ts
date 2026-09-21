@@ -2,6 +2,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import {loadConfigText} from '../config';
 import {FALLBACK_CONFIG} from '../config/defaultConfig';
+import type {Diagnostic} from '../config/model';
 import type {LoadedConfig} from '../engine';
 import {log} from './log';
 
@@ -52,13 +53,7 @@ export class ConfigLoader {
           path,
         };
       }
-      log.warn(`config ${path} not found; using the built-in fallback`);
-      return {
-        config: loadConfigText(FALLBACK_CONFIG).config,
-        diagnostics: [{line: 0, severity: 'warning', message: `${path} not found`}],
-        source: 'fallback',
-        path,
-      };
+      return this._recover(path, [{line: 0, severity: 'warning', message: `${path} not found`}], 'not found');
     }
 
     const result = loadConfigText(text);
@@ -71,15 +66,20 @@ export class ConfigLoader {
     if (mode === 'reload')
       return {config: null, diagnostics: result.diagnostics, source: 'file', path};
 
+    return this._recover(path, result.diagnostics, 'rejected');
+  }
+
+  /** Initial-load recovery is the same for missing, unreadable and invalid files. */
+  private _recover(path: string, diagnostics: Diagnostic[], reason: 'not found' | 'rejected'): LoadedConfig {
     const cached = readText(this.cachePath);
     if (cached !== null) {
       const cachedResult = loadConfigText(cached);
       if (cachedResult.config) {
-        log.warn(`config ${path} rejected; using the last good config from ${this.cachePath}`);
-        return {config: cachedResult.config, diagnostics: result.diagnostics, source: 'cache', path};
+        log.warn(`config ${path} ${reason}; using the last good config from ${this.cachePath}`);
+        return {config: cachedResult.config, diagnostics, source: 'cache', path};
       }
     }
-    log.warn(`config ${path} rejected and no usable cached config; using the built-in fallback`);
-    return {config: loadConfigText(FALLBACK_CONFIG).config, diagnostics: result.diagnostics, source: 'fallback', path};
+    log.warn(`config ${path} ${reason} and no usable cached config; using the built-in fallback`);
+    return {config: loadConfigText(FALLBACK_CONFIG).config, diagnostics, source: 'fallback', path};
   }
 }
