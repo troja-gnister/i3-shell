@@ -50,23 +50,33 @@ class ControlObject {
   }
 
   GetState(): string {
-    // gnome-shell enables extensions before its `startup-complete` handler sets the action mode, and a
-    // window-less session rests in the overview (OVERVIEW, value 2); keybindings only fire once the mode
-    // is NORMAL or OVERVIEW. @girs/gnome-shell mistypes Main.actionMode as the literal NONE, hence the cast.
-    const actionMode = Number(Main.actionMode as Shell.ActionMode);
-    const ready = ((Main.actionMode as Shell.ActionMode) & (Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW)) !== 0;
-    return JSON.stringify({...this._engine.state(), actionMode, ready});
+    try {
+      // gnome-shell enables extensions before its `startup-complete` handler sets the action mode, and a
+      // window-less session rests in the overview (OVERVIEW, value 2); keybindings only fire once the mode
+      // is NORMAL or OVERVIEW. @girs/gnome-shell mistypes Main.actionMode as the literal NONE, hence the cast.
+      const actionMode = Number(Main.actionMode as Shell.ActionMode);
+      const ready = ((Main.actionMode as Shell.ActionMode) & (Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW)) !== 0;
+      return JSON.stringify({...this._engine.state(), actionMode, ready});
+    } catch (e) {
+      log.error('GetState failed', e);
+      return JSON.stringify({error: String(e)});
+    }
   }
 
   GetConfigStatus(): string {
-    const loaded = this._engine.lastLoad;
-    return JSON.stringify({
-      path: loaded.path,
-      source: loaded.source,
-      errors: loaded.diagnostics.filter(d => d.severity === 'error').length,
-      warnings: loaded.diagnostics.filter(d => d.severity === 'warning').length,
-      diagnostics: loaded.diagnostics,
-    });
+    try {
+      const loaded = this._engine.lastLoad;
+      return JSON.stringify({
+        path: loaded.path,
+        source: loaded.source,
+        errors: loaded.diagnostics.filter(d => d.severity === 'error').length,
+        warnings: loaded.diagnostics.filter(d => d.severity === 'warning').length,
+        diagnostics: loaded.diagnostics,
+      });
+    } catch (e) {
+      log.error('GetConfigStatus failed', e);
+      return JSON.stringify({error: String(e)});
+    }
   }
 }
 
