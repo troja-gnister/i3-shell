@@ -3,6 +3,7 @@ import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import type {Colors} from '../config/model';
+import {guard} from './util/signals';
 
 export interface PillState {
   name: string;
@@ -36,7 +37,7 @@ export class Indicator implements IndicatorPort {
     this._modeLabel = new St.Label({style_class: 'i3-shell-mode', y_align: Clutter.ActorAlign.CENTER});
     this._modeLabel.hide();
     this._box.add_child(this._modeLabel);
-    this._button.connect('scroll-event', (_actor: Clutter.Actor, event: Clutter.Event) => {
+    this._button.connect('scroll-event', guard('scroll-event', (_actor: Clutter.Actor, event: Clutter.Event) => {
       const direction = event.get_scroll_direction();
       if (direction === Clutter.ScrollDirection.UP) {
         this._onScroll('prev');
@@ -47,7 +48,7 @@ export class Indicator implements IndicatorPort {
         return Clutter.EVENT_STOP;
       }
       return Clutter.EVENT_PROPAGATE;
-    });
+    }));
     Main.panel.addToStatusArea('i3-shell', this._button, 0, 'left');
     this.hideActivities();
   }
@@ -83,7 +84,7 @@ export class Indicator implements IndicatorPort {
     while (this._pills.length < states.length) {
       const index = this._pills.length;
       const pill = new St.Button({style_class: 'i3-shell-ws', reactive: true, can_focus: false, track_hover: true});
-      pill.connect('clicked', () => this._onClick(index));
+      pill.connect('clicked', guard('clicked', () => this._onClick(index)));
       this._box.insert_child_at_index(pill, index);   // pills stay before the mode label
       this._pills.push(pill);
     }
