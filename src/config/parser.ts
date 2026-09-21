@@ -39,7 +39,7 @@ export function parse(lines: LogicalLine[]): ParseResult {
   const directives: Directive[] = [];
   const diagnostics: Diagnostic[] = [];
   let mode = 'default';
-  let insideBar = false;
+  let barDepth = 0;
 
   for (const l of lines) {
     const text = l.text;
@@ -47,9 +47,11 @@ export function parse(lines: LogicalLine[]): ParseResult {
       diagnostics.push({line: l.line, severity: 'error', message});
     };
 
-    if (insideBar) {
-      if (text === '}')
-        insideBar = false;
+    if (barDepth > 0) {
+      if (text.endsWith('{'))
+        barDepth++;
+      else if (text === '}')
+        barDepth--;
       continue;
     }
     if (text === '}') {
@@ -63,7 +65,7 @@ export function parse(lines: LogicalLine[]): ParseResult {
     const [head, rest] = splitHead(text);
 
     if (head === 'bar' && rest.startsWith('{')) {
-      insideBar = true;
+      barDepth = 1;
       directives.push({kind: 'ignored', line: l.line, name: 'bar'});
       continue;
     }
@@ -206,7 +208,7 @@ export function parse(lines: LogicalLine[]): ParseResult {
   const lastLine = lines.length > 0 ? lines[lines.length - 1].line : 0;
   if (mode !== 'default')
     diagnostics.push({line: lastLine, severity: 'error', message: `mode "${mode}": missing closing }`});
-  if (insideBar)
+  if (barDepth > 0)
     diagnostics.push({line: lastLine, severity: 'error', message: 'bar: missing closing }'});
   return {directives, diagnostics};
 }

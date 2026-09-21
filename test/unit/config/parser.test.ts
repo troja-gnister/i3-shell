@@ -84,4 +84,14 @@ describe('parse directives', () => {
     expect(P('bindsym Mod4+x').diagnostics[0].message).toBe('bindsym: missing command');
     expect(P('floating_modifier Mod3').diagnostics[0].message).toBe('floating_modifier: expected Mod4|Mod1|none');
   });
+
+  it('skips bar blocks with nested sub-blocks and reports an unclosed one', () => {
+    const r = P('bar {\n  status_command i3status\n  colors {\n    background #000000\n  }\n}\nbindsym Mod4+q kill');
+    expect(r.diagnostics).toEqual([]);
+    expect(r.directives).toEqual([
+      {kind: 'ignored', line: 1, name: 'bar'},
+      {kind: 'bindsym', line: 7, mode: 'default', combo: 'Mod4+q', command: 'kill', noRepeat: false},
+    ]);
+    expect(P('bar {\n  colors {\n  }').diagnostics).toEqual([{line: 3, severity: 'error', message: 'bar: missing closing }'}]);
+  });
 });
