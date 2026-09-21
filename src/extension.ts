@@ -30,6 +30,16 @@ export default class I3ShellExtension extends Extension {
   private _started = false;
 
   enable(): void {
+    try {
+      this._enableInner();
+    } catch (e) {
+      log.error('enable failed; rolling back', e);
+      this.disable();
+      throw e;
+    }
+  }
+
+  private _enableInner(): void {
     log.info('enable');
     const tracker = new SignalTracker();
     this._tracker = tracker;

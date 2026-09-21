@@ -8,7 +8,7 @@ import {log} from './log';
 import type {SignalTracker} from './util/signals';
 
 export interface GrabReport {
-  /** Bindings whose grab failed on the first attempt; they are retried once after RETRY_MS. */
+  /** Bindings whose grab failed on the first attempt; they are retried on the RETRY_DELAYS_MS series. */
   failed: Binding[];
 }
 
@@ -20,7 +20,8 @@ export interface KeyBinderPort {
 
 /** Grabbed accelerators fire in normal desktop use and in the overview; the lock screen is handled by ungrabbing (§8.4 item 6). */
 const ALLOWED_MODES = Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW;
-const RETRY_MS = 500;
+/** Delays between grab retries; keys held by another process (gsd-media-keys) can take a few seconds to be released after their setting is cleared. */
+const RETRY_DELAYS_MS = [500, 1500, 4000];
 
 /**
  * Owns the set of currently grabbed accelerators. `setBindings()` makes exactly the given set
@@ -93,13 +94,14 @@ export class KeyBinder implements KeyBinderPort {
       log.warn(`ungrab failed for ${accel}`);
   }
 
-  /** gsd-media-keys may still hold an accelerator we just cleared from its settings; try once more shortly after. */
-  private _scheduleRetry(failed: Binding[]): void {
+  /** gsd-media-keys may still hold an accelerator we just cleared from its settings; retry on a backoff series before giving up on it. */
+  private _scheduleRetry(failed: Binding[], attempt = 0): void {
     this._pending = failed;
-    this._retryId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, RETRY_MS, () => {
+    this._retryId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, RETRY_DELAYS_MS[attempt], () => {
       this._retryId = 0;
       const pending = this._pending;
       this._pending = [];
+      const stillFailing: Binding[] = [];
       let succeeded = 0;
       for (const binding of pending) {
         if (this._byAccel.has(binding.accel)) {
@@ -109,10 +111,18 @@ export class KeyBinder implements KeyBinderPort {
         if (this._grab(binding))
           succeeded++;
         else
-          log.warn(`could not grab ${binding.combo} (${binding.accel}): another client holds it`);
+          stillFailing.push(binding);
       }
       if (pending.length > 0)
-        log.info(`retry: grabbed ${succeeded} of ${pending.length} binding(s) that another client held at first`);
+        log.info(`retry ${attempt + 1}/${RETRY_DELAYS_MS.length}: grabbed ${succeeded} of ${pending.length} binding(s) that another client held at first`);
+      if (stillFailing.length > 0) {
+        if (attempt + 1 < RETRY_DELAYS_MS.length)
+          this._scheduleRetry(stillFailing, attempt + 1);
+        else {
+          for (const binding of stillFailing)
+            log.warn(`could not grab ${binding.combo} (${binding.accel}): another client holds it`);
+        }
+      }
       return GLib.SOURCE_REMOVE;
     });
   }

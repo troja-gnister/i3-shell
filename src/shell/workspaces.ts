@@ -12,16 +12,23 @@ export class Workspaces implements WorkspacesPort {
     const manager = global.workspace_manager;
     _tracker.connect(manager, 'active-workspace-changed', onChanged);
     _tracker.connect(manager, 'notify::n-workspaces', onChanged);
+    for (const window of global.display.list_all_windows())
+      this._watch(window, onChanged);
     _tracker.connect(global.display, 'window-created', (_display: Meta.Display, window: Meta.Window) => {
-      const ids: number[] = [];
-      ids.push(_tracker.connect(window, 'workspace-changed', onChanged));
-      ids.push(_tracker.connect(window, 'unmanaged', () => {
-        for (const id of ids)
-          _tracker.disconnect(window, id);
-        onChanged();
-      }));
+      this._watch(window, onChanged);
       onChanged();
     });
+  }
+
+  /** Watches a window's workspace membership and lifetime so `onChanged` fires when either changes. */
+  private _watch(window: Meta.Window, onChanged: () => void): void {
+    const ids: number[] = [];
+    ids.push(this._tracker.connect(window, 'workspace-changed', onChanged));
+    ids.push(this._tracker.connect(window, 'unmanaged', () => {
+      for (const id of ids)
+        this._tracker.disconnect(window, id);
+      onChanged();
+    }));
   }
 
   get count(): number {
