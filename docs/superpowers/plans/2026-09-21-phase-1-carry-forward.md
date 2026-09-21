@@ -4,11 +4,11 @@ Phase 1 (Foundation) was executed from `docs/superpowers/plans/2026-09-20-phase-
 (29 commits on top of `e4628e2`). Every task passed a spec + quality review; a whole-branch review ended
 "with fixes", the fix wave landed (`0da16d4`, `bc21876`, `f79660f`) and its scoped re-review was clean.
 Automated acceptance (`npm run test:integration`: A1, A3, A4, A5, A7 in a nested headless shell) is green.
-**The live walk in `docs/acceptance/phase-1.md` (A1–A7 on the real desktop) is still to be done by the user.**
+**The live walk in `docs/acceptance/phase-1.md` (A1–A7 on the real desktop) passed by user report on 2026-09-21.** No Phase 1 findings were reported. Phase 2 planning is unblocked; the Phase 2A pure-tree plan is written for user review.
 
 ## Follow-up analysis (2026-09-21, baseline `a41638f`)
 
-The user confirmed that the live walk is still pending. Fresh verification on this baseline: 52/52 unit tests, both TypeScript programs and the Layer 0 check passed. Integration was not rerun during this analysis.
+At the start of the follow-up analysis, the live walk was pending. Fresh verification on that baseline: 52/52 unit tests, both TypeScript programs and the Layer 0 check passed. Integration was not rerun during this analysis.
 
 Two defects were reproduced with in-memory adapter fakes and fixed in the follow-up:
 
@@ -17,7 +17,7 @@ Two defects were reproduced with in-memory adapter fakes and fixed in the follow
 
 Fix commits on `main`: `19eac12` (ConfigLoader) and `7bb138b` (settings restoration). Verification: 64/64 unit tests, both TypeScript programs, the Layer 0 check and a release build in a temporary checkout passed. Independent review of both fixes and their tests reported no findings. Integration was not rerun and the installed `dist/` was left unchanged during the user's live walk; run `make install` and log out/in before live retesting these commits.
 
-The user authorized these two fixes on `main` while doing the live A1–A7 walk. Phase 2 planning remains on hold until the user sends the ticked checklist and any findings are fixed. The Phase 2 spec clarifications belong in the binding spec before writing the implementation plan; plan the pure tree and property tests before window lifecycle and geometry integration.
+The user authorized these two fixes on `main` while doing the live A1–A7 walk, and subsequently reported the full checklist green after confirming that tiling and tiled-window resizing belong to Phase 2. The acceptance record identifies the repository revision at that report; the exact loaded revision was not independently captured. The binding spec contains the approved Phase 2 clarifications. `2026-09-21-phase-2a-tree.md` plans the pure tree and property tests; window lifecycle and geometry integration follow in Phase 2B.
 
 The binding spec now records the approved Phase 2 rulings: ignore splash windows, track fixed-size normal windows as floating, target engine-selected containers through `WindowId` adapter operations, and assert coverage/non-overlap only for split children (equal rects for tabbed/stacked children). Geometry reconciliation permits one corrective re-apply per expected-rect generation, then stops for stubborn clients. Fullscreen exit, unminimize, monitor changes and completion of engine-initiated unmaximize force a fresh application even for an unchanged expected rect; workspace changes use the normal diff. These are design amendments, not implemented Phase 2 behavior.
 

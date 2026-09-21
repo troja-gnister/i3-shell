@@ -1,7 +1,7 @@
 # i3-shell — Design Specification
 
 - **Date:** 2026-09-20
-- **Status:** Approved design; Phase 1 implemented, live acceptance pending; Phases 2–4 not implemented
+- **Status:** Approved design; Phase 1 implemented and A1–A7 passed by user report (2026-09-21); Phases 2–4 not implemented
 - **Target:** GNOME Shell 50.x (Mutter 18), Wayland session, Fedora Silverblue 44
 - **Repository:** `~/Dev/i3-shell` (GitHub-bound)
 - **License:** GPL-2.0-or-later

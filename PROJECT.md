@@ -9,9 +9,7 @@ with directional navigation. Three things are the non-negotiable core: **workspa
 **shortcuts**, **dynamic tiling**. Phases 1 and 2 deliver that core; Phases 3 and 4 add appearance and
 fidelity.
 
-**State (2026-09-21):** Phase 1 (Foundation) is implemented, reviewed and merged into `main` (commit `463ca10`). Phases 2–4
-are designed (spec) but not planned in detail or built. The live acceptance walk of Phase 1 on the real
-desktop has not been done yet.
+**State (2026-09-21):** Phase 1 (Foundation) is implemented, reviewed and merged into `main`, with the two recovery fixes in `19eac12` and `7bb138b`. The user reported the full live A1–A7 walk green on 2026-09-21. The Phase 2A pure-tree plan is written for review; Phase 2B window/geometry integration and Phases 3–4 are designed but not yet planned in detail or built.
 
 ---
 
@@ -22,7 +20,8 @@ desktop has not been done yet.
 | `docs/superpowers/specs/2026-09-20-i3-shell-design.md` | **The design spec — the binding authority** (19 sections: acceptance criteria A1–A14, architecture, config grammar, command language, the tree algorithms, window lifecycle, workspaces, keys, indicator, decorations, GNOME overrides, D-Bus, error handling, testing, phases, toolchain, decisions log). |
 | `docs/superpowers/plans/2026-09-20-phase-1-foundation.md` | The Phase 1 implementation plan (14 TDD tasks with full code). Several of its code blocks were wrong and were fixed during execution — where plan and code differ, the code (and the carry-forward doc) wins. |
 | `docs/superpowers/plans/2026-09-21-phase-1-carry-forward.md` | Execution record: every ruling made while building Phase 1, items deferred to Phases 2/4, security note. **Read before planning Phase 2.** |
-| `docs/acceptance/phase-1.md` | The live-session checklist for A1–A7 (to be walked by a human). |
+| `docs/superpowers/plans/2026-09-21-phase-2a-tree.md` | Phase 2A pure-tree implementation plan, ready for user review; window lifecycle and geometry integration follow in Phase 2B. |
+| `docs/acceptance/phase-1.md` | The live-session checklist for A1–A7, passed by user report on 2026-09-21. |
 | `README.md` | User-facing: install, control via D-Bus, dev commands. |
 | `src/` | The extension (TypeScript, see §4). |
 | `test/unit/` | vitest tests on Node (pure core only) incl. `fixtures/reference.i3config` — a byte-identical copy of the user's real i3 config, used as a golden test. |
@@ -98,9 +97,9 @@ Delivered in 31 commits (`e4628e2..463ca10`, now on `main`; the `phase-1` branch
 
 Verification: unit 52/52; typecheck both programs; `npm run test:integration` green (workspace switching by real key press, `exec`, resize-mode entry/exit with bare-key grabs, reload rejection and acceptance with a newly grabbed binding, lock/unlock). A whole-branch review ended "with fixes"; the fix wave landed and re-reviewed clean.
 
-**Not done for Phase 1:** the human walk of `docs/acceptance/phase-1.md` on the live desktop (A1–A7, especially A2 pills, A3 XF86 keys, A6 restore-on-disable). Phase 1 counts as complete only when that checklist is ticked; fixes it produces go straight onto `main` or a `phase-1-fixes` branch.
+**Live acceptance passed:** the user reported all A1–A7 checks green on 2026-09-21, with no Phase 1 findings. `docs/acceptance/phase-1.md` records that report and its provenance. Dynamic tiling and tiled-window resizing remain Phase 2 work.
 
-The follow-up fixes restore last-good-cache recovery for a missing config at startup and preserve saved GNOME settings when restoration fails. Fake-`Gio.Settings` apply/restore/crash-recovery coverage and ConfigLoader regression tests are now included (64 unit tests total). Remaining deferred items are listed in the carry-forward doc. The user is doing A1–A7; hold Phase 2 planning until the ticked checklist arrives and any findings are fixed.
+The follow-up fixes restore last-good-cache recovery for a missing config at startup and preserve saved GNOME settings when restoration fails. Fake-`Gio.Settings` apply/restore/crash-recovery coverage and ConfigLoader regression tests are now included (64 unit tests total). Remaining deferred items are listed in the carry-forward doc. The live acceptance checkpoint is satisfied; Phase 2A planning can proceed to review and execution.
 
 ## 6. What remains — Phases 2, 3, 4
 
@@ -129,8 +128,8 @@ Target arrangements: laptop alone (`eDP-1`) and docked with external display(s),
 
 ## 7. How to continue (process that worked)
 
-1. Do the Phase 1 live walk; fix anything it finds.
-2. Write the Phase 2 plan with the `superpowers:writing-plans` skill from spec §7–§8 + the carry-forward doc, keeping Layer 0 pure and TDD-first (property tests are the backbone of the tree).
+1. Phase 1 live acceptance is recorded as passed; preserve its 64-test regression baseline.
+2. Review and execute the Phase 2A pure-tree plan, keeping Layer 0 pure and TDD-first. Then write the Phase 2B window lifecycle/geometry integration plan against the implemented interfaces. Phase 2 is complete only after the live tiling/resizing and A8–A14 acceptance are delivered.
 3. Execute with `superpowers:subagent-driven-development`: one implementer per task, a reviewer per task, a whole-branch review at the end. Expect the plan's code to have defects; the review loop is what catches them. Keep a ledger; record every ruling.
 4. Verify claims before trusting them: type-check GNOME API usage against `@girs` in a scratch project, extract the shell's JS to check behaviour, and run the nested shell for anything runtime-dependent.
 
