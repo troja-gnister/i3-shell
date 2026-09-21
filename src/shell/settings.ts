@@ -129,11 +129,17 @@ export class SettingsOverrides implements SettingsPort {
     return settings;
   }
 
-  /** Records the original value once. A value already in the snapshot (crash recovery) is never overwritten. */
+  /**
+   * Records the original value once and persists it before the live setting is changed,
+   * so a crash mid-apply cannot lose it. A value already in the snapshot (crash recovery)
+   * is never overwritten.
+   */
   private _remember(schemaId: string, key: string, value: Saved): void {
     const bucket = (this._snapshot[schemaId] ??= {});
-    if (!(key in bucket))
-      bucket[key] = value;
+    if (key in bucket)
+      return;
+    bucket[key] = value;
+    this._saveSnapshot();
   }
 
   private _loadSnapshot(): Snapshot {
