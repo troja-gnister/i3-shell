@@ -21,6 +21,14 @@ expect() {
   if [[ "$got" == "$want" ]]; then echo "ok    $what = $got"
   else echo "FAIL  $what: got '$got', want '$want'"; FAILS=$((FAILS + 1)); fi
 }
+wait_grabbed() { # wait_grabbed <count> <label>
+  local want=$1 label=$2 i
+  for i in $(seq 1 10); do
+    [[ "$(field GetState grabbed)" == "$want" ]] && { echo "ok    $label (grabbed $want)"; return 0; }
+    sleep 0.5
+  done
+  echo "FAIL  $label: grabbed $(field GetState grabbed), want $want"; FAILS=$((FAILS + 1)); return 1
+}
 
 # gnome-shell enables the extension (and its D-Bus name appears) before its startup-complete
 # handler settles the action mode; keybindings only fire once GetState.ready is true, and the
@@ -71,9 +79,19 @@ press "<Super>4";  expect "Super+4 -> index" "$(field GetState activeWorkspace)"
 press "<Super>0";  expect "Super+0 -> index" "$(field GetState activeWorkspace)" 9
 press "<Super>1";  expect "Super+1 -> index" "$(field GetState activeWorkspace)" 0
 
+OUT=$(cmd "move container to workspace number 5")
+[[ "$OUT" == *"no focused window"* ]] && echo "ok    A1 move dispatches (no window to move in the sandbox)" || { echo "FAIL  A1 move: $OUT"; FAILS=$((FAILS+1)); }
+press "<Super><Shift>5"; expect "A1 Shift+5 leaves workspace unchanged (nothing to move)" "$(field GetState activeWorkspace)" 0
+
 echo "== A4 modes"
 press "<Super>r";  expect "Super+r enters resize" "$(field GetState mode)" resize
 expect "resize mode grabs 11" "$(field GetState grabbed)" 11
+LOG="$I3SHELL_SANDBOX/shell.log"
+BEFORE=$(grep -c 'resize: not implemented' "$LOG" || true)
+press "j"
+AFTER=$(grep -c 'resize: not implemented' "$LOG" || true)
+[[ "$AFTER" -gt "$BEFORE" ]] && echo "ok    A4 bare j is grabbed in resize mode (dispatched to the engine)" || { echo "FAIL  A4 bare j did not reach the engine ($BEFORE -> $AFTER)"; FAILS=$((FAILS+1)); }
+expect "A4 still in resize after j" "$(field GetState mode)" resize
 press "Escape";    expect "Escape leaves resize" "$(field GetState mode)" default
 press "<Super>r";  press "Return"; expect "Return leaves resize" "$(field GetState mode)" default
 press "<Super>r";  press "<Super>r"; expect "Super+r toggles back" "$(field GetState mode)" default
@@ -95,14 +113,15 @@ printf '\nbogus_directive 1\n' >> "$CFG"
 OUT=$(cmd reload)
 [[ "$OUT" == *"rejected"* ]] && echo "ok    broken config rejected" || { echo "FAIL  reload accepted a broken config: $OUT"; FAILS=$((FAILS + 1)); }
 expect "still grabbed after rejection" "$(field GetState grabbed)" "$GRABBED"
+press "<Super>3"; expect "A5 bindings work after rejection" "$(field GetState activeWorkspace)" 2
 cp "$CFG.orig" "$CFG"
 printf 'bindsym Mod4+F9 workspace number 5\n' >> "$CFG"
 OUT=$(cmd reload)
 [[ "$OUT" == *"reloaded"* ]] && echo "ok    changed config reloaded" || { echo "FAIL  reload failed: $OUT"; FAILS=$((FAILS + 1)); }
-expect "new binding grabbed" "$(field GetState grabbed)" $((GRABBED + 1))
+wait_grabbed $((GRABBED + 1)) "new binding grabbed"
 press "<Super>F9"; expect "new binding works" "$(field GetState activeWorkspace)" 4
 cp "$CFG.orig" "$CFG"; cmd reload >/dev/null
-expect "original grabs after restore" "$(field GetState grabbed)" "$GRABBED"
+wait_grabbed "$GRABBED" "original grabs after restore"
 
 echo "== result: $FAILS failure(s)"
 exit "$FAILS"
