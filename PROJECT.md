@@ -9,7 +9,7 @@ with directional navigation. Three things are the non-negotiable core: **workspa
 **shortcuts**, **dynamic tiling**. Phases 1 and 2 deliver that core; Phases 3 and 4 add appearance and
 fidelity.
 
-**State (2026-09-21):** Phase 1 (Foundation) is implemented, reviewed and merged into `main`, with the two recovery fixes in `19eac12` and `7bb138b`. The user reported the full live A1–A7 walk green on 2026-09-21. The Phase 2A pure-tree plan is written for review; Phase 2B window/geometry integration and Phases 3–4 are designed but not yet planned in detail or built.
+**State (2026-09-21):** Phase 1 (Foundation) is implemented, reviewed and merged into `main`, with the two recovery fixes in `19eac12` and `7bb138b`. The user reported the full live A1–A7 walk green on 2026-09-21. The Phase 2A pure-tree plan has passed its preparation audit and is ready for implementation, **paused at the user's request**. Do not initiate Phase 2A until the user resumes it. Phase 2B window/geometry integration and Phases 3–4 are designed but not yet planned in detail or built.
 
 ---
 
@@ -20,7 +20,7 @@ fidelity.
 | `docs/superpowers/specs/2026-09-20-i3-shell-design.md` | **The design spec — the binding authority** (19 sections: acceptance criteria A1–A14, architecture, config grammar, command language, the tree algorithms, window lifecycle, workspaces, keys, indicator, decorations, GNOME overrides, D-Bus, error handling, testing, phases, toolchain, decisions log). |
 | `docs/superpowers/plans/2026-09-20-phase-1-foundation.md` | The Phase 1 implementation plan (14 TDD tasks with full code). Several of its code blocks were wrong and were fixed during execution — where plan and code differ, the code (and the carry-forward doc) wins. |
 | `docs/superpowers/plans/2026-09-21-phase-1-carry-forward.md` | Execution record: every ruling made while building Phase 1, items deferred to Phases 2/4, security note. **Read before planning Phase 2.** |
-| `docs/superpowers/plans/2026-09-21-phase-2a-tree.md` | Phase 2A pure-tree implementation plan, ready for user review; window lifecycle and geometry integration follow in Phase 2B. |
+| `docs/superpowers/plans/2026-09-21-phase-2a-tree.md` | Phase 2A pure-tree implementation plan and readiness audit; ready, with implementation paused. Window lifecycle and geometry integration follow in Phase 2B. |
 | `docs/acceptance/phase-1.md` | The live-session checklist for A1–A7, passed by user report on 2026-09-21. |
 | `README.md` | User-facing: install, control via D-Bus, dev commands. |
 | `src/` | The extension (TypeScript, see §4). |
@@ -99,7 +99,7 @@ Verification: unit 52/52; typecheck both programs; `npm run test:integration` gr
 
 **Live acceptance passed:** the user reported all A1–A7 checks green on 2026-09-21, with no Phase 1 findings. `docs/acceptance/phase-1.md` records that report and its provenance. Dynamic tiling and tiled-window resizing remain Phase 2 work.
 
-The follow-up fixes restore last-good-cache recovery for a missing config at startup and preserve saved GNOME settings when restoration fails. Fake-`Gio.Settings` apply/restore/crash-recovery coverage and ConfigLoader regression tests are now included (64 unit tests total). Remaining deferred items are listed in the carry-forward doc. The live acceptance checkpoint is satisfied; Phase 2A planning can proceed to review and execution.
+The follow-up fixes restore last-good-cache recovery for a missing config at startup and preserve saved GNOME settings when restoration fails. Fake-`Gio.Settings` apply/restore/crash-recovery coverage and ConfigLoader regression tests are now included (64 unit tests total). Remaining deferred items are listed in the carry-forward doc. The live acceptance checkpoint is satisfied. Phase 2A preparation is complete; implementation remains paused.
 
 ## 6. What remains — Phases 2, 3, 4
 
@@ -107,7 +107,7 @@ Each phase gets its own implementation plan (`docs/superpowers/plans/`) written 
 
 ### Phase 2 — the tree (dynamic tiling) — spec §7, §8, §16.1–16.2, acceptance A8–A14
 The hard one; it is what makes this "i3".
-- `src/tree/{node,tree,layout,focus,resize}.ts` (Layer 0): `WorkspaceCon → MonitorCon(root) → SplitCon|LeafCon`; `percents`, `focusedChild`, `lastSplitLayout`; `normalize()` with i3's `tree_flatten` rule (a lone leaf in a split is legal — pending split); `Tree.check()` invariants.
+- `src/tree/{node,tree,layout,focus,operations,resize}.ts` (Layer 0): `WorkspaceCon → MonitorCon(root) → SplitCon|LeafCon`; `percents`, `focusedChild`, `lastSplitLayout`; `normalize()` with i3's `tree_flatten` rule (a lone leaf in a split is legal — pending split); `Tree.check()` invariants.
 - Algorithms are specified step by step in §7.3–§7.11: insertion after the focused leaf; `split` (no pointless nesting); `layout` (workspace roots wrap children for tabbed/stacked); `focus <dir>` = i3's `_tree_next` with wrapping at the highest matching level; `move <dir>` = i3's `tree_move` with worked examples; resize in ppt with 5 %/95 % clamps; fullscreen native; floating layer + `focus mode_toggle`; layout as exact integer rects (tabbed/stacked = same rect, active raised).
 - `src/shell/windows.ts` becomes the full adapter (§8): opaque window ids only (`Map<id, Meta.Window>` + `WeakMap`), insert on the actor's `first-frame`, expected-rect tracking to stop resize feedback loops, focus-follows-GNOME updating the `focusedChild` chain, minimize/maximize/fullscreen/workspace-changed handling (engine-initiated moves carry an "expected workspace"), monitors-changed relayout; `src/shell/geometry.ts` applies rects with `move_resize_frame`.
 - `engine.commit()` becomes the single mutation pipeline: normalize → layout → diff rects → apply → decorations/indicator update → `TreeChanged` signal. Adoption of existing windows in MRU order on enable/restart.
@@ -129,7 +129,7 @@ Target arrangements: laptop alone (`eDP-1`) and docked with external display(s),
 ## 7. How to continue (process that worked)
 
 1. Phase 1 live acceptance is recorded as passed; preserve its 64-test regression baseline.
-2. Review and execute the Phase 2A pure-tree plan, keeping Layer 0 pure and TDD-first. Then write the Phase 2B window lifecycle/geometry integration plan against the implemented interfaces. Phase 2 is complete only after the live tiling/resizing and A8–A14 acceptance are delivered.
+2. Phase 2A is ready, but the user explicitly paused before implementation. Wait for the user to resume it. Then execute the pure-tree plan, keeping Layer 0 pure and TDD-first, and write the Phase 2B window lifecycle/geometry integration plan against the implemented interfaces. Phase 2 is complete only after the live tiling/resizing and A8–A14 acceptance are delivered.
 3. Execute with `superpowers:subagent-driven-development`: one implementer per task, a reviewer per task, a whole-branch review at the end. Expect the plan's code to have defects; the review loop is what catches them. Keep a ledger; record every ruling.
 4. Verify claims before trusting them: type-check GNOME API usage against `@girs` in a scratch project, extract the shell's JS to check behaviour, and run the nested shell for anything runtime-dependent.
 

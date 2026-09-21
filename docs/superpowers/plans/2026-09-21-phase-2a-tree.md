@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-20-i3-shell-design.md`, especially §7, §9 and §16.1, including the approved 2026-09-21 clarifications. Read `docs/superpowers/plans/2026-09-21-phase-1-carry-forward.md` too.
 
-**Status:** Written plan for user review. Phase 1 A1–A7 passed by user report on 2026-09-21. Baseline `02c26c5`, 64 unit tests. The two recovery fixes and fake-Gio regression tests are already present; do not recreate them.
+**Status:** Preparation audit completed on 2026-09-21; ready for implementation, **paused at the user's request**. Do not start Task 1 until the user resumes Phase 2A. Phase 1 A1–A7 passed by user report on 2026-09-21. Audit baseline `df0187d`, 64 unit tests. The two recovery fixes and fake-Gio regression tests are already present; do not recreate them.
 
 ## Global Constraints
 
@@ -61,7 +61,7 @@ Phase 1 carry-forward that touches shell behavior (settings default reset/sync, 
 | `eslint.config.mjs` | Rules scoped to the new tree and its tests |
 | `package.json`, `package-lock.json` | New development dependencies and `lint:tree` |
 
-`operations.ts` separates structural editing from workspace bookkeeping instead of growing one large `tree.ts`. No circular imports: `node` → none; `layout`, `focus`, `resize`, `operations` → `node`; `tree` → those modules. Modules receive node references or allocation callbacks; they never import `Tree` at runtime.
+`operations.ts` separates structural editing from workspace bookkeeping instead of growing one large `tree.ts`. No circular imports: `node` → command types only; `layout`, `focus`, `resize` → `node`; `operations` → `node` and `focus`; `tree` → those modules. Modules receive node references or allocation callbacks; they never import `Tree` at runtime. `descendFocused` lives in `node.ts` from Task 1 because membership and normalization need it in Task 2. `descendDirection` arrives in `focus.ts` in Task 4, before movement uses it in Task 5.
 
 ---
 
@@ -101,8 +101,9 @@ export type AllocateSplit = (layout: Layout, root?: boolean) => SplitCon;
 export function axis(layout: Layout): Axis;
 export function directionAxis(direction: Direction): Axis;
 export function isForward(direction: Direction): boolean;
-export function* walk(con: Con): Generator<Con>;
-export function* leaves(con: Con): Generator<LeafCon>;
+export function walk(con: Con): Generator<Con>;
+export function leaves(con: Con): Generator<LeafCon>;
+export function descendFocused(con: Con): LeafCon | null;
 export function rootOf(con: Con): SplitCon;
 export function attach(parent: SplitCon, child: Con, index: number): void;
 export function detach(child: Con): SplitCon;
@@ -110,7 +111,7 @@ export function replace(parent: SplitCon, oldChild: Con, newChild: Con): void;
 export function focusChain(con: Con): void;
 ```
 
-The declarations above specify the public API, not a file to install verbatim. Function bodies are built and tested in this task.
+The declarations above specify the public API, not a file to install verbatim. Function bodies are built and tested in this task. Every Tree facade that changes structure must normalize before returning; raw node/algorithm helpers may leave intermediate structures for their facade to normalize. This keeps direct callers and later engine commits on the same invariant contract.
 
 - [ ] **Step 1: Write failing arithmetic tests.** `helpers.ts` creates literal fixtures without calling `Tree` methods. Fixture ids are local to the fixture builder, never production ids:
 
@@ -180,11 +181,11 @@ it('replacement preserves the parent slot percentage and focus', () => {
 });
 ```
 
-Also reject out-of-range insertion, attachment of an already attached node, self/ancestor attachment and root detachment before changing either side. `detach` repairs a removed `focusedChild` to the first remaining child, or null. These validations protect future container moves.
+Also reject out-of-range/noninteger insertion, attachment of an already attached node, attachment of a root, self/ancestor attachment and root detachment before changing either side. Apply the same detached-node/cycle checks to `replace`; reject an absent old child before mutation. Snapshot children, parents, percentages and focus to prove failed operations are atomic. `detach` repairs a removed `focusedChild` to the first remaining child, or null. Test `descendFocused` on a leaf, nested selected children, an empty root, and a null/stale `focusedChild` (first-child fallback without mutation).
 
 - [ ] **Step 2: Run** `npm test -- test/unit/tree/node.test.ts`. Expect unresolved imports before implementation, then behavior failures as individual primitives are introduced.
 
-- [ ] **Step 3: Implement node operations.** Use the following attach/detach arithmetic after validation. `replace` swaps exactly one slot and reparents both nodes, without renormalizing percents. `focusChain` follows parents, assigning each parent's `focusedChild` to the child just visited. `rootOf` follows parents and requires the terminal node to be a root split. Traversal yields self before children; leaves filters that traversal.
+- [ ] **Step 3: Implement node operations.** Use the following attach/detach arithmetic after validation. `replace` swaps exactly one slot and reparents both nodes, without renormalizing percents. `focusChain` follows parents, assigning each parent's `focusedChild` to the child just visited. `rootOf` follows parents and requires the terminal node to be a root split. Traversal yields self before children; leaves filters that traversal. `descendFocused` follows a current `focusedChild`, otherwise the first child, until a leaf; an empty split returns null.
 
 ```ts
 // attach, after validating a detached child and index in [0, children.length]:
@@ -206,9 +207,15 @@ child.parent = null;
 return parent;
 ```
 
-For empty arrays the division map has no entries. Validate non-finite/non-positive preexisting weights with a useful error; normalization must not silently repair arbitrary corruption into a plausible layout.
+For empty arrays the division map has no entries. Validate preexisting weights (matching length, finite, positive and sum within `1e-9` of one; empty splits have no weights) before editing either side. Normalization must not silently repair arbitrary corruption into a plausible layout.
 
-- [ ] **Step 4: Add test tooling without changing GNOME dependencies.** Resolve compatible stable major versions for Node 22 at execution time, install `fast-check`, `eslint`, `@eslint/js`, `typescript-eslint` with `--save-dev --save-exact`, and commit the lockfile. Respect `.npmrc`. Add `"lint:tree": "eslint src/tree test/unit/tree"`. Use this flat config:
+- [ ] **Step 4: Add test tooling without changing GNOME dependencies.** Install the exact versions below and commit the lockfile. These versions' published npm metadata was checked during preparation against local Node `22.23.1` and TypeScript `5.9.3`: fast-check requires Node ≥12.17; ESLint/TypeScript ESLint accept Node ≥21.1; TypeScript ESLint accepts ESLint 9 and TypeScript ≥4.8.4 <6.1. Respect `.npmrc`; do not use unversioned `latest` or update existing dependencies.
+
+```sh
+npm install --save-dev --save-exact fast-check@4.10.2 eslint@9.39.5 @eslint/js@9.39.5 typescript-eslint@8.70.1
+```
+
+This installation is an implementation step, not part of the preparation audit. Add `"lint:tree": "eslint src/tree test/unit/tree"`. Use this flat config:
 
 ```js
 import js from '@eslint/js';
@@ -296,11 +303,15 @@ it('removes the last window but keeps its monitor root', () => {
 });
 ```
 
-Normalize fixtures to cover exactly: `H(root) → V → H → leaf` flattens the middle V; `H(root) → V → leaf` preserves the V; `H(root) → tabbed → V → leaf` does not apply the split-only flatten rule. Record selected node references before normalization and assert repair when the selected wrapper disappears. A dead leaf in a passed `live` set is removed; a live one is preserved. Reject negative workspace/monitor ids, nonpositive window ids and noninteger ids.
+Normalize fixtures to cover exactly: `H(root) → V → H → leaf` flattens the middle V; `H(root) → V → leaf` preserves the V; `H(root) → tabbed → V → leaf` does not apply the split-only flatten rule. Record selected node references before normalization and assert repair when the selected wrapper disappears. A leaf absent from a supplied `live` set is removed; a live one is preserved. Removing an unselected leaf must preserve a surviving selected parent. Reject negative workspace/monitor ids, nonpositive window ids and noninteger ids. Rejected insertion must not consume a node id: compare the next valid insertion against the corresponding insertion in an identical control tree.
+
+Use `new Tree(2, [0, 2])` for a deterministic ownership test: keep selection on monitor 0, insert into monitor 2 after that root's remembered focused leaf, and assert monitor 0's children are unchanged. Check duplicate window ids across monitors and workspaces, foreign-tree selections, and a detached node whose forged parent points at an owned root. This tests monitor ownership only; cross-monitor directional navigation remains Phase 4.
+
+Standalone fixtures from Task 1 are for raw algorithms. For fixtures tested through a `Tree`, obtain leaf ids via that Tree's `insert` and splits via its `allocateSplit`, then wire the literal topology/percent/focus arrays directly. Keep its existing roots and reparent every child. Do not mix the standalone fixture counter with the Tree's allocator: later allocations could otherwise duplicate node ids. Initial leaf allocation uses a valid temporary tree; after wiring the literal fixture, do not normalize or move it before the test's action. Expected results remain literal.
 
 - [ ] **Step 2: Run** `npm test -- test/unit/tree/tree.test.ts test/unit/tree/normalize.test.ts`; observe missing behavior before adding it.
 
-- [ ] **Step 3: Implement ownership and selection.** The constructor creates 1–36 workspaces and at least one unique monitor root per workspace, in supplied monitor order. Initial `activeWorkspace` is zero and each workspace's `focusedCon` is its first root. Validate all constructor inputs before allocating nodes. A `Tree` owns one monotonic node-id counter. Membership queries traverse its roots and floating lists; a separate leaf registry is unnecessary at this scale.
+- [ ] **Step 3: Implement ownership and selection.** The constructor creates 1–36 workspaces and at least one unique monitor root per workspace, in supplied monitor order. Roots start with layout and `lastSplitLayout` both `splith`. Initial `activeWorkspace` is zero and each workspace's `focusedCon` is its first root. Validate all constructor inputs before allocating nodes. A `Tree` owns one monotonic node-id counter. Membership queries traverse its roots and floating lists; a separate leaf registry is unnecessary at this scale. Ownership requires actual reachability through the tree's child arrays, not merely a parent pointer ending at an owned root. Use Task 1's `descendFocused`; do not import a not-yet-created Task 4 module.
 
 ```ts
 // selection(index = this.activeWorkspace):
@@ -320,7 +331,7 @@ Selecting a con on an inactive workspace does not activate that workspace. `sele
 
 For insertion, use the addressed monitor root. Use the workspace's selected tiled con only if it belongs to that root; otherwise use that root's focused descendant (or the empty root). A selected leaf inserts after itself; a selected split appends. Create the leaf only after validation, attach it and select it locally. This avoids inserting a window onto the wrong monitor when focus was elsewhere.
 
-- [ ] **Step 4: Implement removal and normalization.** Before detaching a selected leaf, remember its parent as the candidate tiled selection. Removing a floating id repairs floating selection to the next MRU id, or falls back to the retained tiled selection. Normalize bottom-up, and iterate flattening until stable. Repair selection and all `focusedChild` pointers after each pass. The flatten predicate is exactly:
+- [ ] **Step 4: Implement removal and normalization.** Before detaching a selected leaf, retain its ancestor chain for focus repair. Removing the selected floating id chooses the next MRU id, or falls back to the retained tiled selection; removing an unselected floating id leaves selection unchanged. Normalize bottom-up, and iterate flattening until stable. Repair selection and all `focusedChild` pointers after each pass. The flatten predicate is exactly:
 
 ```ts
 const only = con.children.length === 1 ? con.children[0] : undefined;
@@ -330,9 +341,9 @@ const flatten = !con.root && con.parent !== null && splitOnly(con.layout)
   && only.layout !== con.layout && only.layout === con.parent.layout;
 ```
 
-Empty non-root splits are detached; roots remain. To flatten, detach `only` from `con`, then replace `con` with `only` in the grandparent so the grandparent's percent slot is preserved. If selection was `con`, redirect it to `only`. When a selection's container was deleted completely, choose the focused descendant of the nearest surviving ancestor; an empty root itself is a valid selection. For `normalize(live)`, remove dead tiled and floating ids before structural cleanup, without recursively calling the public `remove` method.
+Empty non-root splits are detached; roots remain. To flatten, detach `only` from `con`, then replace `con` with `only` in the grandparent so the grandparent's percent slot is preserved. If selection was `con`, redirect it to `only`. When a selection's container was deleted completely, choose the focused descendant of the nearest surviving ancestor; an empty root itself is a valid selection. Capture fallback ancestors before detaching or deleting nodes, since parent pointers are cleared by those operations. Preserve any surviving selected parent as a parent, rather than descending it to a leaf. For `normalize(live)`, remove dead tiled and floating ids before structural cleanup, without recursively calling the public `remove` method. Repeated normalization is idempotent, including selections and percentages.
 
-- [ ] **Step 5: Implement `check`.** Walk with `Set<Con>`, `Set<NodeId>` and `Set<WindowId>`. Throw on cycles/shared children, duplicate node/window ids, bad parent links, a root under another con, invalid root layout, an empty non-root split, a remaining flatten opportunity, nonfinite/nonpositive weights, length mismatch, or sum error above `1e-9`. Empty roots have empty weights and null focus. Every selected con must belong to its workspace; floating ids must be unique and disjoint from leaves; selected floating ids must be members. If supplied, `live` must contain every tracked window. Include node ids in errors.
+- [ ] **Step 5: Implement `check`.** Walk with `Set<Con>`, `Set<NodeId>` and `Set<WindowId>`, checking a node before descending so corrupt cycles throw instead of recursing forever. Throw on cycles/shared children, duplicate or invalid node/window ids, bad parent links, a root under another con, an unflagged/parented monitor root, invalid root layout or `lastSplitLayout`, an empty non-root split, a remaining flatten opportunity, nonfinite/nonpositive weights, length mismatch, or sum error above `1e-9`. Empty roots have empty weights and null focus; every nonempty split's `focusedChild` must be a current child. Every selected con must belong to its workspace; floating ids must be unique and disjoint from leaves; selected floating ids must be members. The active workspace must exist. If supplied, `live` must contain every tracked window. Include node ids in errors. Add deliberately corrupted fixtures for each invariant class, and assert `check` never repairs them.
 
 - [ ] **Step 6: Verify the whole suite and static checks; review and commit:** `feat(tree): own workspace trees and repair structural invariants`.
 
@@ -408,13 +419,12 @@ con.children.forEach((child, i) => {
 
 **Files:** create `src/tree/focus.ts`, `test/unit/tree/focus.test.ts`; add focused facade methods to `tree.ts`.
 
-**Consumes:** orientation helpers, parent links, `focusedChild`, Tree selection.
+**Consumes:** orientation helpers, `descendFocused` from `node.ts`, parent links, `focusedChild`, Tree selection.
 
 **Produces:**
 
 ```ts
 export type Wrapping = 'yes' | 'no' | 'force' | 'workspace';
-export function descendFocused(con: Con): LeafCon | null;
 export function descendDirection(con: Con, direction: Direction): LeafCon | null;
 export function nextFocus(con: Con, direction: Direction, wrapping: Wrapping): LeafCon | null;
 // Tree additions:
@@ -473,7 +483,7 @@ export function nextFocus(con: Con, dir: Direction, wrapping: Wrapping): LeafCon
 }
 ```
 
-`descendFocused` follows valid `focusedChild`, otherwise first child, until a leaf or empty split. `descendDirection` chooses the edge against travel when orientation matches; otherwise follows focused child. `Tree.focus` calls `nextFocus` on its tiled selection, then `select` if non-null. Parent selection stops at the monitor root. Child selection uses `focusedChild` without descending all the way to a leaf.
+Reuse Task 1's `descendFocused`. `descendDirection` chooses the edge against travel when orientation matches; otherwise follows a current focused child or the first child. Empty splits return null. `Tree.focus` calls `nextFocus` on its tiled selection, then `select` if non-null. Parent selection stops at the monitor root. Child selection uses `focusedChild` without descending all the way to a leaf.
 
 - [ ] **Step 4: Verify whole suite/static checks, review and commit:** `feat(tree): navigate containers with i3 focus wrapping`.
 
@@ -557,7 +567,7 @@ root.focusedChild = wrapper;
 wrapper.parent = root;
 ```
 
-When tab/stack wrapping, initialize wrapper.lastSplitLayout from the root's current split orientation. `splitCon` returns the originally selected non-root con; when splitting a root with multiple children, return the new wrapper so subsequent insertion lands inside it. `setLayout` returns the prior selected leaf or split, except an explicitly selected root wrapped for tabs/stacks returns its new wrapper. All layout setters update `lastSplitLayout` only for splith/splitv.
+When tab/stack wrapping, initialize wrapper.lastSplitLayout from the root's current split orientation. `splitCon` returns the originally selected con, including roots with zero or one child; when splitting a root with multiple children, return the new wrapper so subsequent insertion lands inside it. `setLayout` returns the prior selected leaf or split, except an explicitly selected root wrapped for tabs/stacks returns its new wrapper. All layout setters update `lastSplitLayout` only for splith/splitv.
 
 - [ ] **Step 5: Implement movement from the spec.** Find the nearest matching ancestor starting at `con.parent`. If that is the immediate parent and a sibling exists, swap with a leaf sibling in place; for a split sibling, descend against travel and insert before/after its target leaf using §7.7. If there is no sibling, stop at a root or find the next matching ancestor above the exhausted parent. Otherwise insert next to the branch directly under the matching ancestor. Decide the target before detaching; only normalize after reinsertion.
 
@@ -576,7 +586,7 @@ detach(con);
 attach(parent, con, parent.children.indexOf(target) + (after ? 1 : 0));
 ```
 
-For upward traversal, walk from `con` until its parent is the matching ancestor; this gives `above`. Insert before `above` for left/up and after for right/down. A selected root does not move. The Tree facade remembers the selected con, normalizes after movement, then restores that selection or its normalization replacement and repairs its focus chain.
+For upward traversal, walk from `con` until its parent is the matching ancestor; this gives `above`. Insert before `above` for left/up and after for right/down. A selected root does not move directionally. Facades retain/select the operation's target before normalization; normalization then owns any replacement of a deleted wrapper and repairs the focus chain. Never restore the old reference after normalization has replaced it. Add a move where normalization removes the selected wrapper, and assert that the surviving replacement is selected.
 
 - [ ] **Step 6: Verify whole suite/static checks, review and commit:** `feat(tree): split layouts and move nested containers`.
 
@@ -622,14 +632,35 @@ it('rejects a request atomically when any sibling crosses the clamp', () => {
 });
 ```
 
-Also test shrink, height, selected parent resize, ppt preference over px, missing rectangle, zero extent, one-child matching ancestor, nonfinite/negative amounts and exactly 5%/95% bounds. Per the binding spec, a nearest matching ancestor with one child is a no-op; do not silently skip it for a higher ancestor.
+Also test shrink, height, selected parent resize, ppt preference over px, one-child matching ancestor, nonfinite/negative effective amounts and exactly 5%/95% bounds. Pixel requests with missing rectangles or zero extent return false. Percentage requests work without rectangles and with zero-sized work areas: the spec's ppt arithmetic does not depend on pixel geometry. When ppt is present, px is unused. Per the binding spec, a nearest matching ancestor with one child is a no-op; do not silently skip it for a higher ancestor.
+
+```ts
+it('resizes in percentage points without pixel geometry', () => {
+  const a = leaf(1), b = leaf(2);
+  const root = split('splith', [a, b], true);
+  expect(resizeCon(a, {action: 'grow', dimension: 'width', px: 50000, ppt: 10}, new Map()))
+    .toBe(true);
+  expect(root.percents[0]).toBeCloseTo(0.6);
+  expect(root.percents[1]).toBeCloseTo(0.4);
+});
+```
 
 - [ ] **Step 2: Run** `npm test -- test/unit/tree/resize.test.ts` and observe failure.
 
-- [ ] **Step 3: Implement candidate-first arithmetic.** Walk ancestors starting at the parent, remembering the child branch at each step. Select the first matching orientation. Tabs count horizontal and stacks vertical, as specified. No matching ancestor, one child, missing rectangle, invalid amount or zero extent returns false.
+- [ ] **Step 3: Implement candidate-first arithmetic.** Walk ancestors starting at the parent, remembering the child branch at each step. Select the first matching orientation. Tabs count horizontal and stacks vertical, as specified. No matching ancestor or one child returns false. Resolve the effective amount before constructing candidates; validate only the unit being used.
 
 ```ts
-const amount = request.ppt !== null ? request.ppt / 100 : request.px / extent;
+let amount: number;
+if (request.ppt !== null) {
+  amount = request.ppt / 100;
+} else {
+  const rect = rectangles.get(ancestor);
+  if (!rect) return false;
+  const extent = request.dimension === 'width' ? rect.width : rect.height;
+  if (!Number.isFinite(extent) || extent <= 0) return false;
+  amount = request.px / extent;
+}
+if (!Number.isFinite(amount) || amount < 0) return false;
 const delta = request.action === 'grow' ? amount : -amount;
 const next = ancestor.percents.map((p, i) =>
   p + (i === selectedIndex ? delta : -delta / (ancestor.children.length - 1)));
@@ -659,7 +690,7 @@ focusModeToggle(): WindowId | null;
 moveToWorkspace(target: number, monitor: MonitorId): WindowId[];
 ```
 
-`moveToWorkspace` moves the active selection, returns all affected window ids, preserves a selected subtree and leaves `activeWorkspace` unchanged. It does not call a window adapter. A selected monitor root is not transferable; the facade returns an empty list. Normal container selection below that root is supported. Validate target workspace/monitor before detaching anything. A same-workspace target is a no-op.
+`moveToWorkspace` moves the active selection, returns all affected window ids in traversal order, and leaves `activeWorkspace` unchanged. It does not call a window adapter. All leaves of a selected container move, including when a nonempty monitor root is selected (§7.6 and §9). Because monitor roots cannot be detached, move a selected root's contents in an equivalent non-root split, keeping the source root's identity. Existing descendant nodes, layout, shares and focused child survive, subject to normal §7.2 flattening at the destination. Validate target workspace/monitor before allocating or detaching anything. A same-workspace target or an empty selected root is a no-op.
 
 - [ ] **Step 1: Write tiled/floating round-trip and MRU scenarios.**
 
@@ -691,13 +722,33 @@ it('moves a selected subtree intact without following it', () => {
   expect(t.selection()).toEqual({kind: 'tiled', con: t.find(1)});
   t.check(new Set([1, 2, 3]));
 });
+it('moves every leaf of a selected root while retaining the source root', () => {
+  const t = new Tree(2, [0]);
+  const a = t.insert(1, 0, 0), b = t.insert(2, 0, 0);
+  const source = t.root(0, 0);
+  source.percents = [0.7, 0.3];
+  t.select(source);
+  expect(t.moveToWorkspace(1, 0)).toEqual([1, 2]);
+  expect(t.root(0, 0)).toBe(source);
+  expect(source.children).toEqual([]);
+  const transferred = t.root(1, 0).children[0];
+  expect(transferred.kind).toBe('split');
+  if (transferred.kind !== 'split') throw new Error('expected transferred split');
+  expect(transferred.root).toBe(false);
+  expect(transferred.children).toEqual([a, b]);
+  expect(transferred.percents).toEqual([0.7, 0.3]);
+  expect(transferred.focusedChild).toBe(b);
+  expect(t.selection()).toEqual({kind: 'tiled', con: source});
+  expect(t.activeWorkspace).toBe(0);
+  t.check(new Set([1, 2]));
+});
 ```
 
-Add floating → tiled → floating sequences, repeated enable/disable no-ops, floating removal, a workspace containing only floating windows, an empty workspace mode toggle, invalid destination rollback and transfer into a target whose selected leaf has siblings. Confirm target insertion is after that selected leaf, not always at root end.
+Add floating → tiled → floating sequences, repeated enable/disable no-ops, selected versus unselected floating removal, duplicate ids across tiled/floating membership, an unknown id transition, a workspace containing only floating windows, an empty workspace mode toggle, invalid destination rollback and transfer into a target whose selected leaf has siblings. Confirm target insertion is after that selected leaf, not always at root end. Include a transfer whose former parent is emptied and removed, proving source selection reaches the nearest surviving ancestor's focused descendant. Check that removal/transfer repairs a retained tiled selection even while floating selection is active.
 
 - [ ] **Step 2: Run the membership tests and observe failure.**
 
-- [ ] **Step 3: Implement transitions.** `addFloating` validates globally unique membership, records the id and selects it. `setFloating(true)` detaches the leaf, normalizes its old parent, adds the id to that workspace's floating list and selects it. Keep the source workspace's repaired tiled selection. `setFloating(false)` removes the floating id before calling tiled insertion on the validated monitor, and preserves source workspace ownership. Repeated requests for the current state return without reordering unrelated windows.
+- [ ] **Step 3: Implement transitions.** `addFloating` validates globally unique membership, records the id and selects it. `setFloating` rejects an invalid or untracked id before mutation; repeated requests for the current state return without allocating nodes or reordering windows. `setFloating(true)` detaches the leaf, normalizes its old parent, adds the id to that workspace's floating list and selects it. Keep the source workspace's repaired tiled selection; the monitor argument is unused for enabling floating. `setFloating(false)` validates the destination monitor before removing the floating id, then calls tiled insertion, preserving source workspace ownership.
 
 ```ts
 // MRU update used when a floating window receives focus:
@@ -708,11 +759,14 @@ const target = ws.floating[0];
 if (target === undefined) return null;
 this.selectFloating(target);
 return target;
-// floating -> tiled: descendFocused(ws.focusedCon) if it exists;
-// if none exists, leave floating selection unchanged and return null.
+// floating -> tiled:
+const tiled = ws.focusedCon ? descendFocused(ws.focusedCon) : null;
+if (!tiled) return null; // leave floating selection unchanged
+this.select(tiled);
+return tiled.window;
 ```
 
-For a tiled transfer, capture leaf ids first, detach the selected con, repair source selection to the focused descendant of its former parent, insert the con into the addressed target root using the same target-selection rule as insertion, normalize both workspaces and select the moved con in the target workspace only. For floating transfer, remove from source MRU, repair source selection, and add/select it in target MRU. Returning ids lets Phase 2B set expected workspaces before issuing real window moves.
+For a tiled transfer, capture leaf ids and the source fallback ancestor chain first. For a non-root selection, detach that con. For a nonempty root selection, allocate a non-root split with the root's layout and `lastSplitLayout`; transfer its children/percents/focusedChild wholesale and reparent those children, then clear the source root's arrays and focused child. This is the same content-preserving transfer technique used in Task 5; do not reinsert children one by one. Repair source selection using the nearest surviving former ancestor (the source root itself for a root-content move). Insert the moved con into the addressed target root using the same target-selection rule as insertion, select it locally before normalization, then normalize and repair both workspaces. If flattening replaces the transferred wrapper, retain normalization's replacement selection. For floating transfer, remove from source MRU, repair source selection, and add/select it in target MRU. Returning ids lets Phase 2B set expected workspaces before issuing real window moves.
 
 - [ ] **Step 4: Verify whole suite/static checks, review and commit:** `feat(tree): track floating focus and transfer containers between workspaces`.
 
@@ -754,7 +808,7 @@ Keep this helper in the property-test file; it uses no production orientation or
 - [ ] **Step 2: Generate bounded operation sequences and independent membership expectations.** Use ids 1–12 and two workspaces. Record a plain `Map<WindowId, number>` outside the Tree as the membership model. Choose existing ids through an index into that map; a new id comes from its complement. Inserts/removals update both; moves update the ids returned by `moveToWorkspace` after asserting they exactly match the selected subtree's pre-move leaf ids. Do not use `Tree.find` as the only oracle for whether a window should exist.
 
 ```ts
-const kinds = ['insert', 'remove', 'select', 'split', 'layout', 'focus',
+const kinds = ['insert', 'remove', 'select', 'split', 'layout', 'toggleLayout', 'focus',
   'parent', 'child', 'move', 'resize', 'floating', 'modeToggle', 'workspace', 'transfer'] as const;
 const operation = fc.record({
   kind: fc.constantFrom(...kinds),
@@ -802,6 +856,7 @@ function applyGeneratedOperation(
       return;
     case 'split': tree.split(op.orientation); return;
     case 'layout': tree.setLayout(op.layout); return;
+    case 'toggleLayout': tree.toggleLayout(op.grow ? 'all' : 'split'); return;
     case 'focus': tree.focus(op.direction, op.wrapping); return;
     case 'parent': tree.focusParent(); return;
     case 'child': tree.focusChild(); return;
@@ -822,8 +877,7 @@ function applyGeneratedOperation(
     case 'transfer': {
       const selection = tree.selection();
       const candidates = selection?.kind === 'floating' ? [selection.window]
-        : selection?.kind === 'tiled' && !('root' in selection.con && selection.con.root)
-          ? [...leaves(selection.con)].map(con => con.window) : [];
+        : selection?.kind === 'tiled' ? [...leaves(selection.con)].map(con => con.window) : [];
       const want = op.workspace === tree.activeWorkspace ? [] : candidates;
       const moved = tree.moveToWorkspace(op.workspace, 0);
       expect(moved).toEqual(want);
@@ -853,7 +907,7 @@ it('preserves membership, focus and exact local coverage through operation seque
       for (const op of operations) {
         applyGeneratedOperation(tree, expected, op, {x: -13, y: 27, width, height});
         const live = new Set(expected.keys());
-        tree.normalize(live);
+        // Facades must leave a normalized tree; do not repair defects in the test.
         tree.check(live);
         const actual = new Map<WindowId, number>();
         for (const ws of tree.workspaces.values()) {
@@ -878,7 +932,7 @@ it('preserves membership, focus and exact local coverage through operation seque
 });
 ```
 
-The dispatcher in Step 2 is the only source of expected membership changes. Normalization must not hide a lost window: comparing against the independent map catches loss even when `Tree.check()` still finds the reduced tree structurally valid.
+The dispatcher in Step 2 is the only source of expected membership changes. Comparing against the independent map catches loss even when `Tree.check()` still finds the reduced tree structurally valid. The facades perform their own normalization after structural edits; the runner checks their postconditions directly. Explicit normalization and its idempotence are tested in Task 2.
 
 - [ ] **Step 4: Run the property suite and turn every discovered semantic failure into a minimal deterministic scenario before fixing it.** Record fast-check seed and shrink path in the scenario's comment. Run both the fixed seed above and one additional fixed seed `8675309` before delivery. Keep the normal suite bounded; longer stress runs are on demand.
 
@@ -893,4 +947,15 @@ The dispatcher in Step 2 is the only source of expected membership changes. Norm
 - The property checker tests direct split children for coverage and tab/stack children for equality.
 - The existing failed-restore and config-cache tests remain part of the baseline.
 - Shell-related carry-forward items remain visible and are not silently declared complete.
-- The implementation method remains the documented subagent-driven workflow: one implementer and reviewer per task, then a whole-branch review. The user reviews this written plan before execution.
+- The implementation method remains the documented subagent-driven workflow: one implementer and reviewer per task, then a whole-branch review. Resume only when the user releases the pause; this preparation audit is not authorization to execute the plan.
+
+## Preparation audit — 2026-09-21
+
+- [x] Read the binding spec, Phase 1 carry-forward and the full Phase 2A plan; check public signatures against the existing command types.
+- [x] Fix task ordering for `descendFocused`, the module dependency map, and declaration syntax in the interface examples.
+- [x] Align selected-root workspace transfers and geometry-independent ppt resize with the binding command semantics; add regression scenarios.
+- [x] Specify ownership validation, atomic failure, stale focus, normalization replacement/idempotence and floating membership edge cases.
+- [x] Add deterministic ownership tests across two monitors, layout-toggle generation, and property checks that cannot mask missing facade normalization.
+- [x] Resolve exact tooling versions against published engines/peer dependencies; installation remains Task 1 work.
+- [x] Re-run the unchanged baseline: 64/64 unit tests, both TypeScript programs and `check:layer0` passed. Documentation diff passes `git diff --check`. No nested-shell run was needed for this preparation-only change.
+- [ ] Implementation tasks 1–8: deliberately unstarted while paused. No tree code, product dependency changes or live extension changes belong to this audit.
