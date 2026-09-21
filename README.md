@@ -2,6 +2,8 @@
 
 The i3 experience in GNOME 50: your `~/.config/i3/config` drives workspaces, keybindings and (from Phase 2) container-tree tiling.
 
+**Start with [PROJECT.md](PROJECT.md)** — the handbook for anyone picking this project up.
+
 **Status:** Phase 1 — workspaces, modes, `exec`/`kill`/`fullscreen` bindings, workspace pills. Tiling arrives in Phase 2. See `docs/superpowers/specs/2026-09-20-i3-shell-design.md`.
 
 ## Prerequisites
