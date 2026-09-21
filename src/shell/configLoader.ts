@@ -42,6 +42,16 @@ export class ConfigLoader {
     const text = readText(path);
 
     if (text === null) {
+      // On reload keep the running config: report the missing file as a rejection instead of
+      // silently swapping in the built-in fallback while the engine is already serving a config.
+      if (mode === 'reload') {
+        return {
+          config: null,
+          diagnostics: [{line: 0, severity: 'error', message: `${path} not found`}],
+          source: 'file',
+          path,
+        };
+      }
       log.warn(`config ${path} not found; using the built-in fallback`);
       return {
         config: loadConfigText(FALLBACK_CONFIG).config,

@@ -150,7 +150,7 @@ describe('Engine', () => {
     expect(f.calls).toEqual([
       'warn:config warning line 2: exec is not supported by i3-shell yet; line skipped',
       'settings.restore', 'settings.apply', 'grab:1', 'mode:null', 'colors',
-      'notify:i3-shell|1 config line(s) skipped — see the shell log',
+      'notify:i3-shell|1 config warning(s) — see the shell log',
     ]);
     expect(e.state()).toMatchObject({grabbed: 1, warnings: 1, errors: 0});
   });

@@ -168,7 +168,7 @@ export class Engine {
     this._ports.indicator.setColors(this._config.colors);
 
     if (warnings.length > 0)
-      this._ports.notify('i3-shell', `${warnings.length} config line(s) skipped — see the shell log`);
+      this._ports.notify('i3-shell', `${warnings.length} config warning(s) — see the shell log`);
     if (this._config.rules.length > 0)
       this._ports.log.info(`${this._config.rules.length} for_window rule(s) parsed; they are applied from Phase 4`);
     if (loaded.source === 'cache')
