@@ -80,6 +80,6 @@ describe('resolve', () => {
     const r = loadConfigText(FALLBACK_CONFIG);
     expect(r.diagnostics).toEqual([]);
     expect(r.config!.workspaceCount).toBe(10);
-    expect(r.config!.modes.get('default')!.bindings.length).toBeGreaterThanOrEqual(26);
+    expect(r.config!.modes.get('default')!.bindings).toHaveLength(25);
   });
 });

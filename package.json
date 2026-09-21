@@ -6,7 +6,7 @@
   "license": "GPL-2.0-or-later",
   "description": "The i3 experience in GNOME: workspaces, keybindings and tree tiling driven by ~/.config/i3/config",
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "check:layer0": "node scripts/check-layer0.mjs",
     "build": "npm run typecheck && npm run check:layer0 && node esbuild.mjs",
     "build:test": "npm run typecheck && npm run check:layer0 && node esbuild.mjs --test",
@@ -15,6 +15,7 @@
     "test:integration": "bash test/integration/nested.sh -- bash test/integration/phase1-checks.sh"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "@girs/gjs": "^4.9.0",
     "@girs/gnome-shell": "^50.0.4",
     "esbuild": "^0.28.2",

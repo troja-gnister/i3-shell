@@ -6,10 +6,6 @@ bindsym $mod+Shift+q kill
 bindsym $mod+f fullscreen toggle
 bindsym $mod+Shift+c reload
 bindsym $mod+Shift+r restart
-bindsym $mod+h focus left
-bindsym $mod+j focus down
-bindsym $mod+k focus up
-bindsym $mod+l focus right
 bindsym $mod+1 workspace number 1
 bindsym $mod+2 workspace number 2
 bindsym $mod+3 workspace number 3
