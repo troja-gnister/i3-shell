@@ -1,0 +1,218 @@
+# i3 config
+# LXQt / Fedora Atomic / Xorg
+# --------------------------------------------
+
+set $mod Mod4
+set $term kitty
+
+font pango:Poppins 12
+
+# --------------------------------------------
+# WINDOW APPEARANCE
+# --------------------------------------------
+
+# No titlebars; retain a thin focus border
+default_border pixel 2
+default_floating_border pixel 2
+
+# Drag floating windows with Super + mouse
+floating_modifier $mod
+
+# --------------------------------------------
+# AUTOSTART
+# --------------------------------------------
+# LXQt owns XDG autostart, Picom, panel, wallpaper, displays, and power.
+
+# --------------------------------------------
+# LOCKING / IDLE
+# --------------------------------------------
+
+# Keep the shortcut, using LXQt's configured screen locker.
+bindsym $mod+Shift+x exec --no-startup-id lxqt-leave --lockscreen
+
+# --------------------------------------------
+# BRIGHTNESS
+# --------------------------------------------
+
+# Intel display backlight (5% steps, with a safe 5% minimum)
+bindsym XF86MonBrightnessUp exec --no-startup-id ~/.local/bin/i3-brightness display up
+bindsym XF86MonBrightnessDown exec --no-startup-id ~/.local/bin/i3-brightness display down
+
+# ThinkPad keyboard backlight (tpacpi::kbd_backlight, levels 0/1/2)
+bindsym XF86KbdBrightnessUp exec --no-startup-id ~/.local/bin/i3-brightness keyboard up
+bindsym XF86KbdBrightnessDown exec --no-startup-id ~/.local/bin/i3-brightness keyboard down
+
+# --------------------------------------------
+# AUDIO
+# --------------------------------------------
+
+# Keep the audio device chooser compact and centered instead of tiled.
+for_window [title="^Audio (output|input)$"] floating enable, border pixel 2, resize set 720 420, move position center
+
+bindsym XF86AudioRaiseVolume exec --no-startup-id wpctl set-volume --limit 1.0 @DEFAULT_AUDIO_SINK@ 10%+
+bindsym XF86AudioLowerVolume exec --no-startup-id wpctl set-volume @DEFAULT_AUDIO_SINK@ 10%-
+bindsym XF86AudioMute exec --no-startup-id pactl set-sink-mute @DEFAULT_SINK@ toggle
+bindsym XF86AudioMicMute exec --no-startup-id pactl set-source-mute @DEFAULT_SOURCE@ toggle
+
+# --------------------------------------------
+# APPLICATIONS
+# --------------------------------------------
+
+# Kitty
+bindsym $mod+Return exec --no-startup-id $term
+
+# Super+D is owned by LXQt Global Shortcuts and opens the panel application menu.
+
+# Display configuration GUI
+bindsym $mod+Shift+d exec --no-startup-id lxqt-config-monitor
+
+# Bluetooth GUI
+bindsym $mod+Shift+b exec --no-startup-id blueman-manager
+
+# LXQt desktop and wallpaper preferences
+bindsym $mod+Shift+w exec --no-startup-id pcmanfm-qt --desktop-pref bg --profile=lxqt
+
+# Select a screen region and save it under ~/Pictures/Screenshots
+bindsym Mod1+Shift+4 exec --no-startup-id ~/.local/bin/i3-screenshot-region
+
+# USBGuard device manager
+bindsym $mod+Shift+u exec --no-startup-id ~/.local/bin/usbguard-gui
+
+# --------------------------------------------
+# WINDOW CONTROL
+# --------------------------------------------
+
+# Kill focused window
+bindsym $mod+Shift+q kill
+
+# Focus
+bindsym $mod+j focus left
+bindsym $mod+k focus down
+bindsym $mod+l focus up
+bindsym $mod+semicolon focus right
+
+bindsym $mod+Left focus left
+bindsym $mod+Down focus down
+bindsym $mod+Up focus up
+bindsym $mod+Right focus right
+
+# Move windows
+bindsym $mod+Shift+j move left
+bindsym $mod+Shift+k move down
+bindsym $mod+Shift+l move up
+bindsym $mod+Shift+semicolon move right
+
+bindsym $mod+Shift+Left move left
+bindsym $mod+Shift+Down move down
+bindsym $mod+Shift+Up move up
+bindsym $mod+Shift+Right move right
+
+# Splits
+bindsym $mod+h split h
+bindsym $mod+v split v
+
+# Fullscreen
+bindsym $mod+f fullscreen toggle
+
+# Layouts
+bindsym $mod+s layout stacking
+bindsym $mod+w layout tabbed
+bindsym $mod+e layout toggle split
+
+# Floating
+bindsym $mod+Shift+space floating toggle
+
+# Switch focus between floating / tiled
+bindsym $mod+space focus mode_toggle
+
+# Parent container
+bindsym $mod+a focus parent
+
+# --------------------------------------------
+# WORKSPACES
+# --------------------------------------------
+
+set $ws1 "1:I"
+set $ws2 "2:II"
+set $ws3 "3:III"
+set $ws4 "4:IV"
+set $ws5 "5:V"
+set $ws6 "6:VI"
+set $ws7 "7:VII"
+set $ws8 "8:VIII"
+set $ws9 "9:IX"
+set $ws10 "10:X"
+
+# Switch workspace
+bindsym $mod+1 workspace number $ws1
+bindsym $mod+2 workspace number $ws2
+bindsym $mod+3 workspace number $ws3
+bindsym $mod+4 workspace number $ws4
+bindsym $mod+5 workspace number $ws5
+bindsym $mod+6 workspace number $ws6
+bindsym $mod+7 workspace number $ws7
+bindsym $mod+8 workspace number $ws8
+bindsym $mod+9 workspace number $ws9
+bindsym $mod+0 workspace number $ws10
+
+# Move container to workspace
+bindsym $mod+Shift+1 move container to workspace number $ws1
+bindsym $mod+Shift+2 move container to workspace number $ws2
+bindsym $mod+Shift+3 move container to workspace number $ws3
+bindsym $mod+Shift+4 move container to workspace number $ws4
+bindsym $mod+Shift+5 move container to workspace number $ws5
+bindsym $mod+Shift+6 move container to workspace number $ws6
+bindsym $mod+Shift+7 move container to workspace number $ws7
+bindsym $mod+Shift+8 move container to workspace number $ws8
+bindsym $mod+Shift+9 move container to workspace number $ws9
+bindsym $mod+Shift+0 move container to workspace number $ws10
+
+# --------------------------------------------
+# RESIZE MODE
+# --------------------------------------------
+
+mode "resize" {
+    bindsym j resize shrink width 10 px or 10 ppt
+    bindsym k resize grow height 10 px or 10 ppt
+    bindsym l resize shrink height 10 px or 10 ppt
+    bindsym semicolon resize grow width 10 px or 10 ppt
+
+    bindsym Left resize shrink width 10 px or 10 ppt
+    bindsym Down resize grow height 10 px or 10 ppt
+    bindsym Up resize shrink height 10 px or 10 ppt
+    bindsym Right resize grow width 10 px or 10 ppt
+
+    bindsym Return mode "default"
+    bindsym Escape mode "default"
+    bindsym $mod+r mode "default"
+}
+
+bindsym $mod+r mode "resize"
+
+# --------------------------------------------
+# I3 CONTROL
+# --------------------------------------------
+
+# Reload config
+bindsym $mod+Shift+c reload
+
+# Restart i3
+bindsym $mod+Shift+r restart
+
+# End the complete LXQt session through its leave dialog.
+bindsym $mod+Shift+e exec --no-startup-id lxqt-leave
+
+# --------------------------------------------
+# COLORS
+# --------------------------------------------
+
+# class                  border   background text     indicator child_border
+client.focused           #13BEAA  #13BEAA    #FFFFFF  #13BEAA   #13BEAA
+client.focused_inactive  #8C8C8C  #4C4C4C    #FFFFFF  #4C4C4C   #8C8C8C
+client.unfocused         #4C4C4C  #222222    #888888  #292D2E   #222222
+client.urgent            #EC69A0  #DB3279    #FFFFFF  #DB3279   #DB3279
+client.placeholder       #000000  #0C0C0C    #FFFFFF  #000000   #0C0C0C
+
+client.background #FFFFFF
+
+# LXQt Panel provides the bar, tray, and USBGuard status widget.
