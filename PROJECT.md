@@ -49,7 +49,7 @@ The user's i3 config (`~/.config/i3/config`) is the source of truth for behaviou
 
 ```sh
 npm ci                      # or npm install; .npmrc sets legacy-peer-deps
-npm test                    # vitest on Node — unit tests for the pure core (52 tests)
+npm test                    # vitest on Node — pure core + fake Gio adapter tests (64 tests)
 npm run typecheck           # two programs: tsconfig.json (src, GNOME types) + tsconfig.test.json (tests + Layer 0, Node types)
 npm run check:layer0        # fails if Layer 0 imports gi:// / resource:// / src/shell (also part of `npm run build`)
 npm run build               # release bundle → dist/  (esbuild, single ESM file; schemas compiled)
@@ -100,7 +100,7 @@ Verification: unit 52/52; typecheck both programs; `npm run test:integration` gr
 
 **Not done for Phase 1:** the human walk of `docs/acceptance/phase-1.md` on the live desktop (A1–A7, especially A2 pills, A3 XF86 keys, A6 restore-on-disable). Phase 1 counts as complete only when that checklist is ticked; fixes it produces go straight onto `main` or a `phase-1-fixes` branch.
 
-Small items deferred from Phase 1 are listed in the carry-forward doc; the first one to do in Phase 2 is a fake-`Gio.Settings` unit test for `SettingsOverrides` (the only component that can damage the user's settings).
+The follow-up fixes restore last-good-cache recovery for a missing config at startup and preserve saved GNOME settings when restoration fails. Fake-`Gio.Settings` apply/restore/crash-recovery coverage and ConfigLoader regression tests are now included (64 unit tests total). Remaining deferred items are listed in the carry-forward doc. The user is doing A1–A7; hold Phase 2 planning until the ticked checklist arrives and any findings are fixed.
 
 ## 6. What remains — Phases 2, 3, 4
 
@@ -120,7 +120,9 @@ The hard one; it is what makes this "i3".
 `src/shell/decorations.ts`: per-leaf `St.Widget` borders in `global.window_group` sized to the leaf rect with `client.*` colours (focused / focused_inactive / unfocused / urgent), a single frame around a focused SplitCon, `default_border pixel N` and the `border` command (`normal` treated as `pixel`); tab/stack bars as `St.BoxLayout` of titles above tabbed/stacked containers (children get rect minus bar; click focuses). All actors created/updated/destroyed only from `commit()`.
 
 ### Phase 4 — fidelity — spec §17
-`for_window` rules applied at first-frame (`floating enable`, `border`, `resize set`, `move position center`, `move container to workspace`); `workspace_auto_back_and_forth` / `back_and_forth`; urgent pills (`window-demands-attention`); multi-monitor (per-monitor focus/move across MonitorCons, `workspaces-only-on-primary`); `focus_follows_mouse` ↔ `org.gnome.desktop.wm.preferences focus-mode`; marks/scratchpad only if daily use asks. Also: user-defined GNOME shortcuts (`custom-keybindings` relocatable schema) are not yet enumerated by the override scan; the criteria regex stops at the first `]`.
+`for_window` rules applied at first-frame (`floating enable`, `border`, `resize set`, `move position center`, `move container to workspace`); `workspace_auto_back_and_forth` / `back_and_forth`; urgent pills (`window-demands-attention`); multi-monitor (per-monitor focus/move across MonitorCons, `workspaces-only-on-primary`); `focus_follows_mouse` ↔ `org.gnome.desktop.wm.preferences focus-mode`. Marks and scratchpad stay outside v1. Also: user-defined GNOME shortcuts (`custom-keybindings` relocatable schema) are not yet enumerated by the override scan; the criteria regex stops at the first `]`.
+
+Target arrangements: laptop alone (`eDP-1`) and docked with external display(s), lid closed. Windows migrate off the internal display when inactive and return on undock. Existing `~/Dev/i3-display-manager` and `~/Dev/i3-lid-sleep` (also installed in `~/.local/bin/`) document expected transitions. Ask about scaling and exact resolutions when Phase 4 planning starts.
 
 ### Explicit non-goals (v1)
 `bindcode`, `bindsym --release`, marks, scratchpad, `assign`, gaps, i3bar `status_command`/`bar {}`, top-level autostart `exec`, layout persistence across shell restarts, `resize set` on tiled containers, stripping title bars.

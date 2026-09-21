@@ -6,6 +6,23 @@ Phase 1 (Foundation) was executed from `docs/superpowers/plans/2026-09-20-phase-
 Automated acceptance (`npm run test:integration`: A1, A3, A4, A5, A7 in a nested headless shell) is green.
 **The live walk in `docs/acceptance/phase-1.md` (A1–A7 on the real desktop) is still to be done by the user.**
 
+## Follow-up analysis (2026-09-21, baseline `a41638f`)
+
+The user confirmed that the live walk is still pending. Fresh verification on this baseline: 52/52 unit tests, both TypeScript programs and the Layer 0 check passed. Integration was not rerun during this analysis.
+
+Two defects were reproduced with in-memory adapter fakes and fixed in the follow-up:
+
+- `SettingsOverrides.restoreAll()` cleared the entire persisted snapshot even when a restore setter returned `false` or threw. It now removes only successfully restored entries, retaining failed entries and unavailable schemas for a later retry. Fake-`Gio.Settings` tests exercise successful apply/restore, both failure paths across all saved value types, partial restoration, unavailable schemas, restart recovery and re-applying overrides after a crash.
+- `ConfigLoader.load('initial')` skipped a valid last-good cache when the config file was missing or unreadable. Both cases now share the invalid-file recovery path: try the cache before the built-in fallback, keeping the not-found diagnostic as a warning. Regression tests cover cache recovery, absent/invalid caches, valid-file cache replacement and unchanged missing-file reload rejection.
+
+Fix commits on `main`: `19eac12` (ConfigLoader) and `7bb138b` (settings restoration). Verification: 64/64 unit tests, both TypeScript programs, the Layer 0 check and a release build in a temporary checkout passed. Independent review of both fixes and their tests reported no findings. Integration was not rerun and the installed `dist/` was left unchanged during the user's live walk; run `make install` and log out/in before live retesting these commits.
+
+The user authorized these two fixes on `main` while doing the live A1–A7 walk. Phase 2 planning remains on hold until the user sends the ticked checklist and any findings are fixed. The Phase 2 spec clarifications belong in the binding spec before writing the implementation plan; plan the pure tree and property tests before window lifecycle and geometry integration.
+
+The binding spec now records the approved Phase 2 rulings: ignore splash windows, track fixed-size normal windows as floating, target engine-selected containers through `WindowId` adapter operations, and assert coverage/non-overlap only for split children (equal rects for tabbed/stacked children). Geometry reconciliation permits one corrective re-apply per expected-rect generation, then stops for stubborn clients. Fullscreen exit, unminimize, monitor changes and completion of engine-initiated unmaximize force a fresh application even for an unchanged expected rect; workspace changes use the normal diff. These are design amendments, not implemented Phase 2 behavior.
+
+Phase 4 target arrangements: laptop alone (`eDP-1` was the only connected output when reported) and docked with external display(s), lid closed. Windows must migrate off the internal display when it becomes inactive and return to it on undock. Consult `~/Dev/i3-display-manager` and `~/Dev/i3-lid-sleep` (installed copies in `~/.local/bin/`) for the user's expected transitions. Ask about scaling and exact resolutions when Phase 4 planning starts, not earlier. Marks and scratchpad remain outside v1.
+
 ## Rulings made during execution (plan defects fixed on the branch)
 
 1. Work on branch `phase-1` in the repo itself (no worktree): the Makefile symlinks `$(CURDIR)/dist` for the live acceptance.
@@ -28,7 +45,7 @@ Automated acceptance (`npm run test:integration`: A1, A3, A4, A5, A7 in a nested
 
 ## Deferred to Phase 2 (from the final review's triage, in priority order)
 
-- A fake-`Gio.Settings` unit test for `SettingsOverrides` apply / restore / crash recovery — the one component that can damage user settings and is covered only by the harness and the live walk.
+- Completed in the follow-up above: fake-`Gio.Settings` unit coverage for `SettingsOverrides` apply / restore / crash recovery, including preservation of failed restores. Keep these regressions in the Phase 2 baseline.
 - `settings.reset(key)` when a restored value equals the schema default, and `Gio.Settings.sync()` at the end of `restoreAll()` (logout-time disable).
 - Fix the two parked log/comment texts (ruling 17).
 - `assertNever` default in `resolve.ts`'s directive switch; lexer tests for EOF continuation / no trailing newline; a `set: missing value` diagnostic; relax `NAME_RE` (i3 accepts `$ws-1`, `$my.var`).

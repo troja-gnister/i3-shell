@@ -1,7 +1,7 @@
 # i3-shell — Design Specification
 
 - **Date:** 2026-09-20
-- **Status:** Approved design; implementation not started
+- **Status:** Approved design; Phase 1 implemented, live acceptance pending; Phases 2–4 not implemented
 - **Target:** GNOME Shell 50.x (Mutter 18), Wayland session, Fedora Silverblue 44
 - **Repository:** `~/Dev/i3-shell` (GitHub-bound)
 - **License:** GPL-2.0-or-later
@@ -53,7 +53,7 @@ Verified with the user's real config, unmodified.
 - **A10.** `$mod+j/k/l/;` move focus left/down/up/right through the tree and wrap at the edge; `$mod+Shift+j/k/l/;` move the window, including out of and into nested containers.
 - **A11.** `$mod+a` focuses the parent container; a following `$mod+Shift+;` moves the whole container; `$mod+e` toggles its split orientation.
 - **A12.** In `resize` mode, `j/;` shrink/grow width and `k/l` grow/shrink height in 10-ppt steps, resizing the tiled neighbours.
-- **A13.** Dialogs, modal dialogs, utility and splash windows float automatically; `$mod+Shift+space` toggles floating on a tiled window; `$mod+space` toggles focus between tiled and floating windows.
+- **A13.** Dialogs, modal dialogs, utility and fixed-size normal windows float automatically; `$mod+Shift+space` toggles floating on a tiled window; `$mod+space` toggles focus between tiled and floating windows. Splash windows remain managed by Mutter and are not tracked by the extension.
 - **A14.** After lock/unlock, docking a monitor, or disabling and re-enabling the extension, every tiled window is where the tree says it is.
 
 ## 4. Architecture
@@ -132,7 +132,7 @@ D-Bus Command() ──▶ control.ts ──▶ engine.dispatch()
 engine.commit():
   1. normalize the tree              (§7.2)
   2. layout every workspace          → Map<WindowId, Rect>
-  3. diff against the last applied rects
+  3. diff against the last applied rects; include forced re-applications (§8.4 item 2)
   4. geometry.apply(changed)         (records the expected rect per window)
   5. decorations.update(); indicator.update(); TreeChanged D-Bus signal
 ```
@@ -147,6 +147,7 @@ engine.commit():
 - Loaded on `enable()`, on the `reload` command, and on the `restart` command.
 - The file is read in full, parsed and resolved; the result is `{config, diagnostics}`.
 - **Errors reject the file**; the last good config stays active. The text of the last accepted config is cached at `$XDG_CACHE_HOME/i3-shell/last-good.config` so it survives shell restarts. If there is no last good config, a built-in fallback (i3's default bindings with `$mod = Mod4`) is loaded so the user is never without bindings.
+- On initial load, a missing or unreadable file follows the same cache → built-in fallback chain as an invalid file; its not-found diagnostic remains a warning. On reload, a missing file is rejected and the running config remains active.
 - **Warnings** never reject the file.
 
 ### 6.2 Grammar (v1)
@@ -311,6 +312,8 @@ Tabbed containers count as horizontal and stacked as vertical, so `focus left/ri
 - `focus child`: `focused = focused.focusedChild` if any.
 - Tree focus is also updated from GNOME (§8.3): a `focus` signal on a tiled window sets `focused` to its leaf and repairs the chain.
 
+**Command target (Phase 2):** commands operate on the engine's selected container, or its tracked floating-window selection, never by reading `global.display.focus_window` at dispatch time. After `focus parent`, the selected container remains the target even though GNOME keyboard focus stays on a leaf. The engine resolves the affected leaves to `WindowId`s and calls adapter operations such as `kill(id)`, `fullscreen(id, action)` and `moveToWorkspace(id, index)`, passing timestamps where needed. These replace the Phase 1 focused-window helpers. Existing command semantics still apply: `kill` and workspace moves affect all leaves under the selected container; fullscreen on a SplitCon is a warning and no-op (§7.9).
+
 ### 7.7 Move
 
 `move <dir>` for a tiled con `c` (i3 `tree_move`), with `o = orientation(dir)`:
@@ -354,7 +357,7 @@ Floating: change the frame by N px on that axis, keeping position. `resize set W
 
 ### 7.9 Fullscreen
 
-`fullscreen toggle|enable|disable` on a leaf: Mutter native `make_fullscreen()` / `unmake_fullscreen()`. The leaf keeps its tree slot; other windows keep their rects underneath. On `notify::fullscreen` → false (from the app or the user) the leaf's rect is re-applied on the next commit. On a SplitCon: warning, no-op (v1).
+`fullscreen toggle|enable|disable` on a leaf: Mutter native `make_fullscreen()` / `unmake_fullscreen()`. The leaf keeps its tree slot; other windows keep their rects underneath. On `notify::fullscreen` → false (from the app or the user) the leaf's rect is forcibly re-applied on the next commit, even when unchanged in the geometry diff (§8.4 item 2). On a SplitCon: warning, no-op (v1).
 
 ### 7.10 Floating
 
@@ -374,7 +377,7 @@ Floating: change the frame by N px on that axis, keeping position. `resize set W
 - `tabbed` / `stacked`: every child gets `rect` (Phase 3: minus the tab/stack bar) and the active child (`focusedChild`) is raised.
 - MonitorCon → its work area; WorkspaceCon → each of its MonitorCons.
 
-Rects are integer, non-overlapping within a split, and their union is the parent rect (asserted by tests).
+Rects are integer. For each non-empty `splith` / `splitv` container, direct children's rects do not overlap and their union is the parent rect. For `tabbed` / `stacked`, each direct child receives the same parent rect in Phase 2; overlap is intentional (asserted by tests).
 
 ## 8. Windows and lifecycle
 
@@ -384,7 +387,9 @@ Rects are integer, non-overlapping within a split, and their union is the parent
 
 ### 8.2 Which windows tile
 
-A window is **tiled** iff all of: `window_type == NORMAL`; not `skip_taskbar`; `get_transient_for() == null`; not `is_attached_dialog()`; not on all workspaces; `allows_resize()`; not matched by a `floating enable` rule (Phase 4). DIALOG, MODAL_DIALOG, UTILITY and transient windows are tracked in the workspace's `floating` list so `focus mode_toggle` can reach them. Everything else (splash, docks, menus, tooltips, …) is ignored entirely.
+A window is **tiled** iff all of: `window_type == NORMAL`; not `skip_taskbar`; `get_transient_for() == null`; not `is_attached_dialog()`; not on all workspaces; `allows_resize()`; not matched by a `floating enable` rule (Phase 4).
+
+DIALOG, MODAL_DIALOG, UTILITY and transient application windows are tracked in the workspace's `floating` list so `focus mode_toggle` can reach them. Fixed-size NORMAL windows (`allows_resize() == false`) also enter that list rather than being discarded by the tiling filter. Splash windows, docks, menus and tooltips are ignored entirely, including when transient: Mutter manages them and the extension does not assign them a tracked window id.
 
 ### 8.3 Events → engine
 
@@ -393,19 +398,21 @@ A window is **tiled** iff all of: `window_type == NORMAL`; not `skip_taskbar`; `
 | `display::window-created` | connect per-window signals; on the actor's `first-frame` → `onWindowAdded(id)` → §7.3 or the floating list → commit |
 | `window::unmanaged` | `onWindowRemoved(id)` → detach the leaf / remove from floating → commit; if it was focused, focus falls to `descendFocused(parent)` |
 | `window::focus` / `display::notify::focus-window` | `onFocused(id)`: tiled → set `focused`, repair the chain; floating → move to the front of the floating list |
-| `window::size-changed` / `position-changed` | tiled and frame ≠ expected rect → re-apply the expected rect; floating → ignore |
+| `window::size-changed` / `position-changed` | tiled and frame ≠ expected rect → request at most one corrective re-apply per expected-rect generation through commit (§8.4 item 2); floating → ignore |
 | `window::workspace-changed` | if the new workspace equals the id's *expected workspace* (set by an engine-initiated move) → clear it, no tree change; else detach from the old workspace and insert into the new one per §7.3 → commit |
-| `window::notify::minimized` | true → detach (remembered as minimized); false → insert as new (§7.3) |
-| `window::notify::maximized-horizontally` / `-vertically` | tiled and now maximized → `unmaximize()`, then re-apply the rect |
-| `window::notify::fullscreen` | false → re-apply the rect on the next commit |
+| `window::notify::minimized` | true → detach (remembered as minimized); false → insert as new (§7.3), then force re-apply through commit even if the rect is unchanged |
+| `window::notify::maximized-horizontally` / `-vertically` | tiled and now maximized → `unmaximize()`; after unmaximize, force re-apply through commit even if the rect is unchanged |
+| `window::notify::fullscreen` | false → force re-apply the rect on the next commit even if unchanged |
 | `workspace_manager::active-workspace-changed` | indicator update; global `focused` = that workspace's `focusedCon` |
-| `layoutManager::monitors-changed` | rebuild MonitorCons (cons of a vanished monitor are appended under the primary monitor's root) → commit |
+| `layoutManager::monitors-changed` | rebuild MonitorCons (cons of a vanished monitor are appended under the primary monitor's root) → commit with forced re-apply for tiled windows, including unchanged rects |
 | `display::window-demands-attention` | Phase 4 (urgent pills) |
 
 ### 8.4 Danger zones — explicit designs
 
 1. **Not yet mapped.** Insert on `first-frame`, not on `window-created`: `move_resize_frame` before the first frame is unreliable and races GNOME's own placement.
-2. **Self-resizing clients.** Tiled windows are held to their expected rect; the expected rect is recorded at apply time and compared before re-applying, which prevents apply → size-changed → apply loops. A window that refuses a size (fixed size, or a minimum larger than the rect) is left at its size, as in i3.
+2. **Geometry reconciliation.** Each `geometry.apply` records the window's expected rect. A changed expected rect starts a new reconciliation generation. On `size-changed` / `position-changed`, a tiled window whose frame differs from that rect receives at most one corrective re-apply for that generation, through `commit()`. Matching notifications do nothing. If the frame still differs after that corrective application has taken effect, mark the window stubborn for that generation and stop re-applying until a later commit changes its expected rect. Duplicate notifications do not reset the retry allowance. This bounds retries for a client whose minimum size exceeds its tile; fixed-size normal windows float instead (§8.2).
+
+   Four lifecycle events force a fresh application and reconciliation generation even when the expected rect is unchanged: fullscreen exit (`notify::fullscreen` → false), unminimize (`notify::minimized` → false), `monitors-changed`, and completion of the engine's `unmaximize()` after catching a tiled window maximizing (`notify::maximized-horizontally` / `-vertically`). These invalidations bypass the normal rect diff and the old generation's stubborn marker. Fullscreen and minimized windows are not held to tiled geometry while in those states. `workspace-changed` is not a forced-reapply exception; its normal tree mutation and rect diff suffice. All re-applications go through the single commit pipeline, never directly from signal handlers.
 3. **Death mid-commit.** Ids resolve at apply time; `undefined` is skipped; the `unmanaged` handler recommits. Every handler is idempotent.
 4. **Focus drift.** GNOME-side focus changes always update tree focus and the `focusedChild` chain (§8.3), so directional focus starts from reality.
 5. **Maximize / minimize.** See §19.
@@ -452,7 +459,7 @@ A window is **tiled** iff all of: `window_type == NORMAL`; not `skip_taskbar`; `
 On enable, after the config is parsed, `settings.ts` enumerates every key of type `as` (and `s` for the `-static` media keys) in `org.gnome.desktop.wm.keybindings`, `org.gnome.shell.keybindings`, `org.gnome.mutter.keybindings`, `org.gnome.mutter.wayland.keybindings` and `org.gnome.settings-daemon.plugins.media-keys`, canonicalises each accelerator (sorted modifiers, lower-cased key), and clears any that equals one of the config's **default-mode** accelerators. Mode-only bindings are transient grabs and need no clearing. It also applies `dynamic-workspaces`, `num-workspaces`, `workspace-names`, and `mouse-button-modifier` when `floating_modifier` differs from the current value.
 
 - Every original value is saved first into the extension's GSettings key `overridden-settings` (JSON `{schema: {key: value}}`) — the mechanism Tiling Shell uses. If that key is already non-empty on enable (the shell died before a restore), the existing snapshot is kept, not overwritten with already-overridden values, and the overrides are re-applied on top.
-- `disable()` restores every saved value and clears the snapshot.
+- `disable()` attempts to restore every saved value and removes only successfully restored entries from the snapshot. If a setter returns `false` or throws, or its schema is unavailable, keep that original persisted for a later restore attempt and log the failure. The snapshot is empty only when all entries have been restored.
 - Re-evaluated on `reload`: new conflicts are cleared; keys whose conflicting binding left the config are restored.
 - The config wins over GNOME defaults by design, including `XF86Audio*`: the reference config binds them explicitly to `wpctl` / `pactl`, so GNOME's volume-OSD handler is released. Removing those lines returns the keys to GNOME on the next reload.
 
@@ -485,8 +492,9 @@ Usage: `gdbus call --session --dest org.i3shell.Control --object-path /org/i3she
 - Parser golden test: the reference config parses with zero errors and no warnings other than its known tier-2 lines, into an expected binding table (all 76 `bindsym`s, both modes, all variables resolved, all colours).
 - Resolver: keysym mapping table; substitution order; criteria parsing.
 - Command parser: every row of §6.7, chaining, error cases.
-- Tree property tests (fast-check): random sequences of insert / remove / split / layout / move / focus / resize on trees of up to 12 leaves keep `Tree.check()` true, and `layout()` at 1920×1080 tiles the work area exactly with no gaps or overlaps.
+- Tree property tests (fast-check): random sequences of insert / remove / split / layout / move / focus / resize on trees of up to 12 leaves keep `Tree.check()` true. Run `layout()` at 1920×1080 and check each non-empty container's direct children: `splith` / `splitv` children cover the parent exactly with no gaps or overlaps; `tabbed` / `stacked` children each equal the parent's rect in Phase 2. Do not assert global non-overlap across leaves in tabbed or stacked subtrees.
 - Layout exact-rect tests: hand-written trees → exact integer rects.
+- Geometry adapter/engine tests: matching notifications cause no retry; repeated mismatches cause at most one corrective re-apply per expected-rect generation; stubborn clients retry when the expected rect changes. Each of the four lifecycle invalidations in §8.4 item 2 forces application even for an unchanged rect; workspace changes use the normal diff.
 - Focus and move scenario tests: the worked examples of §7.6–7.7 plus edge and wrap cases. Where a semantic is disputed, real i3 (still installed) under Xvfb is the oracle.
 - `tsc --noEmit` type-checks all layers; an additional check fails the build if `gi://` appears anywhere in Layer 0's import graph.
 
@@ -512,7 +520,9 @@ Each phase gets its own implementation plan in `docs/superpowers/plans/` and is 
 
 **Phase 3 — Layouts & appearance.** `decorations.ts`: borders with `client.*` colours, `default_border`, the `border` command, tab / stack bars with titles, the focused-container frame. Acceptance: borders and tab bars match the config colours; clicking a tab focuses it.
 
-**Phase 4 — Fidelity.** `for_window` rules applied at first-frame (`floating enable`, `border`, `resize set`, `move position center`, `move container to workspace`); `workspace_auto_back_and_forth` / `back_and_forth`; urgent state in pills; multi-monitor (per-monitor focus / move across MonitorCons, `workspaces-only-on-primary`); `focus_follows_mouse` ↔ `org.gnome.desktop.wm.preferences focus-mode`; marks / scratchpad only if daily use asks for them.
+**Phase 4 — Fidelity.** `for_window` rules applied at first-frame (`floating enable`, `border`, `resize set`, `move position center`, `move container to workspace`); `workspace_auto_back_and_forth` / `back_and_forth`; urgent state in pills; multi-monitor (per-monitor focus / move across MonitorCons, `workspaces-only-on-primary`); `focus_follows_mouse` ↔ `org.gnome.desktop.wm.preferences focus-mode`. Marks and scratchpad stay outside v1.
+
+Required monitor arrangements are laptop alone (`eDP-1`) and docked with external display(s), lid closed. Windows migrate off the internal display when it becomes inactive and return to the internal display on undock. The user's existing `~/Dev/i3-display-manager` and `~/Dev/i3-lid-sleep` document the expected transitions. Confirm scaling and exact resolutions with the user when Phase 4 planning begins; those details are not prerequisites for Phase 2.
 
 ## 18. Toolchain, build, install, dev loop
 
