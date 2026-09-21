@@ -6,7 +6,7 @@ import {planOverrides} from './config/overridePlan';
 import {Engine} from './engine';
 import type {LoadedConfig} from './engine';
 import {ConfigLoader} from './shell/configLoader';
-import {DBusControl} from './shell/control';
+import {DBusControl, DebugObject} from './shell/control';
 import {spawnShell} from './shell/exec';
 import {Indicator} from './shell/indicator';
 import type {PillState} from './shell/indicator';
@@ -79,7 +79,8 @@ export default class I3ShellExtension extends Extension {
     engine.start();
     this._started = true;
     this._refreshPills();
-    this._dbus = new DBusControl(engine, session, __I3SHELL_TEST__);
+    const debug = __I3SHELL_TEST__ ? new DebugObject(session) : null;
+    this._dbus = new DBusControl(engine, debug);
     log.info(`ready: ${engine.state().grabbed} bindings grabbed, config from ${engine.lastLoad.source} (${engine.lastLoad.path})`);
   }
 

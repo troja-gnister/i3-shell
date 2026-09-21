@@ -100,12 +100,19 @@ export class KeyBinder implements KeyBinderPort {
       this._retryId = 0;
       const pending = this._pending;
       this._pending = [];
+      let succeeded = 0;
       for (const binding of pending) {
-        if (this._byAccel.has(binding.accel))
+        if (this._byAccel.has(binding.accel)) {
+          succeeded++;
           continue;
-        if (!this._grab(binding))
+        }
+        if (this._grab(binding))
+          succeeded++;
+        else
           log.warn(`could not grab ${binding.combo} (${binding.accel}): another client holds it`);
       }
+      if (pending.length > 0)
+        log.info(`retry: grabbed ${succeeded} of ${pending.length} binding(s) that another client held at first`);
       return GLib.SOURCE_REMOVE;
     });
   }

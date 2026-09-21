@@ -98,7 +98,7 @@ export function accelToKeyvals(accel: string): number[] | null {
 }
 
 /** Test-build only: lets the integration harness press keys and fake the lock screen. */
-class DebugObject {
+export class DebugObject {
   private _keyboard: Clutter.VirtualInputDevice | null = null;
 
   constructor(private readonly _session: SessionWatcher) {}
@@ -128,11 +128,11 @@ export class DBusControl {
   private readonly _debug: Gio.DBusExportedObject | null = null;
   private readonly _ownerId: number;
 
-  constructor(engine: Engine, session: SessionWatcher, withDebug: boolean) {
+  constructor(engine: Engine, debug: DebugObject | null) {
     this._control = Gio.DBusExportedObject.wrapJSObject(CONTROL_IFACE, new ControlObject(engine));
     this._control.export(Gio.DBus.session, OBJECT_PATH);
-    if (withDebug) {
-      this._debug = Gio.DBusExportedObject.wrapJSObject(DEBUG_IFACE, new DebugObject(session));
+    if (debug !== null) {
+      this._debug = Gio.DBusExportedObject.wrapJSObject(DEBUG_IFACE, debug);
       this._debug.export(Gio.DBus.session, OBJECT_PATH);
       log.info('test build: org.i3shell.Debug exported');
     }
