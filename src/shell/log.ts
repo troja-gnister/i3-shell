@@ -10,9 +10,12 @@ export const log = {
   },
   error(message: string, error?: unknown): void {
     console.error(`${PREFIX} ${message}`);
-    if (error instanceof Error)
-      console.error(error.stack ?? error.message);
-    else if (error !== undefined)
-      console.error(String(error));
+    const detail = error instanceof Error
+      ? (error.stack ?? error.message)
+      : error !== undefined ? String(error) : '';
+    for (const line of detail.split('\n')) {
+      if (line !== '')
+        console.error(`${PREFIX}   ${line}`);
+    }
   },
 };
