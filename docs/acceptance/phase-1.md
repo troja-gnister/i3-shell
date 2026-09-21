@@ -37,5 +37,9 @@ Date: ____  GNOME Shell: `gnome-shell --version` → ____  Commit: ____
 - [ ] Enter resize mode, lock the screen (`Super+Shift+x` runs the configured locker, or use the system menu); on the lock screen typing `j` in the password field types `j`
 - [ ] After unlocking: the mode label is gone, `Super+2` works, the pills are visible, Activities stays hidden
 
+## Known caveats for this walk
+- After `gnome-extensions enable` in a running session, keys held by gsd (`XF86Audio*`, brightness) are re-grabbed with a retry backoff; allow up to ~6 s before judging A3's XF86 items.
+- Touchpad (smooth) scrolling over the pills is not handled in Phase 1; use a mouse wheel for the A2 scroll item.
+
 ## Findings
 - ____

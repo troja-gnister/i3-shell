@@ -83,6 +83,11 @@ OUT=$(cmd "move container to workspace number 5")
 [[ "$OUT" == *"no focused window"* ]] && echo "ok    A1 move dispatches (no window to move in the sandbox)" || { echo "FAIL  A1 move: $OUT"; FAILS=$((FAILS+1)); }
 press "<Super><Shift>5"; expect "A1 Shift+5 leaves workspace unchanged (nothing to move)" "$(field GetState activeWorkspace)" 0
 
+echo "== A3 exec"
+rm -f "$I3SHELL_SANDBOX/exec-ok"
+cmd "exec touch $I3SHELL_SANDBOX/exec-ok" >/dev/null; sleep 0.5
+[[ -f "$I3SHELL_SANDBOX/exec-ok" ]] && echo "ok    A3 exec runs a shell command" || { echo "FAIL  A3 exec did not create the marker file"; FAILS=$((FAILS + 1)); }
+
 echo "== A4 modes"
 press "<Super>r";  expect "Super+r enters resize" "$(field GetState mode)" resize
 expect "resize mode grabs 11" "$(field GetState grabbed)" 11
