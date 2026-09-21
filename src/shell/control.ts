@@ -131,7 +131,8 @@ export class DBusControl {
   constructor(engine: Engine, debug: DebugObject | null) {
     this._control = Gio.DBusExportedObject.wrapJSObject(CONTROL_IFACE, new ControlObject(engine));
     this._control.export(Gio.DBus.session, OBJECT_PATH);
-    if (debug !== null) {
+    // __I3SHELL_TEST__ is a compile-time literal, so release builds drop this branch and DEBUG_IFACE with it
+    if (__I3SHELL_TEST__ && debug !== null) {
       this._debug = Gio.DBusExportedObject.wrapJSObject(DEBUG_IFACE, debug);
       this._debug.export(Gio.DBus.session, OBJECT_PATH);
       log.info('test build: org.i3shell.Debug exported');
