@@ -2,6 +2,7 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import type {WindowEvent, WindowFacts, WindowInfo} from '../runtime/model';
 import type {MonitorId} from '../tree/node';
+import {existingWindows} from './windowEnumeration';
 import {WindowTracker, type WindowBackend} from './windowTracker';
 
 export interface WindowsPort {
@@ -54,7 +55,7 @@ function nativeWindowBackend(
   monitorId: (index: number) => MonitorId | undefined,
 ): WindowBackend<Meta.Window> {
   return {
-    existing: () => existingWindows(),
+    existing: nativeExistingWindows,
     facts: windowFacts,
     info: window => windowInfo(window, monitorId),
     focused: () => global.display.focus_window,
@@ -100,20 +101,15 @@ function nativeWindowBackend(
   };
 }
 
-function existingWindows(): readonly Meta.Window[] {
-  const result: Meta.Window[] = [];
-  const seen = new Set<Meta.Window>();
+function nativeExistingWindows(): readonly Meta.Window[] {
   const manager = global.workspace_manager;
-  for (let index = 0; index < manager.get_n_workspaces(); index++) {
-    const workspace = manager.get_workspace_by_index(index);
-    for (const window of workspace?.list_windows() ?? []) {
-      if (window.get_workspace().index() !== index) continue;
-      if (seen.has(window)) continue;
-      seen.add(window);
-      result.push(window);
-    }
-  }
-  return result;
+  return existingWindows({
+    workspaceCount: () => manager.get_n_workspaces(),
+    workspace: index => manager.get_workspace_by_index(index),
+    normalAllMru: Meta.TabList.NORMAL_ALL_MRU,
+    get_tab_list: (type, workspace) => global.display.get_tab_list(type, workspace),
+    workspaceIndex: window => window.get_workspace().index(),
+  });
 }
 
 function windowFacts(window: Meta.Window): WindowFacts {
