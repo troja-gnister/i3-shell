@@ -73,7 +73,7 @@ export class Engine {
   private _ready = false;
   private _revision = 0;
   private _committing = false;
-  private readonly _queued: Array<() => void> = [];
+  private readonly _queued: Array<() => boolean | void> = [];
   private readonly _windows = new Map<WindowId, WindowInfo>();
   private readonly _manualFloating = new Map<WindowId, boolean>();
   private readonly _minimized = new Map<WindowId, boolean>();
@@ -198,16 +198,16 @@ export class Engine {
   }
 
   /** Native callbacks may enqueue work, but never mutate a tree during its traversal. */
-  private commit(change: () => void = () => {}): void {
+  private commit(change: () => boolean | void = () => {}): void {
     if (!this._started || this._disposed) return;
     this._queued.push(change);
     if (this._committing) return;
     this._committing = true;
     try {
       while (this._queued.length && !this._disposed) {
-        this._queued.shift()!();
+        const changed = this._queued.shift()!();
         if (this._disposed) break;
-        this._layoutAndPublish();
+        if (changed !== false) this._layoutAndPublish();
       }
     } finally {
       this._committing = false;
@@ -381,6 +381,34 @@ export class Engine {
       ? [...leaves(selection.con)].map(leaf => leaf.window) : [];
   }
 
+  private _selectedWindow(): WindowId | null {
+    const selection = this._tree?.selection();
+    if (selection?.kind === 'floating') return selection.window;
+    return selection?.kind === 'tiled' && selection.con.kind === 'leaf'
+      ? selection.con.window : null;
+  }
+
+  private _selectionIsSplit(): boolean {
+    const selection = this._tree?.selection();
+    return selection?.kind === 'tiled' && selection.con.kind === 'split';
+  }
+
+  private _floatingFrame(commandFrames: ReadonlyMap<WindowId, Rect>): {id: WindowId; info: WindowInfo} | null {
+    const selection = this._tree?.selection();
+    if (selection?.kind !== 'floating') return null;
+    const info = this._ports.windows.get(selection.window);
+    const rect = commandFrames.get(selection.window);
+    return info ? {id: selection.window, info: rect ? {...info, rect: {...rect}} : info} : null;
+  }
+
+  private _queueFloatingFrame(id: WindowId, rect: Rect, commandFrames: Map<WindowId, Rect>): boolean {
+    if (![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) ||
+      rect.width <= 0 || rect.height <= 0) return false;
+    this._floatingRects.set(id, {...rect});
+    commandFrames.set(id, {...rect});
+    return true;
+  }
+
   private _activateSelection(timestamp: number): void {
     const selection = this._tree?.selection();
     const id = selection?.kind === 'floating' ? selection.window : selection?.kind === 'tiled'
@@ -451,7 +479,8 @@ export class Engine {
   /** Executes commands in order; returns a short human-readable result (also the D-Bus reply). */
   run(commands: Command[], timestamp: number): string {
     if (this._disposed) return 'stopped';
-    const messages = commands.map(c => this._runOne(c, timestamp)).filter(m => m !== '');
+    const commandFrames = new Map<WindowId, Rect>();
+    const messages = commands.map(c => this._runOne(c, timestamp, commandFrames)).filter(m => m !== '');
     return messages.length > 0 ? messages.join('; ') : 'ok';
   }
 
@@ -573,19 +602,23 @@ export class Engine {
     }
   }
 
-  private _runOne(command: Command, timestamp: number): string {
+  private _runOne(command: Command, timestamp: number, commandFrames: Map<WindowId, Rect>): string {
     const ports = this._ports;
     switch (command.type) {
       case 'exec':
         ports.exec(command.command);
         return `exec ${command.command}`;
       case 'kill': {
-        const ids = this._selectedIds();
+        const ids = this._selectedIds().filter(id => ports.windows.get(id) !== undefined);
         return ids.map(id => ports.windows.kill(id, timestamp)).some(Boolean) ? 'kill' : 'kill: no focused window';
       }
       case 'fullscreen': {
-        const ids = this._selectedIds();
-        return ids.map(id => ports.windows.fullscreen(id, command.action)).some(Boolean)
+        if (this._selectionIsSplit()) {
+          ports.log.warn('fullscreen applies only to individual windows');
+          return 'fullscreen: selected container is not a window';
+        }
+        const id = this._selectedWindow();
+        return id !== null && ports.windows.get(id) !== undefined && ports.windows.fullscreen(id, command.action)
           ? `fullscreen ${command.action}` : 'fullscreen: no focused window';
       }
       case 'workspace': {
@@ -596,8 +629,8 @@ export class Engine {
           return 'workspace: no such workspace';
         if (index === ports.workspaces.activeIndex)
           return 'workspace: already active';
-        ports.workspaces.activate(index, timestamp);
-        return `workspace ${index + 1}`;
+        return ports.workspaces.activate(index, timestamp)
+          ? `workspace ${index + 1}` : 'workspace: activation failed';
       }
       case 'move_to_workspace': {
         if (command.target.kind === 'back_and_forth')
@@ -609,13 +642,170 @@ export class Engine {
           return 'move container to workspace: already there';
         let moved = false;
         this.commit(() => {
-          if (!this._tree || !this._topology) return;
+          if (!this._tree || !this._topology) return false;
           const ids = this._tree.moveToWorkspace(index, this._topology.primary);
           moved = ids.length > 0;
+          if (!moved) return false;
           this._moveReconfigured(new Map(ids.map(id => [id, index])));
+          if (this._disposed) return false;
+          this._activateSelection(timestamp);
+          return true;
         });
         return moved ? `moved to workspace ${index + 1}` : 'move container to workspace: no focused window';
       }
+      case 'focus': {
+        let changed = false;
+        this.commit(() => {
+          const tree = this._tree;
+          if (!tree) return false;
+          if (command.target === 'parent') {
+            changed = tree.focusParent() !== null;
+            return changed;
+          }
+          if (command.target === 'child') {
+            changed = tree.focusChild() !== null;
+            if (changed) this._activateSelection(timestamp);
+            return changed;
+          }
+          if (command.target === 'mode_toggle') {
+            changed = tree.focusModeToggle() !== null;
+            if (changed) this._activateSelection(timestamp);
+            return changed;
+          }
+          changed = tree.focus(command.target, this._config.focusWrapping) !== null;
+          if (changed) this._activateSelection(timestamp);
+          return changed;
+        });
+        return changed ? `focus ${command.target}` : `focus ${command.target}: no target`;
+      }
+      case 'move': {
+        let moved = false;
+        this.commit(() => {
+          moved = this._tree?.move(command.direction) ?? false;
+          if (moved) this._activateSelection(timestamp);
+          return moved;
+        });
+        return moved ? `move ${command.direction}` : `move ${command.direction}: no target`;
+      }
+      case 'split': {
+        let changed = false;
+        this.commit(() => {
+          const selection = this._tree?.selection();
+          if (selection?.kind !== 'tiled') return false;
+          this._tree!.split(command.orientation);
+          changed = true;
+          return true;
+        });
+        return changed ? `split ${command.orientation}` : `split ${command.orientation}: no tiled container`;
+      }
+      case 'layout': {
+        let changed = false;
+        this.commit(() => {
+          const selection = this._tree?.selection();
+          if (selection?.kind !== 'tiled') return false;
+          this._tree!.setLayout(command.layout);
+          changed = true;
+          return true;
+        });
+        return changed ? `layout ${command.layout}` : `layout ${command.layout}: no tiled container`;
+      }
+      case 'layout_toggle': {
+        let changed = false;
+        this.commit(() => {
+          const selection = this._tree?.selection();
+          if (selection?.kind !== 'tiled') return false;
+          this._tree!.toggleLayout(command.cycle);
+          changed = true;
+          return true;
+        });
+        return changed ? 'layout toggle' : 'layout toggle: no tiled container';
+      }
+      case 'resize': {
+        let changed = false;
+        this.commit(() => {
+          const floating = this._floatingFrame(commandFrames);
+          if (floating) {
+            const delta = command.action === 'grow' ? command.px : -command.px;
+            const rect = {...floating.info.rect};
+            if (command.dimension === 'width') rect.width += delta;
+            else rect.height += delta;
+            changed = this._queueFloatingFrame(floating.id, rect, commandFrames);
+            return changed;
+          }
+          changed = this._tree?.resize(command, this._containerRects) ?? false;
+          return changed;
+        });
+        return changed ? `resize ${command.action} ${command.dimension}` : 'resize: no change';
+      }
+      case 'resize_set': {
+        let changed = false;
+        this.commit(() => {
+          const floating = this._floatingFrame(commandFrames);
+          if (!floating) return false;
+          changed = this._queueFloatingFrame(floating.id, {
+            ...floating.info.rect, width: command.width, height: command.height,
+          }, commandFrames);
+          return changed;
+        });
+        if (!changed) ports.log.warn('resize set applies only to a tracked floating window');
+        return changed ? 'resize set' : 'resize set: no floating window';
+      }
+      case 'move_position': {
+        let changed = false;
+        this.commit(() => {
+          const floating = this._floatingFrame(commandFrames);
+          if (!floating || !this._topology) return false;
+          let position: {x: number; y: number};
+          if (command.position === 'center') {
+            const monitor = floating.info.monitor ?? this._topology.primary;
+            const area = this._topology.workAreas.get(floating.info.workspace)?.get(monitor);
+            if (!area) return false;
+            position = {
+              x: area.x + Math.round((area.width - floating.info.rect.width) / 2),
+              y: area.y + Math.round((area.height - floating.info.rect.height) / 2),
+            };
+          } else position = command.position;
+          changed = this._queueFloatingFrame(floating.id, {...floating.info.rect, ...position}, commandFrames);
+          return changed;
+        });
+        if (!changed) ports.log.warn('move position applies only to a tracked floating window');
+        return changed ? 'move position' : 'move position: no floating window';
+      }
+      case 'floating': {
+        let changed = false;
+        let split = false;
+        this.commit(() => {
+          const tree = this._tree;
+          const id = this._selectedWindow();
+          if (!tree || id === null) {
+            split = this._selectionIsSplit();
+            return false;
+          }
+          const info = ports.windows.get(id);
+          const location = tree.location(id);
+          if (!info || !location) return false;
+          const enabled = command.action === 'toggle' ? !location.floating : command.action === 'enable';
+          if (enabled === location.floating) return false;
+          const workspace = tree.workspace(location.workspace);
+          const monitor = location.monitor !== null && workspace.monitors.has(location.monitor)
+            ? location.monitor
+            : info.monitor !== null && workspace.monitors.has(info.monitor)
+              ? info.monitor : this._topology?.primary;
+          if (monitor === undefined) return false;
+          this._manualFloating.set(id, enabled);
+          tree.setFloating(id, enabled, monitor);
+          if (enabled) {
+            this._reconciler.forget(id);
+            this._queueFloatingFrame(id, info.rect, commandFrames);
+          }
+          changed = true;
+          return true;
+        });
+        if (split) ports.log.warn('floating applies only to individual windows');
+        return changed ? `floating ${command.action}` : `floating ${command.action}: no change`;
+      }
+      case 'border':
+        return 'border: not implemented until Phase 3';
       case 'mode':
         return this._enterMode(command.name) ? `mode ${command.name}` : `mode "${command.name}" is not defined`;
       case 'reload':
@@ -635,9 +825,6 @@ export class Engine {
       case 'unknown':
         ports.log.warn(`unknown command: ${command.text}`);
         return `unknown command: ${command.text}`;
-      default:
-        ports.log.info(`${command.type}: not implemented in Phase 1 (tiling arrives in Phase 2)`);
-        return `${command.type}: not implemented yet`;
     }
   }
 }
