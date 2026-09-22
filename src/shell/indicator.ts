@@ -130,6 +130,11 @@ export class Indicator implements IndicatorPort {
 
   destroy(): void {
     this._smoothScroll.reset();
+    // Returning before showActivities() is deliberate. _destroyed means the
+    // shell destroyed our button, which at shutdown means the whole panel -
+    // including the Activities container - is going away too, so restoring it
+    // would write to a disposed actor: the defect this guard exists to stop. On
+    // an ordinary disable() the button is alive, so Activities is restored.
     if (this._destroyed) return;
     this.showActivities();
     this._button.destroy();

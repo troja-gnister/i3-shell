@@ -1,7 +1,7 @@
 # Phase 2 acceptance — live session
 
-**Product revision:** `2fe055f` plus the Phase 2B Task 10 working tree, committed as
-`test: verify live tree integration and document phase two acceptance` on branch `phase-2b`.
+**Product revision:** `91020d2` on branch `phase-2b`
+(`test: verify live tree integration and document phase two acceptance`).
 **Build under test:** release `make install` (no `org.i3shell.Debug` interface or methods).
 **Environment:** GNOME Shell 50.5 / Mutter 18, Wayland, Fedora Silverblue 44.
 **Date prepared:** 2026-09-22. **Result: not yet walked — every A8–A14 box below is the user's to tick.**
@@ -75,12 +75,27 @@ Arrange `A | (B over C)` as in A9 and focus `C`.
 - [ ] `gnome-extensions disable i3-shell@troja` leaves the windows where they are; enabling again
       adopts them and re-tiles without losing any window.
 - [ ] **Laptop alone (`eDP-1`):** tiles fill the built-in display's work area.
-- [ ] **Dock with an external display:** windows already open stay on their displays, both
-      outputs tile independently, and `$mod+1..0` switches workspaces on both.
+
+> **Before the multi-display boxes, read this.** With GNOME's default
+> `org.gnome.mutter workspaces-only-on-primary = true`, Mutter marks every window on a **secondary**
+> output as being on all workspaces, and i3-shell deliberately does not track sticky windows
+> (spec §8.2). Windows on the external display will therefore simply not be tiled. That is the
+> current design, not a Phase 2 failure — the spec leaves this key alone and Phase 4 revisits it.
+> To exercise real multi-output tiling now, set it yourself first and revert it afterwards:
+> ```sh
+> gsettings set org.gnome.mutter workspaces-only-on-primary false   # revert with: reset
+> ```
+> The automated two-output scenario sets exactly this key for the same reason.
+
+- [ ] **Dock with an external display, with `workspaces-only-on-primary=false` set:** windows already
+      open stay on their displays, both outputs tile independently, and `$mod+1..0` switches
+      workspaces on both. *(With the GNOME default left in place, expect windows on the external
+      display to be untracked — that is the Phase 4 item, not a failure of this phase.)*
 - [ ] **Undock (or close the lid):** the external display's windows move to the internal one and
-      nothing is lost.
+      nothing is lost. *(Same caveat: only meaningful with `workspaces-only-on-primary=false`.)*
 - [ ] **Re-dock:** the external display comes back as an empty workspace area; windows do not jump
-      back on their own. (Cross-monitor navigation and full dock/lid fidelity are Phase 4.)
+      back on their own. Cross-monitor focus/movement commands, workspace-per-monitor policy and
+      full dock/lid fidelity are **Phase 4** and are not expected to work here.
 
 ## Known conflicts to check explicitly
 

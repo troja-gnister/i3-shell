@@ -35,10 +35,14 @@ floats a tiled window and `$mod+space` toggles focus between the tiled and float
 stacked containers give every child the parent's rectangle and raise the focused subtree. Borders and
 tab bars arrive in Phase 3.
 
-**Known conflict:** IBus claims `<Super>semicolon` (emoji picker) and `<Super>space` (input source)
-through the same external-grab mechanism i3-shell uses, and i3-shell's override scan covers only the
-five GNOME keybinding schemas of the design spec. On a session with IBus running, those two
-accelerators — `focus right` and `focus mode_toggle` in the reference config — may not reach i3-shell.
+**Known conflict:** IBus registers its own accelerators through the same external-grab mechanism
+i3-shell uses, and i3-shell's override scan covers only the five GNOME keybinding schemas of the
+design spec — not IBus. Two are claimed outright: `<Super>semicolon` (emoji picker) and `<Super>space`
+(input source), which are `focus right` and `focus mode_toggle` in the reference config. Beyond
+those, measurement shows that **with IBus running a varying subset of i3-shell's other accelerators
+can also fail to arrive**, differing between sessions, even though the grab succeeded; with IBus
+absent every probed accelerator worked every time. If a binding silently does nothing, this is the
+first thing to suspect.
 
 The extension reads `~/.config/i3/config`; override the path with:
 

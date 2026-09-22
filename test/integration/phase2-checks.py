@@ -493,14 +493,28 @@ def scenario_a11():
     wait_until(lambda: selection() == {'kind': 'tiled', 'nodeId': parent}, 'A11 mod+a selects the parent')
     ok('A11 focus parent selects the container, not a leaf')
 
-    # A native focus report for the leaf that already holds keyboard focus must
-    # not pull the selection back down to it.
+    # Mutter early-returns on a redundant focus change, so a client cannot
+    # manufacture an isolated duplicate focus report; what is observable natively
+    # is that re-activating the already-focused leaf, and the commits that
+    # follow, leave the parent selection alone. The duplicate-preserves /
+    # different-replaces semantics themselves are pinned by
+    # test/unit/engine/commands.test.ts.
     before = tree()['revision']
     assert fixture('Action', '(ss)', ('A11 c', 'present'))[0]
     relayout()
     wait_until(lambda: tree()['revision'] != before, 'a commit after re-presenting the focused leaf')
-    check('A11 parent selection survives a native focus report', selection(),
+    check('A11 parent selection survives re-activating its focused leaf', selection(),
           {'kind': 'tiled', 'nodeId': parent})
+
+    # The complement, so the check above cannot be mistaken for more than it is:
+    # a real focus change to a different leaf does replace the selection. That is
+    # the documented drift behaviour, not a defect.
+    assert fixture('Action', '(ss)', ('A11 b', 'present'))[0]
+    wait_until(lambda: selects('A11 b'), 'A11 focusing another leaf takes the selection')
+    ok('A11 native focus drift to a different leaf replaces the parent selection')
+    press('<Super>a')
+    wait_until(lambda: selection() == {'kind': 'tiled', 'nodeId': parent},
+               'A11 the parent is selected again')
 
     press('<Super><Shift>j')
     check_tiling(node('splith', [
@@ -514,7 +528,7 @@ def scenario_a11():
         node('splith', [leaf('A11 b'), leaf('A11 c')], [0.5, 0.5]),
         leaf('A11 a'),
     ], [0.5, 0.5]), 'A11 layout toggle re-orients the selected container')
-    type_key('z', 'A11 c', {'A11 a': '', 'A11 b': ''})
+    type_key('z', 'A11 b', {'A11 a': '', 'A11 c': ''})
     ok('A11 native focus stays on the container\'s focused leaf')
 
 
@@ -1067,8 +1081,12 @@ def two_monitor_scenario():
     generations = {title: generation(title) for title in tracked}
     failure = apply_monitors(both_outputs)
     print('restore request:', failure or 'accepted', json.dumps(describe_display()), flush=True)
-    restored = failure is None and settled(lambda: len(monitor_ids()) == 2, 45.0)
-    if not restored:
+    # The limitation is keyed on the BACKEND's own view, never on the extension's.
+    # If Mutter reports two logical monitors and the extension does not publish
+    # them, that is a product regression and must fail, not be excused.
+    backend_restored = failure is None and settled(
+        lambda: len(describe_display()['logical']) == 2, 45.0)
+    if not backend_restored:
         # The assertions below stay in place: they run wherever the backend can
         # bring an output back. Nothing is faked to get past this.
         print('LIMITATION: this headless backend did not restore the removed virtual '
@@ -1081,6 +1099,9 @@ def two_monitor_scenario():
         print('ok phase 2 two-monitor scenario (removal and migration verified; '
               'reconnection unsupported on this backend)', flush=True)
         return
+    wait_until(lambda: len(monitor_ids()) == 2,
+               'the extension publishes both outputs after the backend restored them',
+               timeout=20)
     check('the primary id is unchanged across the reconfiguration', monitor_ids()[0], primary_id)
     check('live membership is stable', {w['title']: w['id'] for w in windows()}, tracked)
     check_tiling(node('splith', [leaf('MM stay'), node('splith', [leaf('MM move')], [1.0])],

@@ -61,7 +61,7 @@ The user's i3 config (`~/.config/i3/config`) is the source of truth for behaviou
 
 ```sh
 npm ci                      # or npm install; .npmrc sets legacy-peer-deps
-npm test                    # vitest on Node — pure core + native adapter doubles (371 tests)
+npm test                    # vitest on Node — pure core + native adapter doubles (378 tests)
 npm run typecheck           # two programs: tsconfig.json (src, GNOME types) + tsconfig.test.json (tests + Layer 0, Node types)
 npm run check:layer0        # fails if Layer 0 imports gi:// / resource:// / src/shell (also part of `npm run build`)
 npm run build               # release bundle → dist/  (esbuild, single ESM file; schemas compiled)

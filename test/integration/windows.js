@@ -25,16 +25,12 @@ const XML = `<node><interface name="org.i3shell.TestWindows">
     <arg type="b" direction="out"/>
   </method>
   <method name="Text"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
-  <method name="Keys"><arg type="s" direction="out"/></method>
-  <method name="ClearKeys"/>
   <method name="Size"><arg type="s" direction="in"/><arg type="i" direction="out"/><arg type="i" direction="out"/></method>
   <method name="Reset"/>
 </interface></node>`;
 
 const app = new Gtk.Application({application_id: 'org.i3shell.TestWindows'});
 const windows = new Map();
-// Key events seen by the client itself: a grabbed accelerator never reaches it.
-const seen = [];
 const actions = new Set(['present', 'maximize', 'unmaximize', 'minimize', 'unminimize', 'fullscreen', 'unfullscreen']);
 const service = {
     Create(name, kind, parent) {
@@ -47,15 +43,6 @@ const service = {
         });
         const entry = new Gtk.Entry();
         window.set_child(entry);
-        const keys = new Gtk.EventControllerKey();
-        // CAPTURE runs before the focused Entry consumes the key, so the log is
-        // complete; returning false leaves normal typing untouched.
-        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE);
-        keys.connect('key-pressed', (_controller, keyval, _keycode, state) => {
-            seen.push(`${name}:${keyval}:${state}`);
-            return false;
-        });
-        window.add_controller(keys);
         if (parent !== '') window.set_transient_for(windows.get(parent).window);
         if (kind === 'modal') window.set_modal(true);
         windows.set(name, {window, entry});
@@ -83,8 +70,6 @@ const service = {
         return true;
     },
     Text(name) { return windows.get(name)?.entry.get_text() ?? ''; },
-    Keys() { return seen.join(' '); },
-    ClearKeys() { seen.length = 0; },
     Size(name) {
         const window = windows.get(name)?.window;
         return window ? [window.get_width(), window.get_height()] : [0, 0];
@@ -101,9 +86,7 @@ for (const [method, body] of Object.entries(service)) {
         try { return body(...args); }
         catch (error) {
             logError(error, `fixture ${method} failed`);
-            return method === 'Reset' || method === 'ClearKeys' ? undefined
-                : method === 'Text' || method === 'Keys' ? ''
-                    : method === 'Size' ? [0, 0] : false;
+            return method === 'Reset' ? undefined : method === 'Text' ? '' : method === 'Size' ? [0, 0] : false;
         }
     };
 }
