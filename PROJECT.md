@@ -9,7 +9,9 @@ with directional navigation. Three things are the non-negotiable core: **workspa
 **shortcuts**, **dynamic tiling**. Phases 1 and 2 deliver that core; Phases 3 and 4 add appearance and
 fidelity.
 
-**State (2026-09-22):** Phase 1 (Foundation) is implemented, reviewed and merged into `main`, with the two recovery fixes in `19eac12` and `7bb138b`. The user reported the full live A1–A7 walk green on 2026-09-21. Phase 2A is implemented, reviewed and merged into `main` (fast-forward to `849e181` on 2026-09-22). All 234 tests passed on the merged result, and the completed `phase-2` branch was deleted. The user approved the Phase 2B window/geometry integration plan; implementation is in progress on `phase-2b`, and live A8–A14 acceptance remains unclaimed. Phases 3–4 are designed but not yet planned in detail or built. GitHub `origin` is configured; `main` was pushed at `568855c` before the Phase 2B planning documentation.
+**State (2026-09-22): paused at the user's request.** Phase 1 and Phase 2A are merged into `main`; A1–A7 passed by user report on 2026-09-21. On `phase-2b`, Tasks 1–9 of the approved integration plan are implemented and independently reviewed. Native tiling and resizing are connected and exercised by the retained Phase 1 checks. Task 10 was dispatched but stopped before any edits or commands beyond reading its brief/skill. Full A8–A14 automation, the live checklist, whole-branch review and live acceptance remain pending. **Read the [pause handoff](docs/handoff-2026-09-22.md) before resuming; do not restart completed tasks.**
+
+Latest verification: **371/371 tests in 36 files**, both TypeScript programs, Layer 0, private GTK smoke and Phase 1 native acceptance passed. Release `make install` completed; Debug XML/methods are absent and the install symlink points to this checkout's `dist/`. Product code is unchanged since `bdf0cb8`; `c8b64cd` fixes a harness log predicate and `7fc67d3` records verification. `main` remains `b6fe8cc`, one documentation commit ahead of `origin/main` at `568855c`. Phase 2B has not been merged or pushed. Phases 3–4 remain unbuilt.
 
 ---
 
@@ -20,13 +22,14 @@ fidelity.
 | `docs/superpowers/specs/2026-09-20-i3-shell-design.md` | **The design spec — the binding authority** (19 sections: acceptance criteria A1–A14, architecture, config grammar, command language, the tree algorithms, window lifecycle, workspaces, keys, indicator, decorations, GNOME overrides, D-Bus, error handling, testing, phases, toolchain, decisions log). |
 | `docs/superpowers/plans/2026-09-20-phase-1-foundation.md` | The Phase 1 implementation plan (14 TDD tasks with full code). Several of its code blocks were wrong and were fixed during execution — where plan and code differ, the code (and the carry-forward doc) wins. |
 | `docs/superpowers/plans/2026-09-21-phase-1-carry-forward.md` | Execution record: every ruling made while building Phase 1, items deferred to Phases 2/4, security note. **Read before planning Phase 2.** |
-| `docs/superpowers/plans/2026-09-21-phase-2a-tree.md` | Phase 2A pure-tree plan, preparation audit and execution record. Implementation, delivery checks and reviews are complete; merged into `main` on 2026-09-22. Window lifecycle and geometry integration follow in Phase 2B. |
-| `docs/superpowers/plans/2026-09-22-phase-2b-integration.md` | Phase 2B implementation plan: settings reconciliation, topology, window tracking, bounded geometry corrections, engine lifecycle/commands, D-Bus/session handling, GTK integration and A8–A14. Approved by the user; implementation in progress on `phase-2b`. |
+| `docs/superpowers/plans/2026-09-21-phase-2a-tree.md` | Completed/merged Phase 2A plan, audit and execution record. Its tree/property tests are retained in Phase 2B's integration. |
+| `docs/superpowers/plans/2026-09-22-phase-2b-integration.md` | Approved Phase 2B plan and execution record. Tasks 1–9 complete/reviewed; paused before Task 10 implementation. |
+| `docs/handoff-2026-09-22.md` | Exact pause checkpoint, verified evidence, native environment findings, remaining Task 10 work, review obligations and all six rulings. |
 | `docs/acceptance/phase-1.md` | The live-session checklist for A1–A7, passed by user report on 2026-09-21. |
 | `README.md` | User-facing: install, control via D-Bus, dev commands. |
 | `src/` | The extension (TypeScript, see §4). |
-| `test/unit/` | vitest tests on Node (pure core only) incl. `fixtures/reference.i3config` — a byte-identical copy of the user's real i3 config, used as a golden test. |
-| `test/integration/` | Nested-shell harness (`nested.sh`, `inside.sh`) and the Phase 1 scenarios (`phase1-checks.sh`). |
+| `test/unit/` | Vitest on Node: pure core and native adapter doubles, including `fixtures/reference.i3config`, the reference i3 config used by golden/native tests. |
+| `test/integration/` | Private nested harness, GTK4 fixture (`windows.js`), typed D-Bus client/smoke (`client.py`), and real-window Phase 1 checks. Full Phase 2 driver/wrapper remain Task 10. |
 | `schemas/`, `metadata.json`, `stylesheet.css`, `esbuild.mjs`, `Makefile`, `tsconfig*.json` | Build and packaging. |
 
 The user's i3 config (`~/.config/i3/config`) is the source of truth for behaviour and stays outside the repo.
@@ -35,13 +38,16 @@ The user's i3 config (`~/.config/i3/config`) is the source of truth for behaviou
 
 - Fedora Silverblue 44, GNOME Shell 50.5, Mutter 18, **Wayland only** (X11 session gone since GNOME 49). The extension installs as a symlink in `~/.local/share/gnome-shell/extensions/i3-shell@troja` → `dist/`; nothing is layered with rpm-ostree.
 - Wayland cannot reload extension code in place: after `make install`, **log out and back in**. `gnome-extensions disable/enable` re-runs `disable()/enable()` on the old module. The fast loop is the nested shell (`bash test/integration/nested.sh -- <cmd>`; `--visible` for a window, `--keep` to retain the sandbox log).
-- `gnome-shell --nested` no longer exists; nested is the default mode. The harness uses `gnome-shell --headless --wayland --virtual-monitor 1920x1080` inside `dbus-run-session` with `XDG_*` dirs in a temp sandbox and `GSETTINGS_BACKEND=keyfile` (keyfile at `$XDG_CONFIG_HOME/glib-2.0/settings/keyfile`), so it never touches the live session.
-- gnome-shell enables extensions **before** `layoutManager`'s `startup-complete` sets `Main.actionMode`; keybindings are filtered while the mode is `NONE`. A window-less session rests in `OVERVIEW` (2). Grabs are allowed for `NORMAL | OVERVIEW`. The first-run Welcome dialog is a modal — the sandbox suppresses it via `welcome-dialog-last-shown-version`.
+- `gnome-shell --nested` no longer exists; nested is the default mode. The harness launches headless Wayland Shell with `--no-x11 --wayland-display=i3-shell-test --virtual-monitor 1920x1080` inside `dbus-run-session`, with private `XDG_*` directories and `GSETTINGS_BACKEND=keyfile` (keyfile at `$XDG_CONFIG_HOME/glib-2.0/settings/keyfile`). It uses separate settings, bus and display from the live session.
+- The harness now uses a mode-0700 private `XDG_RUNTIME_DIR`, socket `i3-shell-test`, and `--no-x11`. Headless Shell inherits no live display; `--visible` passes the absolute parent Wayland socket only to the compositor. Nested Xwayland startup stalled even the pre-integration baseline; disabling X11 resolved that host issue. Automated coverage is native Wayland only. The private `update-check-50` marker avoids the first-major-version network update check, but was not the cause of that stall.
+- gnome-shell enables extensions **before** `layoutManager`'s `startup-complete` sets `Main.actionMode`; keybindings are filtered while the mode is `NONE`. A window-less session rests in `OVERVIEW` (2). Grabs are allowed for `NORMAL | OVERVIEW`. The first-run Welcome dialog is suppressed in the sandbox. Synthetic GTK fixtures wait for readiness, press Escape, then poll `NORMAL` (1) before creation: the native smoke established that their first frame can be delayed in the initial overview.
 - Every grabbed accelerator needs `Main.wm.allowKeybinding(Meta.external_binding_name_for_action(action), Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW)` or the shell silently drops it (see the shell's own `shellDBus.js`).
 - At enable, ~25 of the 65 default-mode grabs collide with mutter's own bindings until the cleared GSettings propagate; a retry backoff (500 ms, 1.5 s, 4 s) picks them up. Keys held by `gsd-media-keys` (`XF86Audio*`, brightness) take longest.
 - `@girs/gnome-shell@50.0.4` provides the GNOME 50 types but pins `@girs/*@^4.x` — do not add those packages separately (5.x collides). `@girs` mistypes `Main.actionMode` as the literal `NONE`; the one sanctioned cast is `Main.actionMode as Shell.ActionMode`.
 - `npm install` needs `legacy-peer-deps=true` (`.npmrc` has it) — npm's arborist crashes on `@girs`'s peer graph ("Cannot read properties of null (reading 'edgesOut')").
 - Mutter 18: `Meta.Window.maximize()` takes no flags; state comes from `maximized-horizontally`/`-vertically`. No `set_decorated` on Wayland (title bars cannot be stripped). `Meta.WindowActor` has `first-frame`; `Meta.Display` has `accelerator-activated` (both verified at runtime).
+- Mutter emits `unmanaging` before actor removal, focus changes and workspace clearing, then `unmanaged`. The adapter excludes retiring windows immediately and uses a filtered last-safe MRU list during overlapping teardown; removal publishes at `unmanaged`. First-frame cleanup becomes inert on actor destruction. Do not query a retiring window's workspace or disconnect its disposed actor.
+- The private Shell Extensions API is `org.gnome.Shell.Extensions` on `/org/gnome/Shell`, bus name `org.gnome.Shell`. `/org/gnome/Shell/Extensions` is not its object path. Sandbox `ps` can hide escalated compositor PIDs; an empty listing does not prove process death.
 - The shell's JS lives in `/usr/lib64/gnome-shell/libshell-18.so`'s GResource; extract with Python `ctypes.CDLL` + `Gio.resources_lookup_data('/org/gnome/shell/ui/<file>.js')` when you need to read `main.js`, `windowManager.js`, `panel.js`, `messageTray.js`, `sessionMode.js`, etc.
 - 32 GNOME default bindings collide with the reference config (e.g. `<Super>1..9` app switching, `<Super>h` minimize, `<Super>l` lock, `<Super>space` input source, `<Super>Left/Right` snap, `<Super>Up/Down` maximize, `<Super>a/s/v`, the XF86 keys). They are cleared dynamically and restored on disable (spec §13).
 
@@ -49,44 +55,49 @@ The user's i3 config (`~/.config/i3/config`) is the source of truth for behaviou
 
 ```sh
 npm ci                      # or npm install; .npmrc sets legacy-peer-deps
-npm test                    # vitest on Node — pure core + fake Gio adapter tests (234 tests)
+npm test                    # vitest on Node — pure core + native adapter doubles (371 tests)
 npm run typecheck           # two programs: tsconfig.json (src, GNOME types) + tsconfig.test.json (tests + Layer 0, Node types)
 npm run check:layer0        # fails if Layer 0 imports gi:// / resource:// / src/shell (also part of `npm run build`)
 npm run build               # release bundle → dist/  (esbuild, single ESM file; schemas compiled)
-npm run build:test          # same with __I3SHELL_TEST__=true → exports org.i3shell.Debug (PressKey, SimulateSessionMode)
-npm run test:integration    # run build:test first; nested phase1-checks.sh (A1, A3, A4, A5, A7), ~1 min
+npm run build:test          # TEST bundle: Debug PressKey, SimulateSessionMode, Relayout
+bash test/integration/nested.sh --keep -- python3 test/integration/client.py smoke
+npm run test:integration    # run build:test first; retained Phase 1 A1–A5/A7 checks
 make install                # release build + symlink; then log out/in and `gnome-extensions enable i3-shell@troja`
 journalctl --user -f -o cat /usr/bin/gnome-shell | grep i3-shell     # every line is prefixed [i3-shell]
 gdbus call --session --dest org.i3shell.Control --object-path /org/i3shell/Control \
   --method org.i3shell.Control.Command "workspace number 3"          # the i3-msg equivalent
 ```
-Other D-Bus methods: `GetState` (mode, activeWorkspace, workspaceCount, grabbed, configSource/Path, errors, warnings, actionMode, ready), `GetConfigStatus`.
+Other D-Bus methods: `GetState` (mode, workspace, grabs, config status, pills, actionMode and readiness), `GetConfigStatus`, `GetTree`, `GetWindows`; `TreeChanged` signals a committed update. Snapshots contain plain ids and values, never native objects.
 
-Always finish a session with a **release** `make install` if you ran the integration suite — the current harness uses the existing test bundle in `dist/` and does not rebuild release afterward.
+Always finish a session with a **release** `make install` if you ran integration, even on failure. The current harness uses the existing test bundle and does not restore release; Task 10 adds that wrapper. Check exact Debug XML `name="org.i3shell.Debug"` and the methods `PressKey`, `SimulateSessionMode`, `Relayout` are absent. A bare `org.i3shell.Debug` search also matches an inert release log/comment.
 
 ## 4. Architecture (as built)
 
 Three layers; the rule that makes the project testable: **Layer 0 never imports `gi://`, `resource://` or `src/shell/`** (`scripts/check-layer0.mjs` enforces it).
 
 ```
-Layer 2  src/extension.ts     enable()/disable() wiring (rolls back on a failed enable)
-         src/engine.ts        Engine: current config + mode, command dispatch, reload, lock/unlock —
-                              talks to GNOME only through EnginePorts (unit-tested with fake ports)
+Layer 2  src/extension.ts     enable()/disable() wiring, guarded callbacks and teardown
 Layer 1  src/shell/keys.ts            KeyBinder: grab_accelerator/ungrab, retry backoff, accelerator-activated dispatch
          src/shell/settings.ts        SettingsOverrides: enumerate 5 keybinding schemas, clear colliding accels,
                                       static workspaces + names, mouse-button-modifier; crash-safe JSON snapshot in
-                                      the extension's `overridden-settings` key; restoreAll() on disable/reload
+                                      the extension's `overridden-settings` key; reconcile on reload, restore on disable
          src/shell/workspaces.ts      count/active/activate/isOccupied + change events (watches existing windows too)
-         src/shell/windows.ts         Phase 1 stub: kill/fullscreen/move the focused window (Phase 2 replaces it)
+         src/shell/windows.ts         Native bridge; WindowId operations and first-frame/lifetime signals
+         src/shell/windowTracker.ts   GI-free pending/ready ids, liveness guards, snapshots and event deduplication
+         src/shell/nativeWindowLifecycle.ts, windowEnumeration.ts — safe retirement and per-workspace MRU
+         src/shell/geometry*.ts       Atomic work areas/stable monitor ids; sole native move_resize_frame writer
          src/shell/indicator.ts       PanelMenu.Button with St.Button pills + mode label; hides the Activities button
          src/shell/session.ts         lock/unlock edge detection on Main.sessionMode 'updated' (+ simulate() for tests)
          src/shell/configLoader.ts    file → cached last-good ($XDG_CACHE_HOME/i3-shell/last-good.config) → built-in fallback
-         src/shell/control.ts         D-Bus org.i3shell.Control (+ Debug in test builds only, tree-shaken from release)
+         src/shell/control.ts         Control/GetTree/GetWindows/TreeChanged; guarded name loss; test-only Debug
+         src/shell/{controlObject,sessionState}.ts — GI-free D-Bus/session bridges
          src/shell/{log,notify,exec}.ts, src/shell/util/signals.ts (SignalTracker + guard())
-Layer 0  src/config/{lexer,variables,parser,resolve,accel,overridePlan,defaultConfig,index,model}.ts
+Layer 0  src/engine.ts        Sole runtime Tree owner; commit applies geometry, raises, publishes snapshots/pills
+         src/runtime/{model,classify,reconcile,snapshot}.ts — contracts, classification, bounded corrections
+         src/config/{lexer,variables,parser,resolve,accel,overridePlan,defaultConfig,index,model}.ts
          src/commands/{model,parse}.ts
-         src/tree/{node,tree,layout,focus,operations,resize}.ts — tested pure tree; not connected to live windows yet
-         src/util/{text,bindingDiff}.ts
+         src/tree/{node,tree,layout,focus,operations,resize}.ts — pure tree connected through Engine ports
+         src/util/{text,bindingDiff,smoothScroll}.ts
 ```
 
 Config pipeline: `logicalLines` (whole-line `#` comments, `\` continuation) → `substituteVariables` (all `set` lines collected first, whole-file substitution, longest name first — i3 semantics) → `parse` (directives; three tiers: unknown → error/reject, valid-but-unimplemented → warning/skip, cosmetic like `font`/`bar {}` → silent) → `resolve` (bindings with Mutter accelerators, modes, colours, rules, workspace names/count) → `Config`. Errors reject the file; the previous config keeps running.
@@ -99,26 +110,21 @@ Delivered in 31 commits (`e4628e2..463ca10`, now on `main`; the `phase-1` branch
 
 Verification: unit 52/52; typecheck both programs; `npm run test:integration` green (workspace switching by real key press, `exec`, resize-mode entry/exit with bare-key grabs, reload rejection and acceptance with a newly grabbed binding, lock/unlock). A whole-branch review ended "with fixes"; the fix wave landed and re-reviewed clean.
 
-**Live acceptance passed:** the user reported all A1–A7 checks green on 2026-09-21, with no Phase 1 findings. `docs/acceptance/phase-1.md` records that report and its provenance. Dynamic tiling and tiled-window resizing remain Phase 2 work.
+**Live acceptance passed:** the user reported all A1–A7 checks green on 2026-09-21, with no Phase 1 findings. `docs/acceptance/phase-1.md` records that report and its provenance. Tiling and tiled resizing were outside that Phase 1 walk; it does not certify Phase 2.
 
-The follow-up fixes restore last-good-cache recovery for a missing config at startup and preserve saved GNOME settings when restoration fails. Fake-`Gio.Settings` apply/restore/crash-recovery coverage and ConfigLoader regression tests are included in the 64-test Phase 1 baseline. Remaining deferred items are listed in the carry-forward doc. The live Phase 1 acceptance checkpoint is satisfied. Phase 2A now has 234 passing unit tests on `main`, including the preserved Phase 1 regressions; task reviews, whole-branch review and the merge are complete. The nested integration suite was not rerun for the pure-tree phase.
+The follow-up fixes restore last-good-cache recovery for a missing config at startup and preserve saved GNOME settings when restoration fails. The 64-test Phase 1 regression baseline is preserved in the current 371-test suite. Phase 2A delivery passed 234 tests and its reviews/merge completed; it did not rerun native integration. Phase 2B Task 9 subsequently passed the updated Phase 1 native checks with real GTK tiles. Remaining carry-forward items and their owners are recorded in the carry-forward doc.
 
 ## 6. What remains — Phases 2, 3, 4
 
 Each phase gets its own implementation plan (`docs/superpowers/plans/`) written from the spec, executed task by task with review. The spec sections below are complete designs, not sketches.
 
-### Phase 2 — the tree (dynamic tiling) — spec §7, §8, §16.1–16.2, acceptance A8–A14
-The hard one; it is what makes this "i3".
+### Phase 2 — remaining integration acceptance — spec §7, §8, §16, A8–A14
 
-Phase 2A now implements the pure `src/tree/` subsystem on `main`: ownership and normalization, exact layout and stacking order, focus traversal, split/layout/move operations, transactional resize, floating membership and workspace transfer. The bounded property suite runs 300 sequences for each fixed seed `20260921` and `8675309`, with up to 100 operations over ids 1–12, two workspaces and odd/tiny geometry. Delivery verification passed 234/234 tests, both TypeScript programs, the Layer 0 boundary check, tree lint and a release build. Task reviews and the whole-branch review passed with no outstanding findings. The merged result passed all 234 tests; live tiling/resizing remains Phase 2B work.
+Phase 2A's pure tree is merged and retained unchanged except the reviewed topology extension. Its bounded property suite runs 300 sequences for each fixed seed `20260921` and `8675309`, up to 100 operations, including odd/tiny geometry. Phase 2B Tasks 1–9 add native window identity/lifetime, atomic topology, one-correction geometry generations, Engine ownership/commands, D-Bus snapshots, lock handling, config/input fixes and private GTK fixtures. Commands target engine-selected ids/containers; `commit()` alone changes geometry. Tabbed/stacked children share rectangles and raise the selected subtree; bars and borders wait for Phase 3.
 
-- `src/tree/{node,tree,layout,focus,operations,resize}.ts` (Layer 0): `WorkspaceCon → MonitorCon(root) → SplitCon|LeafCon`; `percents`, `focusedChild`, `lastSplitLayout`; `normalize()` with i3's `tree_flatten` rule (a lone leaf in a split is legal — pending split); `Tree.check()` invariants.
-- Algorithms are specified step by step in §7.3–§7.11: insertion after the focused leaf; `split` (no pointless nesting); `layout` (workspace roots wrap children for tabbed/stacked); `focus <dir>` = i3's `_tree_next` with wrapping at the highest matching level; `move <dir>` = i3's `tree_move` with worked examples; resize in ppt with 5 %/95 % clamps; fullscreen native; floating layer + `focus mode_toggle`; layout as exact integer rects (tabbed/stacked = same rect, active raised).
-- `src/shell/windows.ts` becomes the full adapter (§8): opaque window ids only (`Map<id, Meta.Window>` + `WeakMap`), insert on the actor's `first-frame`, expected-rect tracking to stop resize feedback loops, focus-follows-GNOME updating the `focusedChild` chain, minimize/maximize/fullscreen/workspace-changed handling (engine-initiated moves carry an "expected workspace"), monitors-changed relayout; `src/shell/geometry.ts` applies rects with `move_resize_frame`.
-- `engine.commit()` becomes the single mutation pipeline: normalize → layout → diff rects → apply → decorations/indicator update → `TreeChanged` signal. Adoption of existing windows in MRU order on enable/restart.
-- D-Bus: `GetTree()`, `GetWindows()`; `restart` rebuilds the tree.
-- Tests: Phase 2A has deterministic scenarios, exact-rect tests, the §7.6–7.7 worked examples and bounded `fast-check` properties for all pure facades. Phase 2B must add integration scenarios A8–A14 using a small GJS/GTK4 test-window program (Gtk 4 typelib is installed). Real i3 is still installed (`i3` layered package) and can serve as an oracle under Xvfb for disputed semantics.
-- Phase 2A added the pinned `eslint` and `fast-check` development tooling.
+Exactly four events force a new geometry generation: fullscreen exit, unminimize, monitors-changed and completion of engine-initiated unmaximize. Workspace/work-area/unlock use ordinary reconciliation. Reload preserves the tree; accepted restart rebuilds from live windows in per-workspace MRU order. Settings reconcile successive configurations without a temporary restore.
+
+**Task 10 remains unimplemented.** Add independent-rectangle A8–A14 scenarios; real focus/move/parent/layout commands; floating/transient/fixed windows; fullscreen/minimize/maximize/refusing-client cases; settings restore/re-enable and Control-name-conflict scenarios; actual two-output reconfiguration with stable ids. Add initially-disabled harness support and a failure-safe release wrapper, update final delivery evidence, create the unchecked Phase 2 live checklist, then perform the task review and whole-branch review. Physical monitor acceptance and full dock/lid behavior remain separate. The [handoff](docs/handoff-2026-09-22.md) contains the exact resume protocol and native pitfalls.
 
 ### Phase 3 — layouts & appearance — spec §12
 `src/shell/decorations.ts`: per-leaf `St.Widget` borders in `global.window_group` sized to the leaf rect with `client.*` colours (focused / focused_inactive / unfocused / urgent), a single frame around a focused SplitCon, `default_border pixel N` and the `border` command (`normal` treated as `pixel`); tab/stack bars as `St.BoxLayout` of titles above tabbed/stacked containers (children get rect minus bar; click focuses). All actors created/updated/destroyed only from `commit()`.
@@ -133,11 +139,12 @@ Target arrangements: laptop alone (`eDP-1`) and docked with external display(s),
 
 ## 7. How to continue (process that worked)
 
-1. Phase 1 live acceptance is recorded as passed; preserve its 64-test regression baseline, including the failed-restore and config-cache regressions, inside the current 234-test suite.
+1. Implementation is paused at the user's request. Resume only when the user asks; preserve the plan-scoped scratch ledger while paused.
 2. Phase 2A is reviewed and merged into `main`; the completed `phase-2` branch is deleted. `origin` is `git@github.com:troja-gnister/i3-shell.git`, and `main` tracks `origin/main`. The user authorized the initial push at `568855c`.
-3. Continue the approved [Phase 2B plan](docs/superpowers/plans/2026-09-22-phase-2b-integration.md) on `phase-2b` in this checkout using the preserved workflow. Resume from its plan-scoped SDD ledger; never restart completed tasks. Phase 2 is complete only after live tiling/resizing and A8–A14 acceptance are delivered.
+3. On resumption, read the [handoff](docs/handoff-2026-09-22.md), then resume **Task 10** of the approved [Phase 2B plan](docs/superpowers/plans/2026-09-22-phase-2b-integration.md) on `phase-2b` in this checkout. Tasks 1–9 are complete; do not repeat them. Keep the Phase 1 recovery and Phase 2A property regressions. Phase 2 remains incomplete until its remaining acceptance and reviews are delivered.
 4. Continue with `superpowers:subagent-driven-development`: one implementer per task, a reviewer per task, and a whole-branch review at the end. Keep the ledger and record every ruling.
 5. Verify claims before trusting them: type-check GNOME API usage against `@girs` in a scratch project, extract the shell's JS to check behaviour, and run the nested shell for anything runtime-dependent.
+6. Controller owns all native builds/runs/install and git commits; workers freeze code during those runs. Do not change the harness under a running invocation. Final whole-branch review uses `b6fe8cc..HEAD`, triages both deferred Minors, then at most one complete fix wave and scoped re-review. Keep the phase branch until the user requests integration.
 
 ## 8. People and conventions
 

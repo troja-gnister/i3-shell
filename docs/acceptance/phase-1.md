@@ -4,6 +4,8 @@ Date: 2026-09-21. Result: **A1–A7 passed, reported by the user.**
 
 Repository revision at the report: `02c26c5`. The exact loaded extension revision and fresh `gnome-shell --version` output were not separately captured. Checkmarks below record the user's live verification, not an automated rerun.
 
+**Later automated evidence (2026-09-22):** Phase 2B Task 9 passed the retained A1–A5/A7 checks in a private nested session, including real tile resizing and Entry-key swallowing. That run does not replace this historical user report, prove native A6 re-enable/restoration, or tick A8–A14. Smooth scrolling is now implemented by Task 8; the Phase 1 caveat below describes the original walk. Current pause/resume state is in the [handoff](../handoff-2026-09-22.md).
+
 ## A1 — workspaces
 - [x] `Super+1` … `Super+0` switch to workspaces 1–10 (the pill highlight follows)
 - [x] `Super+Shift+3` moves the focused window to workspace 3 and the current workspace stays active

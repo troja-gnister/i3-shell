@@ -1,5 +1,7 @@
 # i3-shell Phase 1 (Foundation) Implementation Plan
 
+**Historical completed plan.** Phase 1 is merged and A1–A7 passed by user report. Original code/examples below are retained as execution history; subsequent rulings and fixes are in the [carry-forward record](2026-09-21-phase-1-carry-forward.md). Current work is Phase 2B, paused after reviewed Tasks 1–9; use the [2026-09-22 handoff](../../handoff-2026-09-22.md) rather than restarting this plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A GNOME 50 extension that reads `~/.config/i3/config` and makes its workspace bindings, modes and `exec`/`kill`/`fullscreen` bindings work in GNOME, with static named workspaces and an i3-style workspace bar — acceptance criteria A1–A7 of the spec.

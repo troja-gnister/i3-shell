@@ -1,5 +1,7 @@
 # Phase 2B — Live window integration Implementation Plan
 
+**Paused by user request, 2026-09-22.** Tasks 1–9 are implemented and independently reviewed on `phase-2b`; Task 10 was stopped after reading its brief, with no edits or active commands. Resume only when asked. See the [handoff](../../handoff-2026-09-22.md) for the exact checkpoint, verified release installation and remaining work.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Connect the completed tree to GNOME windows so opening, focusing, moving, resizing, floating and closing windows behave as specified by A8–A14.
@@ -10,7 +12,7 @@
 
 **Spec:** [Approved design](../specs/2026-09-20-i3-shell-design.md), especially §§5, 6.6–6.7, 7, 8, 9, 13–16 and A8–A14. Read [PROJECT.md](../../../PROJECT.md), the [Phase 1 carry-forward](2026-09-21-phase-1-carry-forward.md), and the completed [Phase 2A record](2026-09-21-phase-2a-tree.md) first.
 
-**Preparation baseline:** `main` at `568855c`; Phase 2A merged and its branch deleted. The merged result passed 234 tests in 22 files. A1–A7 passed by user report; live tiling and tiled resizing have not been delivered. This document is a plan, not an execution or acceptance claim.
+**Historical preparation baseline:** `main` at `568855c`; Phase 2A merged and its branch deleted, with 234 tests in 22 files. A1–A7 had passed by user report. Current implementation/verification is recorded below; the completed tasks and native checks do not certify the pending A8–A14 live walk.
 
 During preparation the user configured `origin` as `git@github.com:troja-gnister/i3-shell.git` and pushed `main` at `568855c`, with `origin/main` tracking. This plan's later documentation changes have not been pushed.
 
@@ -132,6 +134,7 @@ Task 5 extends `EnginePorts` atomically with `windows: WindowsPort`, `geometry: 
 ### Native facts verified during preparation
 
 - `Meta.WindowActor::first-frame` is emitted even for an initially hidden/other-workspace window. The installed GIR explicitly says the actor exists at `display::window-created` and has not yet drawn. Existing mapped windows must be adopted directly; attaching a new first-frame handler to them is ineffective.
+- Task 9 native qualification: the synthetic GTK fixture's first frame was delayed in the initial overview. Tests wait for readiness, press Escape and poll NORMAL before creating normal fixtures. Production still waits for the actual first-frame signal.
 - `Meta.Window.unmaximize()` takes **no arguments**. Read the two maximized properties; coalesce their notifications.
 - `Meta.MonitorManager.get_monitors()`, `Monitor.get_connector()` and `get_monitor_for_connector()` allow connector groups to be associated with current logical-monitor indices. Keep internal numeric ids stable across index changes.
 - `Meta.Workspace.get_work_area_for_monitor(index)` provides each workspace's work area. Do not use only the active workspace's work area for every root.
@@ -749,6 +752,8 @@ Correct the retry comment to `500 ms, 1.5 s, 4 s`. Keep real exec, valid/invalid
 
 ## Task 10: Exercise A8–A14 and record delivery evidence
 
+**Pause checkpoint:** No Task 10 code or native checks have run. The user-requested pause documentation updates README/PROJECT and carry-forward status, but final evidence, the Phase 2 checklist, remaining scenarios and reviews below are still required.
+
 **Files:** Create `test/integration/phase2-checks.py`, `test/integration/run.sh` and `docs/acceptance/phase-2.md`; modify `test/integration/nested.sh`, `test/integration/inside.sh`, `package.json`, `README.md`, `PROJECT.md` and the carry-forward/plan execution records.
 
 **Interfaces:**
@@ -896,7 +901,7 @@ Self-review corrected the void-returning Tree.check assertions, stable-monitor l
 
 ## Execution record
 
-Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–9 are complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
+Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–9 are complete and independently reviewed. The user paused work before Task 10 implementation on 2026-09-22. The worker read its brief/skill only; no changes, native session or pending command remain. Release installation is restored. Preserve the scratch ledger/reports and resume Task 10 only after the user asks.
 
 Ruling: Run the complex nested-layout/pending-split reload and selected-parent acknowledgement regressions in Task 6, once tree command dispatch exists. Task 5 still proves flat-tree retention and native lifecycle transitions. This avoids test-only mutation hooks or prematurely implementing the next task. Cost if wrong: complex reload defects may be discovered one task later; Task 6 must close the proof before completion.
 
@@ -911,6 +916,9 @@ Ruling: Run the complex nested-layout/pending-split reload and selected-parent a
 | 7 — D-Bus and session lifecycle | GPT-5.6 Sol / GPT-5.6 Sol | `e477139` | 43 focused tests; 358 full-suite tests; both TypeScript programs; Layer 0; test/release builds and Debug exclusions; staged diff check | Spec compliant, quality approved; no findings. Native name-loss ownership proof assigned to Task 10. |
 | 8 — config/input follow-ups | GPT-5.6 Sol / GPT-5.6 Sol | `0772df1` | 23 focused tests; 367 full-suite tests; both TypeScript programs; staged diff check | Spec compliant, quality approved; no findings. Native exclusive grabs and re-enable proof assigned to Tasks 9–10. |
 | 9 — private GTK fixtures/native lifetime | GPT-6 Astra / GPT-6 Astra; fix re-review GPT-5.6 Sol | `bdf0cb8`, `c8b64cd` | 10 focused tests; 371 full-suite tests; both TypeScript programs/Layer 0; native smoke and Phase 1 acceptance; 14 cleanup-gate cases; release install, Debug exclusions and symlink | Fixture critical-log gate omission fixed and re-reviewed clean. Native teardown regressions fixed. Ancillary host warnings remain disclosed; visible mode and Xwayland clients are unverified. Monitor scenarios follow in Task 10. |
+| 10 — A8–A14/delivery | Dispatched GPT-6 Astra, stopped before edits | None | No Task 10 execution or verification | Paused by user request; implement on authorized resumption. |
+
+Final review must triage two deferred Minors: the normalized ignored-type table does not independently test every native enum mapping (`test/unit/runtime/classify.test.ts:30`), and successful private sessions retain disclosed ancillary a11y/GJS NetworkManager/GDM/portal warnings. Neither is an open task-review blocker. Full A8–A14 integration, native name-conflict/settings restoration proof, final delivery gates and whole-branch review remain unperformed.
 
 Ruling: Use Meta.TabList.NORMAL_ALL_MRU for per-workspace adoption instead of the NORMAL example in spec §8.5. The installed Mutter 18 API explicitly guarantees pure MRU order for this variant, including minimized windows; classification still decides which windows are managed. — Preserves the binding MRU intent rather than relying on unordered Workspace.list_windows or NORMAL grouping behavior. — Cost if wrong: adoption may include additional eligible windows or choose a different initial order; native integration must verify adoption and minimized-window behavior.
 

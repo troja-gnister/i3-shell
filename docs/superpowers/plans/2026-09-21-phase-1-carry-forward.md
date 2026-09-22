@@ -4,7 +4,7 @@ Phase 1 (Foundation) was executed from `docs/superpowers/plans/2026-09-20-phase-
 (29 commits on top of `e4628e2`). Every task passed a spec + quality review; a whole-branch review ended
 "with fixes", the fix wave landed (`0da16d4`, `bc21876`, `f79660f`) and its scoped re-review was clean.
 Automated acceptance (`npm run test:integration`: A1, A3, A4, A5, A7 in a nested headless shell) is green.
-**The live walk in `docs/acceptance/phase-1.md` (A1–A7 on the real desktop) passed by user report on 2026-09-21.** No Phase 1 findings were reported. Phase 2A was subsequently implemented, reviewed and merged into `main` on 2026-09-22, with 234 tests passing on the merged result. The [Phase 2B integration plan](2026-09-22-phase-2b-integration.md) is now prepared for written-plan review; implementation has not started.
+**The live walk in `docs/acceptance/phase-1.md` (A1–A7 on the real desktop) passed by user report on 2026-09-21.** No Phase 1 findings were reported. Phase 2A was subsequently implemented, reviewed and merged into `main`, with 234 tests passing. As of 2026-09-22, [Phase 2B](2026-09-22-phase-2b-integration.md) Tasks 1–9 are implemented and independently reviewed on `phase-2b`, with 371 tests and private native smoke/Phase 1 checks passing. The user paused work before Task 10 implementation. See the [handoff](../../handoff-2026-09-22.md); full A8–A14 automation/live acceptance and whole-branch review remain pending.
 
 ## Follow-up analysis (2026-09-21, baseline `a41638f`)
 
@@ -19,7 +19,7 @@ Fix commits on `main`: `19eac12` (ConfigLoader) and `7bb138b` (settings restorat
 
 The user authorized these two fixes on `main` while doing the live A1–A7 walk, and subsequently reported the full checklist green after confirming that tiling and tiled-window resizing belong to Phase 2. The acceptance record identifies the repository revision at that report; the exact loaded revision was not independently captured. The binding spec contains the approved Phase 2 clarifications. `2026-09-21-phase-2a-tree.md` plans the pure tree and property tests; window lifecycle and geometry integration follow in Phase 2B.
 
-The binding spec now records the approved Phase 2 rulings: ignore splash windows, track fixed-size normal windows as floating, target engine-selected containers through `WindowId` adapter operations, and assert coverage/non-overlap only for split children (equal rects for tabbed/stacked children). Geometry reconciliation permits one corrective re-apply per expected-rect generation, then stops for stubborn clients. Fullscreen exit, unminimize, monitor changes and completion of engine-initiated unmaximize force a fresh application even for an unchanged expected rect; workspace changes use the normal diff. These are design amendments, not implemented Phase 2 behavior.
+The binding spec records the approved Phase 2 rulings: ignore splash windows, track fixed-size normal windows as floating, target engine-selected containers through `WindowId` adapter operations, and assert coverage/non-overlap only for split children (equal rects for tabbed/stacked children). Geometry reconciliation permits one corrective re-apply per expected-rect generation, then stops for stubborn clients. Fullscreen exit, unminimize, monitor changes and completion of engine-initiated unmaximize force a fresh application even for an unchanged expected rect; workspace changes use the normal diff. These are now implemented/unit-tested on `phase-2b`; their full native acceptance remains Task 10.
 
 Phase 4 target arrangements: laptop alone (`eDP-1` was the only connected output when reported) and docked with external display(s), lid closed. Windows must migrate off the internal display when it becomes inactive and return to it on undock. Consult `~/Dev/i3-display-manager` and `~/Dev/i3-lid-sleep` (installed copies in `~/.local/bin/`) for the user's expected transitions. Ask about scaling and exact resolutions when Phase 4 planning starts, not earlier. Marks and scratchpad remain outside v1.
 
@@ -46,15 +46,17 @@ Phase 4 target arrangements: laptop alone (`eDP-1` was the only connected output
 ## Deferred to Phase 2 (from the final review's triage, in priority order)
 
 - Completed in the follow-up above: fake-`Gio.Settings` unit coverage for `SettingsOverrides` apply / restore / crash recovery, including preservation of failed restores. Keep these regressions in the Phase 2 baseline.
-- `settings.reset(key)` when a restored value equals the schema default, and `Gio.Settings.sync()` at the end of `restoreAll()` (logout-time disable).
-- Fix the two parked log/comment texts (ruling 17).
+- Completed in Phase 2B Task 1: `settings.reset(key)` when a restored value equals the schema default, and `Gio.Settings.sync()` after restoration, while preserving failed originals. Successive applies reconcile saved originals without a temporary restore.
+- Completed in Phase 2B Tasks 5/9: the parked retry log/comment texts now describe the 500 ms, 1.5 s and 4 s retry sequence.
 - Completed in Phase 2B Task 8: the exhaustive `resolve.ts` directive switch, lexer EOF regressions, explicit `set: missing value` diagnostics, and variable names containing dots or hyphens after their first character.
-- Engine tests: numeric-name workspace branch, cache-source announcement; check `workspaces.activate()`'s result.
+- Completed in Phase 2B Tasks 5–6: numeric-name workspace, cache-source and activation-result regressions, together with selected-container command and reload/restart coverage.
 - Completed in Phase 2B Task 8: the indicator accumulates `Clutter.ScrollDirection.SMOOTH` vertical deltas and resets that state on discrete scrolling, hide, and destroy. CSS classes for `active`/`occupied`/`empty` remain cosmetic only.
 - Phase 2B Task 8 revokes every external accelerator with `allowKeybinding(name, NONE)` before ungrabbing it, while `setBindings()` continues to grab only the current mode. GNOME 50 has no public API to delete the corresponding permission-map key; residual entries have value `NONE`, remain inert until Shell restarts, and must not be removed through `Main.wm` private fields.
-- Seed the engine's `_locked` from `SessionWatcher.isLocked` at start; pass a `name_lost` callback to `bus_own_name`.
-- `esbuild` `minifySyntax` (cosmetic only); README: recovery steps if the extension is removed without ever being disabled (`overridden-settings` stays in dconf).
-- Harness: A6 via `gsettings get` + `gnome-extensions disable/enable` over the private bus; A2 via a `pills` field in `GetState`.
+- Completed in Phase 2B Task 7: seed initial lock state and guard D-Bus name loss while leaving core behavior running. The real private-bus ownership-conflict proof remains Task 10.
+- `esbuild` `minifySyntax` remains cosmetic only. README recovery steps were added in the pause documentation: reinstall the same UUID/schema, enable to load saved originals, then disable; never erase `overridden-settings` before restoration.
+- A2 is completed by Phase 2B Tasks 7/9: committed pills in `GetState`, with native names/active/occupied assertions. **A6 native before/after settings restoration and repeated enable remain Task 10**, using a genuinely initially-disabled private session.
+
+Phase 2B Task 9 also fixed native teardown failures found by real GTK windows: exclude retiring windows at `unmanaging`, retain safe MRU enumeration during teardown, publish removal at `unmanaged`, and invalidate first-frame cleanup on actor destruction. Native smoke and retained Phase 1 checks pass; release `make install` completed. The full execution record retains all six Phase 2B rulings and their costs, including the private `--no-x11` coverage limitation.
 
 ## Deferred to Phase 4
 

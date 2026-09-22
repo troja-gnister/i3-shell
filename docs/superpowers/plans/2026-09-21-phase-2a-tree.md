@@ -1,5 +1,7 @@
 # Phase 2A — Pure Container Tree Implementation Plan
 
+**Historical completed plan.** Phase 2A is merged. Current work is [Phase 2B](2026-09-22-phase-2b-integration.md), Tasks 1–9 complete/reviewed and paused before Task 10 on 2026-09-22; see the [handoff](../../handoff-2026-09-22.md). Counts and future-tense instructions below describe Phase 2A's original scope, not the current integration state.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the deterministic container-tree model and algorithms underlying A8–A14, with scenario and property tests, ready for the GNOME window lifecycle and geometry integration plan.
