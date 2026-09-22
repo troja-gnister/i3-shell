@@ -776,7 +776,7 @@ For a tiled transfer, capture leaf ids and the source fallback ancestor chain fi
 
 **Consumes:** all pure tree APIs above. No shell imports or real display required.
 
-- [ ] **Step 1: Add an independent recursive geometry checker.** Check the reported rectangles from `layoutWithRects`, not a second call to `layout`. For each split's direct children, assert shared cross-axis bounds, contiguous positions, integer/nonnegative sizes and exact terminal edge. For tab/stack direct children, assert rectangle equality. Recursively repeat within children. Empty roots are exempt from coverage because they contain no windows.
+- [x] **Step 1: Add an independent recursive geometry checker.** Check the reported rectangles from `layoutWithRects`, not a second call to `layout`. For each split's direct children, assert shared cross-axis bounds, contiguous positions, integer/nonnegative sizes and exact terminal edge. For tab/stack direct children, assert rectangle equality. Recursively repeat within children. Empty roots are exempt from coverage because they contain no windows.
 
 ```ts
 function checkGeometry(con: Con, rects: ReadonlyMap<Con, Rect>): void {
@@ -805,7 +805,7 @@ function checkGeometry(con: Con, rects: ReadonlyMap<Con, Rect>): void {
 
 Keep this helper in the property-test file; it uses no production orientation or partition helpers, so a shared axis bug cannot make actual and expected agree.
 
-- [ ] **Step 2: Generate bounded operation sequences and independent membership expectations.** Use ids 1–12 and two workspaces. Record a plain `Map<WindowId, number>` outside the Tree as the membership model. Choose existing ids through an index into that map; a new id comes from its complement. Inserts/removals update both; moves update the ids returned by `moveToWorkspace` after asserting they exactly match the selected subtree's pre-move leaf ids. Do not use `Tree.find` as the only oracle for whether a window should exist.
+- [x] **Step 2: Generate bounded operation sequences and independent membership expectations.** Use ids 1–12 and two workspaces. Record a plain `Map<WindowId, number>` outside the Tree as the membership model. Choose existing ids through an index into that map; a new id comes from its complement. Inserts/removals update both; moves update the ids returned by `moveToWorkspace` after asserting they exactly match the selected subtree's pre-move leaf ids. Do not use `Tree.find` as the only oracle for whether a window should exist.
 
 ```ts
 const kinds = ['insert', 'remove', 'select', 'split', 'layout', 'toggleLayout', 'focus',
@@ -894,7 +894,7 @@ function applyGeneratedOperation(
 
 Empty candidate sets make an operation a no-op, not a discarded property run. Throws from supposedly valid operations must fail the property.
 
-- [ ] **Step 3: Add the property runner with fixed seeds and replay support.**
+- [x] **Step 3: Add the property runner with fixed seeds and replay support.**
 
 ```ts
 it('preserves membership, focus and exact local coverage through operation sequences', () => {
@@ -934,9 +934,9 @@ it('preserves membership, focus and exact local coverage through operation seque
 
 The dispatcher in Step 2 is the only source of expected membership changes. Comparing against the independent map catches loss even when `Tree.check()` still finds the reduced tree structurally valid. The facades perform their own normalization after structural edits; the runner checks their postconditions directly. Explicit normalization and its idempotence are tested in Task 2.
 
-- [ ] **Step 4: Run the property suite and turn every discovered semantic failure into a minimal deterministic scenario before fixing it.** Record fast-check seed and shrink path in the scenario's comment. Run both the fixed seed above and one additional fixed seed `8675309` before delivery. Keep the normal suite bounded; longer stress runs are on demand.
+- [x] **Step 4: Run the property suite and turn every discovered semantic failure into a minimal deterministic scenario before fixing it.** Record fast-check seed and shrink path in the scenario's comment. Run both the fixed seed above and one additional fixed seed `8675309` before delivery. Keep the normal suite bounded; longer stress runs are on demand.
 
-- [ ] **Step 5: Verify once on the final code.** Run `npm test`, `npm run typecheck`, `npm run check:layer0`, `npm run lint:tree`, and a release build. Inspect the diff for accidental changes to `src/shell`, `src/engine.ts`, live config or installation. This subsystem does not need the nested shell; if integration is nevertheless run, finish with a release `make install` as required by PROJECT.md.
+- [x] **Step 5: Verify once on the final code.** Run `npm test`, `npm run typecheck`, `npm run check:layer0`, `npm run lint:tree`, and a release build. Inspect the diff for accidental changes to `src/shell`, `src/engine.ts`, live config or installation. This subsystem does not need the nested shell; if integration is nevertheless run, finish with a release `make install` as required by PROJECT.md.
 
 - [ ] **Step 6: Review and commit:** `test(tree): exercise invariants across generated command sequences`. Update the execution record with test counts, any rulings, public signatures as actually implemented and the exact remaining Phase 2B scope. Do not mark A8–A14 passed or say that live tiling/resizing works yet.
 
@@ -947,7 +947,7 @@ The dispatcher in Step 2 is the only source of expected membership changes. Comp
 - The property checker tests direct split children for coverage and tab/stack children for equality.
 - The existing failed-restore and config-cache tests remain part of the baseline.
 - Shell-related carry-forward items remain visible and are not silently declared complete.
-- The implementation method remains the documented subagent-driven workflow: one implementer and reviewer per task, then a whole-branch review. Resume only when the user releases the pause; this preparation audit is not authorization to execute the plan.
+- The implementation method remains the documented subagent-driven workflow: one implementer and reviewer per task, then a whole-branch review. The user released the preparation pause; Task 8 review and the whole-branch review remain pending.
 
 ## Preparation audit — 2026-09-21
 
@@ -958,4 +958,145 @@ The dispatcher in Step 2 is the only source of expected membership changes. Comp
 - [x] Add deterministic ownership tests across two monitors, layout-toggle generation, and property checks that cannot mask missing facade normalization.
 - [x] Resolve exact tooling versions against published engines/peer dependencies; installation remains Task 1 work.
 - [x] Re-run the unchanged baseline: 64/64 unit tests, both TypeScript programs and `check:layer0` passed. Documentation diff passes `git diff --check`. No nested-shell run was needed for this preparation-only change.
-- [ ] Implementation tasks 1–8: deliberately unstarted while paused. No tree code, product dependency changes or live extension changes belong to this audit.
+- [x] The user resumed Phase 2A after this preparation audit. Tasks 1–7 are reviewed and committed; Task 8 implementation and delivery verification are complete, with its review/commit and the whole-branch review still pending.
+
+## Execution record — 2026-09-21
+
+The user resumed the plan on branch `phase-2` in the existing checkout. The implementation base was `8291d64`; no remote, push, nested-shell run or installation was requested. Tasks 1–7 were implemented, verified, task-reviewed and committed before Task 8 began. Task 8 source/tests are implemented and delivery-verified but are not yet reviewed or committed. A whole-branch review and integration into `main` remain pending.
+
+### Reviewed task history
+
+| Task | Commit | Verified suite at task boundary | Review outcome |
+|---|---|---:|---|
+| 1 — nodes and tooling | `11b2a5e` | 84 tests | Clean after fix round 1 corrected `axis('stacked')` to vertical and added focused RED/GREEN evidence |
+| 2 — ownership and normalization | `8e6a477` | 140 tests | Approved with one diagnostic-context minor deferred to Task 4 |
+| 3 — layout and stacking | `71355db` | 154 tests | Clean |
+| 4 — navigation | `3062b86` | 174 tests | Clean; resolved Task 2's deferred diagnostic minor |
+| 5 — split/layout/move | `276c25a` | 199 tests | Clean; self-review first corrected root-wrapper `lastSplitLayout` with RED/GREEN coverage |
+| 6 — resize | `8d451c5` | 218 tests | Clean |
+| 7 — floating and workspace transfer | `d58902f` | 232 tests | Clean |
+| 8 — properties and delivery | pending | 234 tests | Implementation and delivery checks complete; task review/commit pending |
+
+Task 8's focused property run passed two tests: seeds `20260921` and `8675309`, 300 runs each, arrays of 1–100 generated operations, ids 1–12, two workspaces and odd/tiny work areas. Neither seed exposed a semantic failure, so there is no shrink path or production fix to record. The independent membership `Map` is the sole expected-membership model; transfer expectations are captured from the selected subtree before mutation. Geometry is checked recursively from `layoutWithRects` output with direct split-child coverage and tabbed/stacked equality, without importing production orientation/partition helpers or calling `Tree.normalize()` in the test.
+
+### Delivery verification
+
+The controller verified the frozen Task 8 source/tests and recorded the full output in `.superpowers/sdd/2026-09-21-phase-2a-tree/delivery-verification.md`:
+
+- `npm test`: 22 files, 234/234 tests passed.
+- `npm run typecheck`: both source and test TypeScript programs passed.
+- `npm run check:layer0`: passed (`layer0 check ok`).
+- `npm run lint:tree`: passed.
+- `npm run build`: passed and produced a release build after its typecheck and Layer 0 prerequisites.
+- Scope inspection from `8291d64` found no changes under `src/shell`, to `src/engine.ts`, or to `.npmrc`. No integration suite or install was run.
+
+These checks verify the pure Phase 2A subsystem. They do not constitute the pending Task 8 review, whole-branch review, merge into `main`, live tiling/resizing, or A8–A14 acceptance.
+
+### Public Layer 0 signatures as implemented
+
+`Direction` and `Layout` remain owned by `src/commands/model.ts`. The new tree modules expose the following surface:
+
+```ts
+type WindowId = number;
+type NodeId = number;
+type MonitorId = number;
+type Axis = 'h' | 'v';
+type SplitLayout = 'splith' | 'splitv';
+interface Rect { x: number; y: number; width: number; height: number }
+interface LeafCon { kind: 'leaf'; id: NodeId; parent: SplitCon | null; window: WindowId }
+interface SplitCon {
+  kind: 'split'; id: NodeId; parent: SplitCon | null; root: boolean;
+  layout: Layout; lastSplitLayout: SplitLayout;
+  children: Con[]; percents: number[]; focusedChild: Con | null;
+}
+type Con = LeafCon | SplitCon;
+interface WorkspaceCon {
+  index: number; monitors: Map<MonitorId, SplitCon>;
+  focusedCon: Con | null; floating: WindowId[]; focusedFloating: WindowId | null;
+}
+type Selection =
+  | {kind: 'tiled'; con: Con}
+  | {kind: 'floating'; window: WindowId}
+  | null;
+type AllocateSplit = (layout: Layout, root?: boolean) => SplitCon;
+
+function axis(layout: Layout): Axis;
+function directionAxis(direction: Direction): Axis;
+function isForward(direction: Direction): boolean;
+function walk(con: Con): Generator<Con>;
+function leaves(con: Con): Generator<LeafCon>;
+function descendFocused(con: Con): LeafCon | null;
+function rootOf(con: Con): SplitCon;
+function attach(parent: SplitCon, child: Con, index: number): void;
+function detach(child: Con): SplitCon;
+function replace(parent: SplitCon, oldChild: Con, newChild: Con): void;
+function focusChain(con: Con): void;
+
+interface LayoutResult { windows: Map<WindowId, Rect>; containers: Map<Con, Rect> }
+function layoutWithRects(con: Con, rect: Rect): LayoutResult;
+function layout(con: Con, rect: Rect): Map<WindowId, Rect>;
+function stackingOrder(con: Con): WindowId[];
+
+type Wrapping = 'yes' | 'no' | 'force' | 'workspace';
+function descendDirection(con: Con, direction: Direction): LeafCon | null;
+function nextFocus(con: Con, direction: Direction, wrapping: Wrapping): LeafCon | null;
+
+function splitCon(con: Con, orientation: 'h' | 'v' | 'toggle', allocate: AllocateSplit): Con;
+function setLayout(con: Con, layout: Layout, allocate: AllocateSplit): Con;
+function toggleLayout(con: Con, cycle: 'split' | 'all' | readonly Layout[], allocate: AllocateSplit): Con;
+function moveCon(con: Con, direction: Direction): boolean;
+
+interface ResizeRequest {
+  action: 'grow' | 'shrink'; dimension: 'width' | 'height'; px: number; ppt: number | null;
+}
+function resizeCon(con: Con, request: ResizeRequest, rectangles: ReadonlyMap<Con, Rect>): boolean;
+```
+
+The `Tree` facade exposes:
+
+```ts
+class Tree {
+  readonly workspaces: Map<number, WorkspaceCon>;
+  activeWorkspace: number;
+  allocateSplit: AllocateSplit;
+  constructor(workspaceCount: number, monitors: readonly MonitorId[]);
+  workspace(index: number): WorkspaceCon;
+  root(workspace: number, monitor: MonitorId): SplitCon;
+  find(window: WindowId): LeafCon | null;
+  owner(con: Con): WorkspaceCon;
+  location(window: WindowId):
+    {workspace: number; monitor: MonitorId | null; floating: boolean} | null;
+  selection(workspace?: number): Selection;
+  focus(direction: Direction, wrapping: Wrapping): LeafCon | null;
+  focusParent(): Con | null;
+  focusChild(): Con | null;
+  split(orientation: 'h' | 'v' | 'toggle'): void;
+  setLayout(layout: Layout): void;
+  toggleLayout(cycle: 'split' | 'all' | readonly Layout[]): void;
+  move(direction: Direction): boolean;
+  resize(request: ResizeRequest, rectangles: ReadonlyMap<Con, Rect>): boolean;
+  select(con: Con): void;
+  selectFloating(window: WindowId): void;
+  activateWorkspace(index: number): void;
+  addFloating(window: WindowId, workspace: number): void;
+  setFloating(window: WindowId, enabled: boolean, monitor: MonitorId): void;
+  focusModeToggle(): WindowId | null;
+  moveToWorkspace(target: number, monitor: MonitorId): WindowId[];
+  insert(window: WindowId, workspace: number, monitor: MonitorId): LeafCon;
+  remove(window: WindowId): void;
+  normalize(live?: ReadonlySet<WindowId>): void;
+  check(live?: ReadonlySet<WindowId>): void;
+}
+```
+
+### Exact Phase 2B remainder
+
+Phase 2B must connect this pure API to GNOME without changing its ownership model:
+
+- Assign and resolve opaque `WindowId`s; adopt existing windows in MRU order; connect `window-created` and `first-frame`, `unmanaged`, GNOME focus, minimize, maximize, fullscreen, workspace and monitor lifecycle events.
+- Classify normal/dialog/fixed-size windows, including ignored splash windows and floating fixed-size normal windows; implement native fullscreen plus floating frame resize/position and every id-based application/window action.
+- Route all tree commands through engine dispatch and one `commit()` pipeline: normalize, layout, expected-rect diff/application, stacking/decorations/indicator updates and `TreeChanged`.
+- Implement bounded geometry reconciliation: at most one corrective re-apply per expected-rect generation. Fullscreen exit, unminimize, `monitors-changed`, and completion of an engine-initiated unmaximize must force a fresh application even when the expected rect is unchanged. `workspace-changed` uses the normal tree mutation and rect diff; it is not a forced-reapply event.
+- Record expected-workspace acknowledgements for engine-initiated moves; rebuild/migrate monitor roots on monitor changes; expose `GetTree`, `GetWindows` and `TreeChanged`; rebuild the tree on restart.
+- Add GTK test windows and nested-shell A8–A14 scenarios while preserving the Phase 1 integration suite, replacing only its temporary resize “not implemented” assertion. A8–A14 remain live acceptance items and are not passed by Phase 2A.
+- Carry forward the Phase 1 shell work: settings default reset plus `Gio.Settings.sync()`, initial lock-state seeding, D-Bus name-loss handling, smooth-scroll support and keybinding cleanup. Parser diagnostics/variable-name improvements and cosmetic log/comment text remain explicit carry-forward work; Phase 4 still owns the criteria-regex and custom-keybinding enumeration items.
