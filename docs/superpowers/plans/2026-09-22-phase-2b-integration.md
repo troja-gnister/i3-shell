@@ -503,7 +503,7 @@ Restart first requires a successful reload, then rebuilds from live windows usin
 - Consumes `Engine.run(commands: Command[], timestamp: number): string`, all Tree command facades, `WindowsPort` and the retained container rect map.
 - Produces complete Phase 2 command dispatch. Floating geometry is accumulated in `Map<WindowId, Rect>` consumed once by commit; native notifications do not enforce it afterward.
 
-- [ ] **Write the selected-parent regression.**
+- [x] **Write the selected-parent regression.**
 
 ~~~ts
 const f = fakeEngine();
@@ -523,8 +523,8 @@ expect(f.calls.filter(c => c.startsWith('kill:'))).toEqual(['kill:1', 'kill:2'])
 
 Add a real focus change to a different tracked window (after another focus state) to prove selection follows native reality, and an engine activation acknowledgement to prove it preserves a chosen split. For a parent workspace move, assert all selected ids move once, subtree structure survives, source workspace stays active, source fallback receives focus, and matching acknowledgements do not reinsert leaves.
 
-- [ ] **Run RED:** `npx vitest run test/unit/engine/commands.test.ts`. Unimplemented tree-command paths and floating geometry fail.
-- [ ] **Implement the command-to-facade mapping.**
+- [x] **Run RED:** `npx vitest run test/unit/engine/commands.test.ts`. Unimplemented tree-command paths and floating geometry fail.
+- [x] **Implement the command-to-facade mapping.**
 
 | Command | Engine action inside commit |
 |---|---|
@@ -543,7 +543,7 @@ Add a real focus change to a different tracked window (after another focus state
 
 For tiled-only directional/layout/split commands with floating selection, use existing facade no-op semantics. `floating` on a split is a warning/no-op because v1 floating membership represents individual windows. `border` stays explicitly Phase 3; `back_and_forth`/rules stay explicitly Phase 4. Preserve exec, mode, nop and unknown-command behavior.
 
-- [ ] **Test floating arithmetic independently of tiled percentages.**
+- [x] **Test floating arithmetic independently of tiled percentages.**
 
 ~~~ts
 const f = fakeEngine();
@@ -558,19 +558,20 @@ expect(f.applied.at(-1)?.get(1)).toEqual({x: 345, y: 280, width: 310, height: 20
 
 Explicit x/y are absolute logical coordinates; center uses the selected window's workspace/monitor work area and integer rounding. Floating resize uses px even if ppt is present, rejects nonpositive/nonfinite results before mutation, and keeps position. Tiled `resize set` and `move position` warn without mutation. Subsequent floating size notifications cause no corrective writes.
 
-- [ ] **Prove reload retention on nested layouts and pending splits (execution ruling).** Use split/add/resize commands to create a vertical subtree with non-default percentages, then a pending horizontal split around its selected leaf. Save the workspace snapshot and reload an accepted config; every node id, layout, percentage and selection must survive. A rejected restart preserves the same snapshot; an accepted restart rebuilds from live windows. This completes the complex reload proof introduced in Task 5 without exposing a mutable Tree test hook.
+- [x] **Prove reload retention on nested layouts and pending splits (execution ruling).** Use split/add/resize commands to create a vertical subtree with non-default percentages, then a pending horizontal split around its selected leaf. Save the workspace snapshot and reload an accepted config; every node id, layout, percentage and selection must survive. A rejected restart preserves the same snapshot; an accepted restart rebuilds from live windows. This completes the complex reload proof introduced in Task 5 without exposing a mutable Tree test hook.
 
-- [ ] **Cover commands through bindings and chains.** Use the real fixture's split/focus/move/resize bindings, 10-ppt resize behavior, parent move and root-content transfer, tabbed/stacked raise order, empty workspace no-op, fixed-size floating, wrong/gone ids, already-enabled floating/fullscreen, numeric string and named workspace targets, failed workspace activation and zero workspace wrap. Compound commands observe prior command mutations in order.
-- [ ] **Verify GREEN:** command/lifecycle suites plus `npm test`, typecheck and Layer 0 check.
-- [ ] **Commit:** `feat(engine): dispatch tiling commands against selected containers`.
+- [x] **Cover commands through bindings and chains.** Use the real fixture's split/focus/move/resize bindings, 10-ppt resize behavior, parent move and root-content transfer, tabbed/stacked raise order, empty workspace no-op, fixed-size floating, wrong/gone ids, already-enabled floating/fullscreen, numeric string and named workspace targets, failed workspace activation and zero workspace wrap. Compound commands observe prior command mutations in order.
+- [x] **Verify GREEN:** command/lifecycle suites plus `npm test`, typecheck and Layer 0 check.
+- [x] **Commit:** `feat(engine): dispatch tiling commands against selected containers`.
 
 ## Task 7: Expose tree state and make session teardown total
 
-**Files:** Modify `src/shell/control.ts`, `src/shell/session.ts`, `src/extension.ts`; create `src/shell/controlObject.ts`, `src/shell/sessionState.ts`, `test/unit/shell/controlObject.test.ts`, `test/unit/shell/sessionState.test.ts`; extend `test/unit/engine/lifecycle.test.ts`.
+**Files:** Modify `src/engine.ts`, `src/shell/control.ts`, `src/shell/session.ts`, `src/extension.ts`; create `src/shell/controlObject.ts`, `src/shell/sessionState.ts`, `test/unit/shell/controlObject.test.ts`, `test/unit/shell/sessionState.test.ts`; extend `test/unit/engine/lifecycle.test.ts`.
 
 **Interfaces:**
 - `controlObject.ts` exports `ControlObject(engine: Engine, timestamp: () => number, shellState: () => {actionMode: number; ready: boolean}, log: {error(message: string, error: unknown): void})` with testable D-Bus method bodies; the GI export and virtual keyboard stay in `control.ts`. The shellState reader computes NORMAL/OVERVIEW from the native action mode using the existing sanctioned cast.
 - Control adds `GetTree(): string`, `GetWindows(): string` and signal `TreeChanged()`. Existing methods and reply types remain compatible.
+- Add `pills: PillState[]` to `EngineState`. Retain the committed pill values in Engine, use them for the indicator update, and return a detached copy from `state()` so ControlObject forwards the same state without duplicating occupancy/name logic.
 - `DebugObject` takes Engine in addition to SessionWatcher and adds `Relayout(): void` calling `engine.relayout()`. Retain `PressKey` and `SimulateSessionMode` exclusively in test builds.
 - `sessionState.ts` exports `SessionState(initial: boolean, onLocked: () => void, onUnlocked: () => void)`, getter `isLocked` and `update(locked: boolean): void`; the native watcher supplies `isLocked || !hasWindows`.
 
@@ -889,7 +890,7 @@ Self-review corrected the void-returning Tree.check assertions, stable-monitor l
 
 ## Execution record
 
-Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–5 are complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
+Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–6 are complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
 
 Ruling: Run the complex nested-layout/pending-split reload and selected-parent acknowledgement regressions in Task 6, once tree command dispatch exists. Task 5 still proves flat-tree retention and native lifecycle transitions. This avoids test-only mutation hooks or prematurely implementing the next task. Cost if wrong: complex reload defects may be discovered one task later; Task 6 must close the proof before completion.
 
@@ -900,5 +901,8 @@ Ruling: Run the complex nested-layout/pending-split reload and selected-parent a
 | 3 — window tracking | GPT-5.6 Sol / GPT-5.6 Sol | `caf75b6`, `3edcdce` | 29 initial focused tests; 282 full-suite tests; 7 focused fix tests; both TypeScript programs; Layer 0; diff check | MRU enumeration finding fixed and re-reviewed clean. Minor native enum-mapping test coverage deferred to final review. |
 | 4 — geometry reconciliation | GPT-5.6 Sol / GPT-5.6 Sol | `3f70af4`, `1e4a455` | 11 initial focused tests; 294 full-suite tests; 11 topology/backend fix tests; both TypeScript programs; Layer 0; staged diff check | Partial topology publication finding fixed with a GI-free transactional collector and re-reviewed clean. |
 | 5 — engine lifecycle | GPT-6 Astra / GPT-6 Astra; fix re-review GPT-5.6 Sol | `603bc6f`, `f439d62` | 34 initial focused tests; 324 full-suite tests; 41 focused fix tests; both TypeScript programs; Layer 0; tree lint; staged diff check | Three focus/disposal race findings fixed with seven regressions and re-reviewed clean. |
+| 6 — selection-based commands | GPT-5.6 Sol / GPT-5.6 Sol | `d0117df` | 15 command tests; 55 focused compatibility tests; 346 full-suite tests; both TypeScript programs; Layer 0; staged diff check | Spec compliant, quality approved; no findings. Deferred nested reload/pending-split and selected-parent proofs completed. |
 
 Ruling: Use Meta.TabList.NORMAL_ALL_MRU for per-workspace adoption instead of the NORMAL example in spec §8.5. The installed Mutter 18 API explicitly guarantees pure MRU order for this variant, including minimized windows; classification still decides which windows are managed. — Preserves the binding MRU intent rather than relying on unordered Workspace.list_windows or NORMAL grouping behavior. — Cost if wrong: adoption may include additional eligible windows or choose a different initial order; native integration must verify adoption and minimized-window behavior.
+
+Ruling: Include src/engine.ts in Task 7 so EngineState exposes a copied snapshot of the committed pill state used by the indicator. — Task 7 requires GetState.pills to use those same values, but its file list omitted the engine that produces them; duplicating pill calculation in ControlObject would create two sources of truth. — Cost if wrong: one additional public state field and its engine storage may need adjustment; command semantics are unchanged.
