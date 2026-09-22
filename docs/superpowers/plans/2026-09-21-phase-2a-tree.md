@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-20-i3-shell-design.md`, especially §7, §9 and §16.1, including the approved 2026-09-21 clarifications. Read `docs/superpowers/plans/2026-09-21-phase-1-carry-forward.md` too.
 
-**Status:** The user resumed Phase 2A on 2026-09-21. Pure-tree implementation and delivery verification are complete on branch `phase-2`: all eight tasks and the whole branch are reviewed and committed; integration into `main` remains pending. Phase 1 A1–A7 passed by user report on 2026-09-21. Audit baseline `df0187d`, 64 unit tests; the delivery suite now has 234 tests. The two recovery fixes and fake-Gio regression tests remain part of that baseline.
+**Status:** The user resumed Phase 2A on 2026-09-21. Pure-tree implementation, delivery verification and all reviews are complete. The user authorized merging `phase-2` into `main` on 2026-09-22; the fast-forward to `849e181` passed all 234 tests, and the completed branch was deleted. Phase 1 A1–A7 passed by user report on 2026-09-21. Audit baseline `df0187d`, 64 unit tests; the delivery suite now has 234 tests. The two recovery fixes and fake-Gio regression tests remain part of that baseline.
 
 ## Global Constraints
 
@@ -958,11 +958,11 @@ The dispatcher in Step 2 is the only source of expected membership changes. Comp
 - [x] Add deterministic ownership tests across two monitors, layout-toggle generation, and property checks that cannot mask missing facade normalization.
 - [x] Resolve exact tooling versions against published engines/peer dependencies; installation remains Task 1 work.
 - [x] Re-run the unchanged baseline: 64/64 unit tests, both TypeScript programs and `check:layer0` passed. Documentation diff passes `git diff --check`. No nested-shell run was needed for this preparation-only change.
-- [x] The user resumed Phase 2A after this preparation audit. All eight tasks, delivery verification and the whole-branch review are complete; integration into `main` remains pending.
+- [x] The user resumed Phase 2A after this preparation audit. All eight tasks, delivery verification and the whole-branch review are complete; merged into `main` on 2026-09-22.
 
 ## Execution record — 2026-09-21
 
-The user resumed the plan on branch `phase-2` in the existing checkout. The implementation base was `8291d64`; no remote, push, nested-shell run or installation was requested. Tasks 1–7 were implemented, verified, task-reviewed and committed before Task 8 began. Task 8 was committed in `cd27f31` and `8ad4552` and reviewed clean. The whole-branch review approved `8291d64..8ad4552` with no findings. Integration into `main` remains pending.
+The user resumed the plan on branch `phase-2` in the existing checkout. The implementation base was `8291d64`; no remote, push, nested-shell run or installation was requested. Tasks 1–7 were implemented, verified, task-reviewed and committed before Task 8 began. Task 8 was committed in `cd27f31` and `8ad4552` and reviewed clean. The whole-branch review approved `8291d64..8ad4552` with no findings. Integration into `main` completed on 2026-09-22; see the merge record below.
 
 ### Reviewed task history
 
@@ -990,7 +990,7 @@ The controller verified the frozen Task 8 source/tests. The following results ar
 - `npm run build`: passed and produced a release build after its typecheck and Layer 0 prerequisites.
 - Scope inspection from `8291d64` found no changes under `src/shell`, to `src/engine.ts`, or to `.npmrc`. No integration suite or install was run.
 
-These checks verify the pure Phase 2A subsystem. All task reviews and the whole-branch review subsequently passed. No merge into `main`, live tiling/resizing, or A8–A14 desktop acceptance is claimed.
+These checks verify the pure Phase 2A subsystem. All task reviews and the whole-branch review subsequently passed. The merge and its test run are recorded below. Live tiling/resizing and A8–A14 desktop acceptance remain Phase 2B work.
 
 ### Public Layer 0 signatures as implemented
 
@@ -1107,4 +1107,8 @@ The final reviewer approved `8291d64..8ad4552` as ready to merge, with no Critic
 
 The controller confirmed both explicit scope boundaries noted by the reviewer: native window actions and geometry reconciliation remain Phase 2B, and navigation/movement across monitor roots remains Phase 4. These preserve the approved phase boundaries; no new scope ruling or deferral was introduced. Phase 2A tests cover the pure contracts and root-boundary behavior.
 
-The final documentation update only records completed reviews. Source and tests remain exactly those covered by the 234-test verification and release build. The branch is `phase-2`, based on `main` at `8291d64`; no merge, remote or push has been performed.
+The final documentation update only records completed reviews. Source and tests remain exactly those covered by the 234-test verification and release build. At review completion, `phase-2` was based on `main` at `8291d64`; its subsequent merge is recorded below. No remote or push has been configured or performed.
+
+### Merge record — 2026-09-22
+
+The user authorized the local merge. `main` fast-forwarded from `8291d64` to `849e181`; `npm test` on the merged result passed all 234 tests in 22 files. The fully merged `phase-2` branch was deleted. The subsequent documentation commit records this integration only; source and tests are unchanged. No remote, push, nested-shell run or install was performed during the merge.
