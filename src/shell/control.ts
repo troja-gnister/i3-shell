@@ -3,10 +3,11 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import {parseCommands} from '../commands/parse';
 import type {Engine} from '../engine';
+import {ControlObject} from './controlObject';
 import {log} from './log';
 import type {SessionWatcher} from './session';
+import {guard} from './util/signals';
 
 const BUS_NAME = 'org.i3shell.Control';
 const OBJECT_PATH = '/org/i3shell/Control';
@@ -20,6 +21,9 @@ const CONTROL_IFACE = `<node>
     </method>
     <method name="GetState"><arg type="s" direction="out" name="json"/></method>
     <method name="GetConfigStatus"><arg type="s" direction="out" name="json"/></method>
+    <method name="GetTree"><arg type="s" direction="out" name="json"/></method>
+    <method name="GetWindows"><arg type="s" direction="out" name="json"/></method>
+    <signal name="TreeChanged"/>
   </interface>
 </node>`;
 
@@ -30,55 +34,9 @@ const DEBUG_IFACE = `<node>
       <arg type="s" direction="in" name="accel"/>
       <arg type="b" direction="out" name="ok"/>
     </method>
+    <method name="Relayout"/>
   </interface>
 </node>`;
-
-/** The i3-msg equivalent: `gdbus call --session --dest org.i3shell.Control --object-path /org/i3shell/Control --method org.i3shell.Control.Command "workspace number 3"` */
-class ControlObject {
-  constructor(private readonly _engine: Engine) {}
-
-  Command(command: string): [boolean, string] {
-    const {commands, diagnostics} = parseCommands(command);
-    if (diagnostics.length > 0)
-      return [false, diagnostics.join('; ')];
-    try {
-      return [true, this._engine.run(commands, global.get_current_time())];
-    } catch (e) {
-      log.error(`Command "${command}" failed`, e);
-      return [false, String(e)];
-    }
-  }
-
-  GetState(): string {
-    try {
-      // gnome-shell enables extensions before its `startup-complete` handler sets the action mode, and a
-      // window-less session rests in the overview (OVERVIEW, value 2); keybindings only fire once the mode
-      // is NORMAL or OVERVIEW. @girs/gnome-shell mistypes Main.actionMode as the literal NONE, hence the cast.
-      const actionMode = Number(Main.actionMode as Shell.ActionMode);
-      const ready = ((Main.actionMode as Shell.ActionMode) & (Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW)) !== 0;
-      return JSON.stringify({...this._engine.state(), actionMode, ready});
-    } catch (e) {
-      log.error('GetState failed', e);
-      return JSON.stringify({error: String(e)});
-    }
-  }
-
-  GetConfigStatus(): string {
-    try {
-      const loaded = this._engine.lastLoad;
-      return JSON.stringify({
-        path: loaded.path,
-        source: loaded.source,
-        errors: loaded.diagnostics.filter(d => d.severity === 'error').length,
-        warnings: loaded.diagnostics.filter(d => d.severity === 'warning').length,
-        diagnostics: loaded.diagnostics,
-      });
-    } catch (e) {
-      log.error('GetConfigStatus failed', e);
-      return JSON.stringify({error: String(e)});
-    }
-  }
-}
 
 const MODIFIER_KEYVALS: Record<string, number> = {
   super: Clutter.KEY_Super_L,
@@ -111,48 +69,112 @@ export function accelToKeyvals(accel: string): number[] | null {
 export class DebugObject {
   private _keyboard: Clutter.VirtualInputDevice | null = null;
 
-  constructor(private readonly _session: SessionWatcher) {}
+  constructor(private readonly _session: SessionWatcher, private readonly _engine: Engine) {}
 
   SimulateSessionMode(locked: boolean): void {
-    this._session.simulate(locked);
+    try {
+      this._session.simulate(locked);
+    } catch (error) {
+      log.error('SimulateSessionMode failed', error);
+    }
+  }
+
+  Relayout(): void {
+    try {
+      this._engine.relayout();
+    } catch (error) {
+      log.error('Relayout failed', error);
+    }
   }
 
   PressKey(accel: string): boolean {
-    const keyvals = accelToKeyvals(accel);
-    if (!keyvals)
+    try {
+      const keyvals = accelToKeyvals(accel);
+      if (!keyvals)
+        return false;
+      this._keyboard ??= Clutter.get_default_backend().get_default_seat()
+        .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+      const keyboard = this._keyboard;
+      const now = () => GLib.get_monotonic_time();
+      for (const keyval of keyvals)
+        keyboard.notify_keyval(now(), keyval, Clutter.KeyState.PRESSED);
+      for (const keyval of [...keyvals].reverse())
+        keyboard.notify_keyval(now(), keyval, Clutter.KeyState.RELEASED);
+      return true;
+    } catch (error) {
+      log.error(`PressKey "${accel}" failed`, error);
       return false;
-    this._keyboard ??= Clutter.get_default_backend().get_default_seat()
-      .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
-    const keyboard = this._keyboard;
-    const now = () => GLib.get_monotonic_time();
-    for (const keyval of keyvals)
-      keyboard.notify_keyval(now(), keyval, Clutter.KeyState.PRESSED);
-    for (const keyval of [...keyvals].reverse())
-      keyboard.notify_keyval(now(), keyval, Clutter.KeyState.RELEASED);
-    return true;
+    }
   }
 }
 
 export class DBusControl {
   private readonly _control: Gio.DBusExportedObject;
-  private readonly _debug: Gio.DBusExportedObject | null = null;
-  private readonly _ownerId: number;
+  private _debug: Gio.DBusExportedObject | null = null;
+  private _ownerId = 0;
+  private _unsubscribe: (() => void) | null = null;
+  private _publishing = false;
+  private _destroyed = false;
+  private _nameLossHandled = false;
 
-  constructor(engine: Engine, debug: DebugObject | null) {
-    this._control = Gio.DBusExportedObject.wrapJSObject(CONTROL_IFACE, new ControlObject(engine));
-    this._control.export(Gio.DBus.session, OBJECT_PATH);
-    // __I3SHELL_TEST__ is a compile-time literal, so release builds drop this branch and DEBUG_IFACE with it
-    if (__I3SHELL_TEST__ && debug !== null) {
-      this._debug = Gio.DBusExportedObject.wrapJSObject(DEBUG_IFACE, debug);
-      this._debug.export(Gio.DBus.session, OBJECT_PATH);
-      log.info('test build: org.i3shell.Debug exported');
+  constructor(engine: Engine, debug: DebugObject | null, notifyNameLoss: (title: string, body: string) => void) {
+    const shellState = (): {actionMode: number; ready: boolean} => {
+      // @girs/gnome-shell types Main.actionMode as literal NONE; Shell mutates it at runtime.
+      const mode = Main.actionMode as Shell.ActionMode;
+      return {
+        actionMode: Number(mode),
+        ready: (mode & (Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW)) !== 0,
+      };
+    };
+    this._control = Gio.DBusExportedObject.wrapJSObject(CONTROL_IFACE,
+      new ControlObject(engine, () => global.get_current_time(), shellState, log));
+    try {
+      this._control.export(Gio.DBus.session, OBJECT_PATH);
+      // __I3SHELL_TEST__ is a compile-time literal, so release builds drop this branch and DEBUG_IFACE with it.
+      if (__I3SHELL_TEST__ && debug !== null) {
+        this._debug = Gio.DBusExportedObject.wrapJSObject(DEBUG_IFACE, debug);
+        this._debug.export(Gio.DBus.session, OBJECT_PATH);
+        log.info('test build: org.i3shell.Debug exported');
+      }
+      this._publishing = true;
+      this._unsubscribe = engine.subscribeTreeChanged(guard('TreeChanged signal', () => {
+        if (this._publishing)
+          this._control.emit_signal('TreeChanged', new GLib.Variant('()', []));
+      }));
+      const nameLost = guard('D-Bus name loss', (_connection: Gio.DBusConnection | null, name: string) => {
+        if (this._destroyed || this._nameLossHandled) return;
+        this._nameLossHandled = true;
+        this._stopPublishing(true);
+        log.error(`D-Bus name ${name} was not acquired or was lost`, new Error('name ownership unavailable'));
+        notifyNameLoss('i3-shell D-Bus unavailable', `${name} was not acquired; tiling and keybindings remain active`);
+      });
+      this._ownerId = Gio.bus_own_name(Gio.BusType.SESSION, BUS_NAME, Gio.BusNameOwnerFlags.NONE, null, null, nameLost);
+    } catch (error) {
+      this._stopPublishing(true);
+      throw error;
     }
-    this._ownerId = Gio.bus_own_name(Gio.BusType.SESSION, BUS_NAME, Gio.BusNameOwnerFlags.NONE, null, null, null);
   }
 
   destroy(): void {
-    this._control.unexport();
-    this._debug?.unexport();
-    Gio.bus_unown_name(this._ownerId);
+    if (this._destroyed) return;
+    this._destroyed = true;
+    this._stopPublishing(true);
+  }
+
+  private _stopPublishing(releaseOwnership: boolean): void {
+    this._publishing = false;
+    const unsubscribe = this._unsubscribe;
+    this._unsubscribe = null;
+    if (unsubscribe) {
+      try { unsubscribe(); } catch (error) { log.error('D-Bus tree unsubscribe failed', error); }
+    }
+    try { this._debug?.unexport(); } catch (error) { log.error('debug D-Bus unexport failed', error); }
+    this._debug = null;
+    try { this._control.unexport(); } catch (error) { log.error('control D-Bus unexport failed', error); }
+    if (releaseOwnership && this._ownerId !== 0) {
+      const ownerId = this._ownerId;
+      this._ownerId = 0;
+      try { Gio.bus_unown_name(ownerId); } catch (error) { log.error('D-Bus name release failed', error); }
+    }
   }
 }

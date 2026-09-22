@@ -57,6 +57,7 @@ export interface EngineState {
   configPath: string;
   errors: number;
   warnings: number;
+  pills: PillState[];
 }
 
 export class Engine {
@@ -89,6 +90,7 @@ export class Engine {
   private readonly _frameReads = new Map<WindowId, {token: number; generation: number | undefined}>();
   private readonly _listeners = new Set<() => void>();
   private readonly _raiseOrders = new Map<number, string>();
+  private _pills: PillState[] = [];
 
 
   constructor(private readonly _ports: EnginePorts) {}
@@ -274,11 +276,12 @@ export class Engine {
       for (const info of this._ports.windows.list()) this._windows.set(info.id, {...info, rect: {...info.rect}});
     }
     if (this._disposed) return;
-    this._ports.indicator.setPills(Array.from({length: this._workspaceCount}, (_, index) => ({
+    this._pills = Array.from({length: this._workspaceCount}, (_, index) => ({
       name: this._config.workspaceNames.get(index + 1) ?? String(index + 1),
       active: index === this._ports.workspaces.activeIndex,
       occupied: [...this._windows.values()].some(w => w.workspace === index),
-    })));
+    }));
+    this._ports.indicator.setPills(this._copyPills());
     if (this._disposed) return;
     this._revision++;
     for (const callback of [...this._listeners]) {
@@ -465,6 +468,7 @@ export class Engine {
       configPath: l.path,
       errors: l.diagnostics.filter(d => d.severity === 'error').length,
       warnings: l.diagnostics.filter(d => d.severity === 'warning').length,
+      pills: this._copyPills(),
     };
   }
 
@@ -485,7 +489,7 @@ export class Engine {
   }
 
   onLocked(): void {
-    if (this._disposed) return;
+    if (!this._started || this._disposed) return;
     this._locked = true;
     this._ports.indicator.setVisible(false);
     this._enterMode('default');
@@ -493,10 +497,22 @@ export class Engine {
   }
 
   onUnlocked(): void {
-    if (this._disposed) return;
+    if (!this._started || this._disposed) return;
     this._locked = false;
     this._ports.indicator.setVisible(true);
+    if (this._disposed) return;
     this._ports.keys.setBindings(this._modeBindings('default'));
+    if (this._disposed) return;
+    this.commit(() => {
+      for (const id of this._windows.keys()) {
+        this._observe(id, this._reconciler.generation(id));
+        if (this._disposed) return false;
+      }
+    });
+  }
+
+  private _copyPills(): PillState[] {
+    return this._pills.map(pill => ({...pill}));
   }
 
   private _modeBindings(name: string): Binding[] {

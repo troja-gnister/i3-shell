@@ -52,7 +52,8 @@ export default class I3ShellExtension extends Extension {
     const geometry = new Geometry(id => this._windows?.resolve(id));
     this._geometry = geometry;
     geometry.topology();
-    const windows = new ManagedWindows(event => this._engine?.onWindowEvent(event), index => geometry.monitorId(index));
+    const windows = new ManagedWindows(guard('window event', event => this._engine?.onWindowEvent(event)),
+      index => geometry.monitorId(index));
     this._windows = windows;
     const workspaces = new Workspaces(tracker, () => this._engine?.onWorkspacesChanged());
 
@@ -105,8 +106,8 @@ export default class I3ShellExtension extends Extension {
     tracker.connect(global.display, 'workareas-changed', () => engine.relayout());
     windows.start();
     engine.start(session.isLocked);
-    const debug = __I3SHELL_TEST__ ? new DebugObject(session) : null;
-    this._dbus = new DBusControl(engine, debug);
+    const debug = __I3SHELL_TEST__ ? new DebugObject(session, engine) : null;
+    this._dbus = new DBusControl(engine, debug, notify);
     log.info(`ready: ${engine.state().grabbed} bindings grabbed, config from ${engine.lastLoad.source} (${engine.lastLoad.path})`);
   }
 

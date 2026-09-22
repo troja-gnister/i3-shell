@@ -1,5 +1,8 @@
 import {describe, it, expect} from 'vitest';
+import {readFileSync} from 'node:fs';
 import {fakeEngine, topology, windowInfo} from './fakeEngine';
+
+const referenceText = readFileSync(new URL('../fixtures/reference.i3config', import.meta.url), 'utf8');
 
 describe('engine lifecycle', () => {
   it('adopts first-frame windows and retiles after removal during apply', () => {
@@ -138,6 +141,90 @@ describe('engine lifecycle', () => {
     f.add(1); f.add(2); f.flush(); f.activationFails = true; f.remove(2); f.flush(); expect(f.calls).toContain('focus:1');
     f.focus(null); f.engine.run([{type: 'kill'}], 0); expect(f.calls.at(-1)).toBe('kill:1');
     f.engine.onUnlocked(); expect(f.visible).toBe(true); expect(f.ports.keys.grabbedCount).toBe(1);
+  });
+
+  it('retains its tree and reconciles native frames when the initial lock ends', () => {
+    const f = fakeEngine(referenceText);
+    f.engine.start(true);
+    expect(f.engine.state().grabbed).toBe(0);
+    f.add(1);
+    f.flush();
+    const before = f.engine.treeSnapshot();
+    const generation = f.engine.windowsSnapshot()[0].generation;
+    f.windows.set(1, {...f.windows.get(1)!, rect: {x: 5, y: 5, width: 20, height: 20}});
+    f.applied.length = 0;
+
+    f.engine.onUnlocked();
+    f.flush();
+
+    expect(f.engine.state().grabbed).toBe(65);
+    expect(f.engine.treeSnapshot().workspaces).toEqual(before.workspaces);
+    expect(f.applied.some(batch => batch.has(1))).toBe(true);
+    expect(f.engine.windowsSnapshot()[0].generation).toBe(generation);
+  });
+
+  it('resets resize mode while locked and never installs bare-key grabs on locked reload', () => {
+    const f = fakeEngine(referenceText);
+    f.engine.start();
+    f.add(1);
+    f.flush();
+    const before = f.engine.treeSnapshot().workspaces;
+    f.engine.run([{type: 'mode', name: 'resize'}], 0);
+    f.engine.onLocked();
+    expect(f.engine.state()).toMatchObject({mode: 'default', grabbed: 0});
+    expect(f.visible).toBe(false);
+
+    f.setNextLoad(f.load(referenceText));
+    f.engine.run([{type: 'reload'}], 0);
+    expect(f.engine.state()).toMatchObject({mode: 'default', grabbed: 0});
+    expect(f.grabbedAccels()).toEqual([]);
+
+    f.engine.onUnlocked();
+    f.flush();
+    expect(f.engine.state()).toMatchObject({mode: 'default', grabbed: 65});
+    expect(f.visible).toBe(true);
+    expect(f.engine.treeSnapshot().workspaces).toEqual(before);
+  });
+
+  it('ignores session edges before startup and honors the final seeded state', () => {
+    const f = fakeEngine(referenceText);
+
+    expect(() => {
+      f.engine.onLocked();
+      f.engine.onUnlocked();
+    }).not.toThrow();
+    expect(f.calls).toEqual([]);
+
+    f.engine.start(true);
+    expect(f.engine.state()).toMatchObject({mode: 'default', grabbed: 0});
+  });
+
+  it('cancels pending frames and restores settings exactly once on repeated stop', () => {
+    const f = fakeEngine();
+    f.engine.start();
+    f.add(1);
+    f.flush();
+    f.change(1, {rect: {x: 5, y: 5, width: 20, height: 20}}, 'frame');
+    f.applied.length = 0;
+
+    f.engine.stop();
+    f.engine.stop();
+    f.flush();
+
+    expect(f.applied).toEqual([]);
+    expect(f.calls.filter(call => call === 'settings.restore')).toHaveLength(1);
+  });
+
+  it('returns pills detached from the values committed to the indicator', () => {
+    const f = fakeEngine();
+    f.engine.start();
+    f.add(1);
+    const state = f.engine.state();
+
+    expect(state.pills[0]).toEqual({name: '1', active: true, occupied: true});
+    state.pills[0].name = 'caller mutation';
+    expect(f.engine.state().pills[0].name).toBe('1');
+    expect(f.pills[0].name).toBe('1');
   });
 
   it('retains selection from native focus over the adoption MRU default', () => {
