@@ -51,41 +51,47 @@ export class SettingsOverrides implements SettingsPort {
         if (type !== 'as' && type !== 's')
           continue;
         const current = type === 'as' ? settings.get_strv(key) : [settings.get_string(key)];
-        const keep = current.filter(a => a === '' || !wanted.has(canonicalAccel(a)));
-        if (keep.length === current.length)
+        const saved = this._snapshot[schemaId]?.[key];
+        const original = saved === undefined ? current : Array.isArray(saved) ? saved : [saved as string];
+        const keep = original.filter(a => a === '' || !wanted.has(canonicalAccel(a)));
+        if (keep.length === original.length) {
+          if (saved !== undefined)
+            this._restoreOne(schemaId, settings, key, saved);
           continue;
-        this._remember(schemaId, key, type === 'as' ? current : current[0]);
-        for (const a of current) {
+        }
+        this._remember(schemaId, key, type === 'as' ? original : original[0]);
+        for (const a of original) {
           if (a !== '' && wanted.has(canonicalAccel(a)))
             cleared.push({schema: schemaId, key, accel: a});
         }
-        if (type === 'as')
-          settings.set_strv(key, keep);
-        else
-          settings.set_string(key, keep[0] ?? '');
+        const desired = type === 'as' ? keep : keep[0] ?? '';
+        if (!this._equal(type === 'as' ? current : current[0], desired)) {
+          if (type === 'as')
+            settings.set_strv(key, keep);
+          else
+            settings.set_string(key, desired as string);
+        }
       }
     }
 
     if (plan.workspaceCount > 0) {
       const mutter = this._settings(MUTTER);
-      if (mutter) {
-        this._remember(MUTTER, 'dynamic-workspaces', mutter.get_boolean('dynamic-workspaces'));
-        mutter.set_boolean('dynamic-workspaces', false);
-      }
+      if (mutter)
+        this._applyValue(MUTTER, mutter, 'dynamic-workspaces', false);
       const prefs = this._settings(WM_PREFS);
       if (prefs) {
-        this._remember(WM_PREFS, 'num-workspaces', prefs.get_int('num-workspaces'));
-        prefs.set_int('num-workspaces', plan.workspaceCount);
-        this._remember(WM_PREFS, 'workspace-names', prefs.get_strv('workspace-names'));
-        prefs.set_strv('workspace-names', plan.workspaceNames);
+        this._applyValue(WM_PREFS, prefs, 'num-workspaces', plan.workspaceCount);
+        this._applyValue(WM_PREFS, prefs, 'workspace-names', plan.workspaceNames);
       }
+    } else {
+      this._restoreSaved(MUTTER, 'dynamic-workspaces');
+      this._restoreSaved(WM_PREFS, 'num-workspaces');
+      this._restoreSaved(WM_PREFS, 'workspace-names');
     }
 
     const prefs = this._settings(WM_PREFS);
-    if (prefs && prefs.get_string('mouse-button-modifier') !== plan.mouseButtonModifier) {
-      this._remember(WM_PREFS, 'mouse-button-modifier', prefs.get_string('mouse-button-modifier'));
-      prefs.set_string('mouse-button-modifier', plan.mouseButtonModifier);
-    }
+    if (prefs)
+      this._applyValue(WM_PREFS, prefs, 'mouse-button-modifier', plan.mouseButtonModifier);
 
     this._saveSnapshot();
     for (const c of cleared)
@@ -100,28 +106,71 @@ export class SettingsOverrides implements SettingsPort {
       if (!settings)
         continue;
       for (const [key, value] of Object.entries(keys)) {
-        try {
-          let restored: boolean;
-          if (Array.isArray(value))
-            restored = settings.set_strv(key, value);
-          else if (typeof value === 'string')
-            restored = settings.set_string(key, value);
-          else if (typeof value === 'boolean')
-            restored = settings.set_boolean(key, value);
-          else
-            restored = settings.set_int(key, value);
-          if (restored)
-            delete keys[key];
-          else
-            log.warn(`could not restore ${schemaId} ${key}; original kept for retry`);
-        } catch (e) {
-          log.error(`could not restore ${schemaId} ${key}`, e);
-        }
+        this._restoreOne(schemaId, settings, key, value);
       }
       if (Object.keys(keys).length === 0)
         delete this._snapshot[schemaId];
     }
     this._saveSnapshot();
+    Gio.Settings.sync();
+  }
+
+  private _applyValue(schemaId: string, settings: Gio.Settings, key: string, desired: Saved): void {
+    const current = settings.get_value(key).deep_unpack() as Saved;
+    const saved = this._snapshot[schemaId]?.[key];
+    if (saved !== undefined && this._equal(saved, desired)) {
+      this._restoreOne(schemaId, settings, key, saved);
+      return;
+    }
+    if (this._equal(current, desired))
+      return;
+    this._remember(schemaId, key, current);
+    this._set(settings, key, desired);
+  }
+
+  private _restoreSaved(schemaId: string, key: string): void {
+    const saved = this._snapshot[schemaId]?.[key];
+    if (saved === undefined)
+      return;
+    const settings = this._settings(schemaId);
+    if (settings)
+      this._restoreOne(schemaId, settings, key, saved);
+  }
+
+  private _restoreOne(schemaId: string, settings: Gio.Settings, key: string, value: Saved): void {
+    try {
+      const defaultValue = settings.get_default_value(key)?.deep_unpack() as Saved | undefined;
+      let restored: boolean;
+      if (defaultValue !== undefined && this._equal(defaultValue, value)) {
+        settings.reset(key);
+        restored = settings.get_user_value(key) === null &&
+          this._equal(settings.get_value(key).deep_unpack() as Saved, value);
+      } else {
+        restored = this._set(settings, key, value);
+      }
+      if (restored)
+        delete this._snapshot[schemaId][key];
+      else
+        log.warn(`could not restore ${schemaId} ${key}; original kept for retry`);
+    } catch (e) {
+      log.error(`could not restore ${schemaId} ${key}`, e);
+    }
+    if (Object.keys(this._snapshot[schemaId] ?? {}).length === 0)
+      delete this._snapshot[schemaId];
+  }
+
+  private _set(settings: Gio.Settings, key: string, value: Saved): boolean {
+    if (Array.isArray(value))
+      return settings.set_strv(key, value);
+    if (typeof value === 'string')
+      return settings.set_string(key, value);
+    if (typeof value === 'boolean')
+      return settings.set_boolean(key, value);
+    return settings.set_int(key, value);
+  }
+
+  private _equal(left: Saved, right: Saved): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
   }
 
   private _settings(schemaId: string): Gio.Settings | null {

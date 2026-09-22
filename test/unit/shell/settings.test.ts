@@ -1,7 +1,7 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {SettingsOverrides} from '../../../src/shell/settings';
 import type {OverridePlan} from '../../../src/config/overridePlan';
-import {FakeSettings, schemas, writes} from './fakes/settings';
+import {FakeSettings, resetFakeSettings, syncCalls, writes} from './fakes/settings';
 
 vi.mock('gi://Gio', async () => ({default: (await import('./fakes/settings')).fakeGio}));
 vi.mock('../../../src/shell/log', () => ({log: {info: vi.fn(), warn: vi.fn(), error: vi.fn()}}));
@@ -35,8 +35,7 @@ function fixture() {
 }
 
 beforeEach(() => {
-  schemas.clear();
-  writes.length = 0;
+  resetFakeSettings();
 });
 
 describe('SettingsOverrides', () => {
@@ -140,5 +139,51 @@ describe('SettingsOverrides', () => {
     expect(f.prefs.get_strv('workspace-names')).toEqual(['Original']);
     expect(f.keys.get_strv('switch-to-application-1')).toEqual(['<Super>1', '<Alt>F1']);
     expect(f.extension.get_string('overridden-settings')).toBe('{}');
+  });
+
+  it('reconciles bindings without restoring the original workspace count', () => {
+    const f = fixture();
+    const settings = overrides(f.extension);
+    settings.apply(plan);
+    writes.length = 0;
+    settings.apply({...plan, accels: ['<Super>s']});
+    expect(f.keys.get_strv('switch-to-application-1')).toEqual(['<Super>1', '<Alt>F1']);
+    expect(f.keys.get_strv('toggle-overview')).toEqual([]);
+    expect(writes.filter(w => w.key === 'num-workspaces')).toEqual([]);
+    expect(f.prefs.get_int('num-workspaces')).toBe(3);
+    settings.restoreAll();
+    expect(f.prefs.get_int('num-workspaces')).toBe(4);
+  });
+
+  it('resets an original equal to its default and syncs restoration', () => {
+    const f = fixture();
+    f.prefs.defaults['num-workspaces'] = 4;
+    const settings = overrides(f.extension);
+    settings.apply(plan);
+    settings.restoreAll();
+    expect(f.prefs.get_user_value('num-workspaces')).toBeNull();
+    expect(f.prefs.get_int('num-workspaces')).toBe(4);
+    expect(syncCalls).toBe(1);
+  });
+
+  it('uses a typed setter when the original differs from its default', () => {
+    const f = fixture();
+    f.prefs.defaults['num-workspaces'] = 2;
+    const settings = overrides(f.extension);
+    settings.apply(plan);
+    settings.restoreAll();
+    expect(f.prefs.get_user_value('num-workspaces')?.deep_unpack()).toBe(4);
+    expect(f.prefs.get_int('num-workspaces')).toBe(4);
+  });
+
+  it.each(['false', 'throw'] as const)('retains an original when resetting it returns %s', failure => {
+    const f = fixture();
+    const settings = overrides(f.extension);
+    settings.apply(plan);
+    f.prefs.failures.set('num-workspaces', failure);
+    settings.restoreAll();
+    expect(f.prefs.get_int('num-workspaces')).toBe(3);
+    expect(f.prefs.get_user_value('num-workspaces')?.deep_unpack()).toBe(3);
+    expect(JSON.parse(f.extension.get_string('overridden-settings'))[PREFS]).toHaveProperty('num-workspaces', 4);
   });
 });
