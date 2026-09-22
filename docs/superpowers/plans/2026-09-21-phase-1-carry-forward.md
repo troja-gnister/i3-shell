@@ -4,7 +4,7 @@ Phase 1 (Foundation) was executed from `docs/superpowers/plans/2026-09-20-phase-
 (29 commits on top of `e4628e2`). Every task passed a spec + quality review; a whole-branch review ended
 "with fixes", the fix wave landed (`0da16d4`, `bc21876`, `f79660f`) and its scoped re-review was clean.
 Automated acceptance (`npm run test:integration`: A1, A3, A4, A5, A7 in a nested headless shell) is green.
-**The live walk in `docs/acceptance/phase-1.md` (A1–A7 on the real desktop) passed by user report on 2026-09-21.** No Phase 1 findings were reported. The Phase 2A pure-tree plan has passed its preparation audit and is ready for implementation. **Implementation is paused at the user's request; wait for the user to resume Phase 2A.**
+**The live walk in `docs/acceptance/phase-1.md` (A1–A7 on the real desktop) passed by user report on 2026-09-21.** No Phase 1 findings were reported. Phase 2A was subsequently implemented, reviewed and merged into `main` on 2026-09-22, with 234 tests passing on the merged result. The [Phase 2B integration plan](2026-09-22-phase-2b-integration.md) is now prepared for written-plan review; implementation has not started.
 
 ## Follow-up analysis (2026-09-21, baseline `a41638f`)
 

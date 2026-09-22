@@ -6,7 +6,7 @@ The i3 experience in GNOME 50: your `~/.config/i3/config` drives workspaces, key
 
 **Status:** Phase 1 — workspaces, modes, `exec`/`kill`/`fullscreen` bindings, workspace pills. Tiling arrives in Phase 2. See `docs/superpowers/specs/2026-09-20-i3-shell-design.md`.
 
-Phase 1 live acceptance (A1–A7) passed by user report on 2026-09-21. The Phase 2A pure-tree plan is ready for review in `docs/superpowers/plans/2026-09-21-phase-2a-tree.md`; dynamic tiling and tiled-window resizing are not implemented yet.
+Phase 1 live acceptance (A1–A7) passed by user report on 2026-09-21. Phase 2A's pure tree is implemented, reviewed and merged, with 234 passing tests. The [Phase 2B integration plan](docs/superpowers/plans/2026-09-22-phase-2b-integration.md) is prepared for review; live dynamic tiling and tiled-window resizing are not implemented yet.
 
 ## Prerequisites
 

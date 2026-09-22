@@ -9,7 +9,7 @@ with directional navigation. Three things are the non-negotiable core: **workspa
 **shortcuts**, **dynamic tiling**. Phases 1 and 2 deliver that core; Phases 3 and 4 add appearance and
 fidelity.
 
-**State (2026-09-22):** Phase 1 (Foundation) is implemented, reviewed and merged into `main`, with the two recovery fixes in `19eac12` and `7bb138b`. The user reported the full live A1–A7 walk green on 2026-09-21. Phase 2A is implemented, reviewed and merged into `main` (fast-forward to `849e181` on 2026-09-22). All 234 tests passed on the merged result, and the completed `phase-2` branch was deleted. Phase 2B window/geometry integration has not been planned or built, so live A8–A14 acceptance remains unclaimed. Phases 3–4 are designed but not yet planned in detail or built.
+**State (2026-09-22):** Phase 1 (Foundation) is implemented, reviewed and merged into `main`, with the two recovery fixes in `19eac12` and `7bb138b`. The user reported the full live A1–A7 walk green on 2026-09-21. Phase 2A is implemented, reviewed and merged into `main` (fast-forward to `849e181` on 2026-09-22). All 234 tests passed on the merged result, and the completed `phase-2` branch was deleted. The Phase 2B window/geometry integration plan is prepared for written-plan review; implementation has not started and live A8–A14 acceptance remains unclaimed. Phases 3–4 are designed but not yet planned in detail or built. GitHub `origin` is configured; `main` was pushed at `568855c` before the Phase 2B planning documentation.
 
 ---
 
@@ -21,6 +21,7 @@ fidelity.
 | `docs/superpowers/plans/2026-09-20-phase-1-foundation.md` | The Phase 1 implementation plan (14 TDD tasks with full code). Several of its code blocks were wrong and were fixed during execution — where plan and code differ, the code (and the carry-forward doc) wins. |
 | `docs/superpowers/plans/2026-09-21-phase-1-carry-forward.md` | Execution record: every ruling made while building Phase 1, items deferred to Phases 2/4, security note. **Read before planning Phase 2.** |
 | `docs/superpowers/plans/2026-09-21-phase-2a-tree.md` | Phase 2A pure-tree plan, preparation audit and execution record. Implementation, delivery checks and reviews are complete; merged into `main` on 2026-09-22. Window lifecycle and geometry integration follow in Phase 2B. |
+| `docs/superpowers/plans/2026-09-22-phase-2b-integration.md` | Phase 2B implementation plan: settings reconciliation, topology, window tracking, bounded geometry corrections, engine lifecycle/commands, D-Bus/session handling, GTK integration and A8–A14. Prepared for user review; not implemented. |
 | `docs/acceptance/phase-1.md` | The live-session checklist for A1–A7, passed by user report on 2026-09-21. |
 | `README.md` | User-facing: install, control via D-Bus, dev commands. |
 | `src/` | The extension (TypeScript, see §4). |
@@ -48,12 +49,12 @@ The user's i3 config (`~/.config/i3/config`) is the source of truth for behaviou
 
 ```sh
 npm ci                      # or npm install; .npmrc sets legacy-peer-deps
-npm test                    # vitest on Node — pure core + fake Gio adapter tests (64 tests)
+npm test                    # vitest on Node — pure core + fake Gio adapter tests (234 tests)
 npm run typecheck           # two programs: tsconfig.json (src, GNOME types) + tsconfig.test.json (tests + Layer 0, Node types)
 npm run check:layer0        # fails if Layer 0 imports gi:// / resource:// / src/shell (also part of `npm run build`)
 npm run build               # release bundle → dist/  (esbuild, single ESM file; schemas compiled)
 npm run build:test          # same with __I3SHELL_TEST__=true → exports org.i3shell.Debug (PressKey, SimulateSessionMode)
-npm run test:integration    # nested headless shell: phase1-checks.sh (A1, A3, A4, A5, A7), ~1 min; leaves a TEST build in dist/
+npm run test:integration    # run build:test first; nested phase1-checks.sh (A1, A3, A4, A5, A7), ~1 min
 make install                # release build + symlink; then log out/in and `gnome-extensions enable i3-shell@troja`
 journalctl --user -f -o cat /usr/bin/gnome-shell | grep i3-shell     # every line is prefixed [i3-shell]
 gdbus call --session --dest org.i3shell.Control --object-path /org/i3shell/Control \
@@ -61,7 +62,7 @@ gdbus call --session --dest org.i3shell.Control --object-path /org/i3shell/Contr
 ```
 Other D-Bus methods: `GetState` (mode, activeWorkspace, workspaceCount, grabbed, configSource/Path, errors, warnings, actionMode, ready), `GetConfigStatus`.
 
-Always finish a session with a **release** `make install` if you ran the integration suite — it leaves a test build in `dist/`.
+Always finish a session with a **release** `make install` if you ran the integration suite — the current harness uses the existing test bundle in `dist/` and does not rebuild release afterward.
 
 ## 4. Architecture (as built)
 
@@ -84,6 +85,7 @@ Layer 1  src/shell/keys.ts            KeyBinder: grab_accelerator/ungrab, retry 
          src/shell/{log,notify,exec}.ts, src/shell/util/signals.ts (SignalTracker + guard())
 Layer 0  src/config/{lexer,variables,parser,resolve,accel,overridePlan,defaultConfig,index,model}.ts
          src/commands/{model,parse}.ts
+         src/tree/{node,tree,layout,focus,operations,resize}.ts — tested pure tree; not connected to live windows yet
          src/util/{text,bindingDiff}.ts
 ```
 
@@ -99,7 +101,7 @@ Verification: unit 52/52; typecheck both programs; `npm run test:integration` gr
 
 **Live acceptance passed:** the user reported all A1–A7 checks green on 2026-09-21, with no Phase 1 findings. `docs/acceptance/phase-1.md` records that report and its provenance. Dynamic tiling and tiled-window resizing remain Phase 2 work.
 
-The follow-up fixes restore last-good-cache recovery for a missing config at startup and preserve saved GNOME settings when restoration fails. Fake-`Gio.Settings` apply/restore/crash-recovery coverage and ConfigLoader regression tests are included in the 64-test Phase 1 baseline. Remaining deferred items are listed in the carry-forward doc. The live Phase 1 acceptance checkpoint is satisfied. Phase 2A now has 234 passing unit tests on `main`, including the preserved Phase 1 regressions; task reviews, whole-branch review and integration are complete.
+The follow-up fixes restore last-good-cache recovery for a missing config at startup and preserve saved GNOME settings when restoration fails. Fake-`Gio.Settings` apply/restore/crash-recovery coverage and ConfigLoader regression tests are included in the 64-test Phase 1 baseline. Remaining deferred items are listed in the carry-forward doc. The live Phase 1 acceptance checkpoint is satisfied. Phase 2A now has 234 passing unit tests on `main`, including the preserved Phase 1 regressions; task reviews, whole-branch review and the merge are complete. The nested integration suite was not rerun for the pure-tree phase.
 
 ## 6. What remains — Phases 2, 3, 4
 
@@ -132,14 +134,14 @@ Target arrangements: laptop alone (`eDP-1`) and docked with external display(s),
 ## 7. How to continue (process that worked)
 
 1. Phase 1 live acceptance is recorded as passed; preserve its 64-test regression baseline, including the failed-restore and config-cache regressions, inside the current 234-test suite.
-2. Phase 2A is reviewed and merged into `main`; the completed `phase-2` branch is deleted. No remote is configured and nothing has been pushed.
-3. Write and execute the Phase 2B window lifecycle/geometry integration plan against the implemented Tree interfaces. Phase 2 is complete only after live tiling/resizing and A8–A14 acceptance are delivered.
+2. Phase 2A is reviewed and merged into `main`; the completed `phase-2` branch is deleted. `origin` is `git@github.com:troja-gnister/i3-shell.git`, and `main` tracks `origin/main`. The user authorized the initial push at `568855c`.
+3. Review the prepared [Phase 2B plan](docs/superpowers/plans/2026-09-22-phase-2b-integration.md), then execute it on `phase-2b` in this checkout using the preserved workflow. Phase 2 is complete only after live tiling/resizing and A8–A14 acceptance are delivered.
 4. Continue with `superpowers:subagent-driven-development`: one implementer per task, a reviewer per task, and a whole-branch review at the end. Keep the ledger and record every ruling.
 5. Verify claims before trusting them: type-check GNOME API usage against `@girs` in a scratch project, extract the shell's JS to check behaviour, and run the nested shell for anything runtime-dependent.
 
 ## 8. People and conventions
 
-- Author/owner: `troja-gnister <iskrydev@gmail.com>` (repo-local git identity). GitHub remote to be added by the owner; do not push without being asked.
+- Author/owner: `troja-gnister <iskrydev@gmail.com>` (repo-local git identity). GitHub: [troja-gnister/i3-shell](https://github.com/troja-gnister/i3-shell). The initial push is complete; do not infer permission for future phase merges or pushes.
 - License GPL-2.0-or-later (required by extensions.gnome.org; also lets Forge/Tiling Shell be read as references — no code is copied).
 - Commits: conventional subjects (`feat(config): …`, `fix(shell): …`, `test: …`, `docs: …`); trailer `Co-Authored-By: <the model that authored it> <noreply@anthropic.com>`.
 - Branching: `main` holds reviewed phases; work on `phase-N` branches in this directory (the Makefile symlinks `$(CURDIR)/dist`, so a separate worktree would confuse the live install).
