@@ -623,7 +623,7 @@ Subscribe when exporting; emit with `new GLib.Variant('()', [])` after each comp
 - Variable parsing retains whole-file, longest-first substitution and original line numbers. Extend supported variable names with dots/hyphens while preserving the current requirement that the first name character is a letter/underscore.
 - Keep `KeyBinder.setBindings` semantics: only current mode bindings are grabbed (65 default, 11 resize for the reference config).
 
-- [ ] **Write input/config regressions.**
+- [x] **Write input/config regressions.**
 
 ~~~ts
 const scroll = new SmoothScroll();
@@ -644,8 +644,8 @@ expect(logicalLines('bindsym Mod4+x exec true\\'))
 ~~~
 
 Add ordinary final line with no newline, whitespace-only missing value, existing invalid `$1bad` rejection, long-before-short substitution, horizontal-only scrolling and multiple whole scroll units. Existing lexer behavior can already pass its new EOF regressions; the name/missing-value tests provide the failing behavior.
-- [ ] **Run RED:** `npx vitest run test/unit/config/lexer.test.ts test/unit/config/resolve.test.ts test/unit/util/smoothScroll.test.ts`.
-- [ ] **Implement the bounded changes.** Recognize `set` lines before requiring a value and return the explicit diagnostic instead of forwarding them as unknown directives. Use `/^\$[A-Za-z_][A-Za-z0-9_.-]*$/` for the supported name grammar. Add a compile-time exhaustive directive switch default without a runtime throw path for parsed input:
+- [x] **Run RED:** `npx vitest run test/unit/config/lexer.test.ts test/unit/config/resolve.test.ts test/unit/util/smoothScroll.test.ts`.
+- [x] **Implement the bounded changes.** Recognize `set` lines before requiring a value and return the explicit diagnostic instead of forwarding them as unknown directives. Use `/^\$[A-Za-z_][A-Za-z0-9_.-]*$/` for the supported name grammar. Add a compile-time exhaustive directive switch default without a runtime throw path for parsed input:
 
 ~~~ts
 default: {
@@ -659,9 +659,9 @@ default: {
 
 No changes to the Phase 4 criteria parser. For `SMOOTH` scroll events read `get_scroll_delta()`, pass its y delta through the accumulator, and use the existing scroll callback. Reset on discrete scroll or indicator hide/destroy. Keep UP/DOWN behavior and existing visual styles.
 
-- [ ] **Revoke external key permissions and document the limit.** Before ungrabbing an action, call `Main.wm.allowKeybinding(Meta.external_binding_name_for_action(action), Shell.ActionMode.NONE)`. Do not use `removeKeybinding` for an external accelerator or retain default-mode grabs through resize mode. GNOME 50 has no public API to delete those permission-map keys; residual entries have value NONE and are inert until shell restart. Record this in carry-forward instead of reaching into `Main.wm` private fields. Integration checks modes/grab counts and disable/re-enable in Tasks 9–10; no mock-only “deleted private map” assertion.
-- [ ] **Verify GREEN:** focused tests, full tests and typecheck. Keep optional CSS-class and minifySyntax cleanup out of this phase; record them as cosmetic only.
-- [ ] **Commit:** `fix(input): complete config and scroll compatibility follow-ups`.
+- [x] **Revoke external key permissions and document the limit.** Before ungrabbing an action, call `Main.wm.allowKeybinding(Meta.external_binding_name_for_action(action), Shell.ActionMode.NONE)`. Do not use `removeKeybinding` for an external accelerator or retain default-mode grabs through resize mode. GNOME 50 has no public API to delete those permission-map keys; residual entries have value NONE and are inert until shell restart. Record this in carry-forward instead of reaching into `Main.wm` private fields. Integration checks modes/grab counts and disable/re-enable in Tasks 9–10; no mock-only “deleted private map” assertion.
+- [x] **Verify GREEN:** focused tests, full tests and typecheck. Keep optional CSS-class and minifySyntax cleanup out of this phase; record them as cosmetic only.
+- [x] **Commit:** `fix(input): complete config and scroll compatibility follow-ups`.
 
 ## Task 9: Run real GTK fixtures only inside the nested session
 
@@ -890,7 +890,7 @@ Self-review corrected the void-returning Tree.check assertions, stable-monitor l
 
 ## Execution record
 
-Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–7 are complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
+Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–8 are complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
 
 Ruling: Run the complex nested-layout/pending-split reload and selected-parent acknowledgement regressions in Task 6, once tree command dispatch exists. Task 5 still proves flat-tree retention and native lifecycle transitions. This avoids test-only mutation hooks or prematurely implementing the next task. Cost if wrong: complex reload defects may be discovered one task later; Task 6 must close the proof before completion.
 
@@ -903,6 +903,7 @@ Ruling: Run the complex nested-layout/pending-split reload and selected-parent a
 | 5 — engine lifecycle | GPT-6 Astra / GPT-6 Astra; fix re-review GPT-5.6 Sol | `603bc6f`, `f439d62` | 34 initial focused tests; 324 full-suite tests; 41 focused fix tests; both TypeScript programs; Layer 0; tree lint; staged diff check | Three focus/disposal race findings fixed with seven regressions and re-reviewed clean. |
 | 6 — selection-based commands | GPT-5.6 Sol / GPT-5.6 Sol | `d0117df` | 15 command tests; 55 focused compatibility tests; 346 full-suite tests; both TypeScript programs; Layer 0; staged diff check | Spec compliant, quality approved; no findings. Deferred nested reload/pending-split and selected-parent proofs completed. |
 | 7 — D-Bus and session lifecycle | GPT-5.6 Sol / GPT-5.6 Sol | `e477139` | 43 focused tests; 358 full-suite tests; both TypeScript programs; Layer 0; test/release builds and Debug exclusions; staged diff check | Spec compliant, quality approved; no findings. Native name-loss ownership proof assigned to Task 10. |
+| 8 — config/input follow-ups | GPT-5.6 Sol / GPT-5.6 Sol | `0772df1` | 23 focused tests; 367 full-suite tests; both TypeScript programs; staged diff check | Spec compliant, quality approved; no findings. Native exclusive grabs and re-enable proof assigned to Tasks 9–10. |
 
 Ruling: Use Meta.TabList.NORMAL_ALL_MRU for per-workspace adoption instead of the NORMAL example in spec §8.5. The installed Mutter 18 API explicitly guarantees pure MRU order for this variant, including minimized windows; classification still decides which windows are managed. — Preserves the binding MRU intent rather than relying on unordered Workspace.list_windows or NORMAL grouping behavior. — Cost if wrong: adoption may include additional eligible windows or choose a different initial order; native integration must verify adoption and minimized-window behavior.
 
