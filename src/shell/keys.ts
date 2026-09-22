@@ -90,6 +90,7 @@ export class KeyBinder implements KeyBinderPort {
       return;
     this._byAccel.delete(accel);
     this._byAction.delete(entry.action);
+    Main.wm.allowKeybinding(Meta.external_binding_name_for_action(entry.action), Shell.ActionMode.NONE);
     if (!global.display.ungrab_accelerator(entry.action))
       log.warn(`ungrab failed for ${accel}`);
   }

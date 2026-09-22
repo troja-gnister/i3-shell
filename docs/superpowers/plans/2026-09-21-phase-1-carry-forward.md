@@ -48,12 +48,12 @@ Phase 4 target arrangements: laptop alone (`eDP-1` was the only connected output
 - Completed in the follow-up above: fake-`Gio.Settings` unit coverage for `SettingsOverrides` apply / restore / crash recovery, including preservation of failed restores. Keep these regressions in the Phase 2 baseline.
 - `settings.reset(key)` when a restored value equals the schema default, and `Gio.Settings.sync()` at the end of `restoreAll()` (logout-time disable).
 - Fix the two parked log/comment texts (ruling 17).
-- `assertNever` default in `resolve.ts`'s directive switch; lexer tests for EOF continuation / no trailing newline; a `set: missing value` diagnostic; relax `NAME_RE` (i3 accepts `$ws-1`, `$my.var`).
+- Completed in Phase 2B Task 8: the exhaustive `resolve.ts` directive switch, lexer EOF regressions, explicit `set: missing value` diagnostics, and variable names containing dots or hyphens after their first character.
 - Engine tests: numeric-name workspace branch, cache-source announcement; check `workspaces.activate()`'s result.
-- Indicator: handle `Clutter.ScrollDirection.SMOOTH` (touchpads); consider CSS classes `active`/`occupied`/`empty` instead of inline styles.
-- `KeyBinder`: `Main.wm.allowKeybinding` entries accumulate per grab (mode switches re-grab everything) — keep default-mode grabs and toggle only the mode set, or document.
+- Completed in Phase 2B Task 8: the indicator accumulates `Clutter.ScrollDirection.SMOOTH` vertical deltas and resets that state on discrete scrolling, hide, and destroy. CSS classes for `active`/`occupied`/`empty` remain cosmetic only.
+- Phase 2B Task 8 revokes every external accelerator with `allowKeybinding(name, NONE)` before ungrabbing it, while `setBindings()` continues to grab only the current mode. GNOME 50 has no public API to delete the corresponding permission-map key; residual entries have value `NONE`, remain inert until Shell restarts, and must not be removed through `Main.wm` private fields.
 - Seed the engine's `_locked` from `SessionWatcher.isLocked` at start; pass a `name_lost` callback to `bus_own_name`.
-- `esbuild` `minifySyntax` (cosmetic); README: recovery steps if the extension is removed without ever being disabled (`overridden-settings` stays in dconf).
+- `esbuild` `minifySyntax` (cosmetic only); README: recovery steps if the extension is removed without ever being disabled (`overridden-settings` stays in dconf).
 - Harness: A6 via `gsettings get` + `gnome-extensions disable/enable` over the private bus; A2 via a `pills` field in `GetState`.
 
 ## Deferred to Phase 4

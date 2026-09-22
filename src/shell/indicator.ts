@@ -4,6 +4,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import type {PillState} from '../runtime/model';
 import type {Colors} from '../config/model';
+import {SmoothScroll} from '../util/smoothScroll';
 import {guard} from './util/signals';
 
 export interface IndicatorPort {
@@ -21,6 +22,7 @@ export class Indicator implements IndicatorPort {
   private readonly _pills: St.Button[] = [];
   private _states: PillState[] = [];
   private _colors: Colors;
+  private readonly _smoothScroll = new SmoothScroll();
 
   constructor(
     colors: Colors,
@@ -36,6 +38,14 @@ export class Indicator implements IndicatorPort {
     this._box.add_child(this._modeLabel);
     this._button.connect('scroll-event', guard('scroll-event', (_actor: Clutter.Actor, event: Clutter.Event) => {
       const direction = event.get_scroll_direction();
+      if (direction === Clutter.ScrollDirection.SMOOTH) {
+        const [, deltaY] = event.get_scroll_delta();
+        const actions = this._smoothScroll.push(deltaY);
+        for (const action of actions)
+          this._onScroll(action);
+        return actions.length > 0 ? Clutter.EVENT_STOP : Clutter.EVENT_PROPAGATE;
+      }
+      this._smoothScroll.reset();
       if (direction === Clutter.ScrollDirection.UP) {
         this._onScroll('prev');
         return Clutter.EVENT_STOP;
@@ -99,6 +109,7 @@ export class Indicator implements IndicatorPort {
   }
 
   hide(): void {
+    this._smoothScroll.reset();
     this._button.hide();
   }
 
@@ -107,6 +118,7 @@ export class Indicator implements IndicatorPort {
   }
 
   destroy(): void {
+    this._smoothScroll.reset();
     this.showActivities();
     this._button.destroy();
   }

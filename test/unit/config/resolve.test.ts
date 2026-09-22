@@ -76,6 +76,12 @@ describe('resolve', () => {
     expect(loadConfigText('bindsym Mod9+q kill').config).toBeNull();
   });
 
+  it('preserves the set line number in a missing-value diagnostic', () => {
+    const r = loadConfigText('# heading\nset $mod   \nbindsym Mod4+q kill');
+    expect(r.config).toBeNull();
+    expect(r.diagnostics).toEqual([{line: 2, severity: 'error', message: 'set: missing value'}]);
+  });
+
   it('the built-in fallback config is valid', () => {
     const r = loadConfigText(FALLBACK_CONFIG);
     expect(r.diagnostics).toEqual([]);

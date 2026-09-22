@@ -22,22 +22,34 @@ describe('logicalLines', () => {
   it('accepts CRLF line endings', () => {
     expect(logicalLines('a\r\nb\r\n')).toEqual([{line: 1, text: 'a'}, {line: 2, text: 'b'}]);
   });
+
+  it('keeps an ordinary final line without a trailing newline', () => {
+    expect(logicalLines('bindsym Mod4+x exec true')).toEqual([
+      {line: 1, text: 'bindsym Mod4+x exec true'},
+    ]);
+  });
+
+  it('keeps an unterminated continuation at end of file', () => {
+    expect(logicalLines('bindsym Mod4+x exec true\\')).toEqual([
+      {line: 1, text: 'bindsym Mod4+x exec true'},
+    ]);
+  });
 });
 
 describe('substituteVariables', () => {
   it('substitutes longest names first and removes set lines', () => {
     const lines = logicalLines([
+      'bindsym $mod+1 workspace number $ws1',
+      'bindsym $mod+0 workspace number $ws10',
       'set $mod Mod4',
       'set $ws1 "1:I"',
       'set $ws10 "10:X"',
-      'bindsym $mod+1 workspace number $ws1',
-      'bindsym $mod+0 workspace number $ws10',
     ].join('\n'));
     const r = substituteVariables(lines);
     expect(r.diagnostics).toEqual([]);
     expect(r.lines).toEqual([
-      {line: 4, text: 'bindsym Mod4+1 workspace number "1:I"'},
-      {line: 5, text: 'bindsym Mod4+0 workspace number "10:X"'},
+      {line: 1, text: 'bindsym Mod4+1 workspace number "1:I"'},
+      {line: 2, text: 'bindsym Mod4+0 workspace number "10:X"'},
     ]);
   });
 
@@ -50,5 +62,25 @@ describe('substituteVariables', () => {
   it('rejects invalid variable names', () => {
     const r = substituteVariables(logicalLines('set $1bad x'));
     expect(r.diagnostics).toEqual([{line: 1, severity: 'error', message: 'invalid variable name $1bad'}]);
+  });
+
+  it('accepts hyphens and dots after the first variable-name character', () => {
+    const r = substituteVariables(logicalLines([
+      'set $ws-1 1:I',
+      'set $my.var x',
+      'bindsym Mod4+1 workspace $ws-1',
+      'bindsym Mod4+x exec $my.var',
+    ].join('\n')));
+    expect(r.diagnostics).toEqual([]);
+    expect(r.lines).toEqual([
+      {line: 3, text: 'bindsym Mod4+1 workspace 1:I'},
+      {line: 4, text: 'bindsym Mod4+x exec x'},
+    ]);
+  });
+
+  it('reports a missing set value and removes the set line', () => {
+    const r = substituteVariables(logicalLines('set $mod   '));
+    expect(r.lines).toEqual([]);
+    expect(r.diagnostics).toEqual([{line: 1, severity: 'error', message: 'set: missing value'}]);
   });
 });

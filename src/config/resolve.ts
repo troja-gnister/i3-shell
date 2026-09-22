@@ -145,6 +145,13 @@ export function resolve(parsed: ParseResult): ResolveResult {
         break;
       case 'ignored':
         break;
+      default: {
+        const unexpected: never = d;
+        diagnostics.push({
+          line: 0, severity: 'error',
+          message: 'unsupported internal directive: ' + JSON.stringify(unexpected),
+        });
+      }
     }
   }
 

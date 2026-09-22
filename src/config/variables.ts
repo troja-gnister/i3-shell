@@ -6,8 +6,8 @@ export interface SubstituteResult {
   diagnostics: Diagnostic[];
 }
 
-const SET_RE = /^set\s+(\$\S+)\s+([\s\S]*)$/;
-const NAME_RE = /^\$[A-Za-z_][A-Za-z0-9_]*$/;
+const SET_RE = /^set\s+(\S+)(?:\s+([\s\S]*))?$/;
+const NAME_RE = /^\$[A-Za-z_][A-Za-z0-9_.-]*$/;
 
 /**
  * Collects `set $name value` lines and substitutes the names textually in every other
@@ -20,13 +20,21 @@ export function substituteVariables(lines: LogicalLine[]): SubstituteResult {
   const diagnostics: Diagnostic[] = [];
 
   for (const l of lines) {
+    if (!/^set(?:\s|$)/.test(l.text)) {
+      rest.push(l);
+      continue;
+    }
     const m = SET_RE.exec(l.text);
     if (!m) {
-      rest.push(l);
+      diagnostics.push({line: l.line, severity: 'error', message: 'set: missing value'});
       continue;
     }
     if (!NAME_RE.test(m[1])) {
       diagnostics.push({line: l.line, severity: 'error', message: `invalid variable name ${m[1]}`});
+      continue;
+    }
+    if (m[2] === undefined || m[2].trim() === '') {
+      diagnostics.push({line: l.line, severity: 'error', message: 'set: missing value'});
       continue;
     }
     variables.set(m[1], m[2].trim());
