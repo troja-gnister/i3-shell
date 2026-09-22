@@ -406,11 +406,11 @@ export interface WindowSnapshot extends WindowInfo {
 
 Import the existing types from `tree/node`, `commands/model` and `runtime/model`. Snapshots contain arrays/values, never Maps, parents, functions or native objects. Before a usable topology exists, return `ready: false` and an empty workspace array; do not invent a monitor. Frame values in `windowsSnapshot()` come from current native observations, not the target rectangles.
 
-- [ ] **Create the deterministic engine fixture.** Move the existing config/key/settings fake behavior into `fakeEngine.ts`, preserving all current Phase 1 assertions except those intentionally changed below. Export `fakeEngine(): EngineFixture`, with `engine`, `calls: string[]`, `applied: Array<Map<WindowId, Rect>>`, `windows: Map<WindowId, WindowInfo>`, `add(id, patch?: Partial<WindowInfo>): void`, `change(id, patch, eventType): void`, `focus(id): void`, `remove(id): void`, `flush(): void`, `setNextLoad(loaded): void`, `setTopology(topology): void` and `onApply: ((id: WindowId) => void) | null`. All are test-only exports.
+- [x] **Create the deterministic engine fixture.** Move the existing config/key/settings fake behavior into `fakeEngine.ts`, preserving all current Phase 1 assertions except those intentionally changed below. Export `fakeEngine(): EngineFixture`, with `engine`, `calls: string[]`, `applied: Array<Map<WindowId, Rect>>`, `windows: Map<WindowId, WindowInfo>`, `add(id, patch?: Partial<WindowInfo>): void`, `change(id, patch, eventType): void`, `focus(id): void`, `remove(id): void`, `flush(): void`, `setNextLoad(loaded): void`, `setTopology(topology): void` and `onApply: ((id: WindowId) => void) | null`. All are test-only exports.
 
 Default windows use workspace 0, monitor 10, normal/tiled classification, rect `{x: 20, y: 40, width: 300, height: 200}`, false state flags, a unique title and `wmClass: 'fixture'`. Topology contains monitor 10 and work area `{x: 0, y: 30, width: 1000, height: 700}` for ten workspaces. `add/change/remove/focus` update native truth before delivering the corresponding event. The fake geometry writer records requests and updates frame truth, except when a test injects refusal/death. `flush()` drains a deterministic callback queue with a failure limit, never a real timer. Window operations record strings such as `kill:1` and `moveTo:1:2`.
 
-- [ ] **Write adoption and death-during-apply regressions.**
+- [x] **Write adoption and death-during-apply regressions.**
 
 ~~~ts
 it('adopts first-frame windows and retiles after removal during apply', () => {
@@ -432,8 +432,8 @@ it('adopts first-frame windows and retiles after removal during apply', () => {
 
 Also populate `f.windows` before start to test existing-window adoption. Iterate each workspace's adapter MRU list in its returned order, then explicitly restore its most recent selection; finally use native focus if tracked. This avoids accidentally selecting the oldest window because insertion updates focus. New windows select their inserted leaf/floating entry; background-workspace insertion must not change the active workspace.
 
-- [ ] **Run RED:** `npx vitest run test/unit/engine.test.ts test/unit/engine/lifecycle.test.ts test/unit/runtime/snapshot.test.ts`.
-- [ ] **Cut over ports and extension wiring atomically.** Construct Geometry with a resolver closure, then ManagedWindows with geometry's monitor-id lookup, then Engine. Start window tracking before Engine adoption. Connect workspace count/active events to `onWorkspacesChanged`, `Main.layoutManager::monitors-changed` to `onMonitorsChanged`, and `display::workareas-changed` to ordinary `relayout`; work-area notifications are not another forced-generation exception. Supply DeferredPort using guarded, cancellable GLib idle sources; cancel all outstanding sources on teardown. Implement indicator `setPills` by forwarding to existing `setWorkspaces`, and `setVisible` through show/hide. Remove the old Windows wrapper and all three focused-window helpers. Route existing kill/fullscreen/move-to-workspace commands to selected ids now; Task 6 expands and tests every command.
+- [x] **Run RED:** `npx vitest run test/unit/engine.test.ts test/unit/engine/lifecycle.test.ts test/unit/runtime/snapshot.test.ts`.
+- [x] **Cut over ports and extension wiring atomically.** Construct Geometry with a resolver closure, then ManagedWindows with geometry's monitor-id lookup, then Engine. Start window tracking before Engine adoption. Connect workspace count/active events to `onWorkspacesChanged`, `Main.layoutManager::monitors-changed` to `onMonitorsChanged`, and `display::workareas-changed` to ordinary `relayout`; work-area notifications are not another forced-generation exception. Supply DeferredPort using guarded, cancellable GLib idle sources; cancel all outstanding sources on teardown. Implement indicator `setPills` by forwarding to existing `setWorkspaces`, and `setVisible` through show/hide. Remove the old Windows wrapper and all three focused-window helpers. Route existing kill/fullscreen/move-to-workspace commands to selected ids now; Task 6 expands and tests every command.
 
 Seed Geometry's monitor lookup with `geometry.topology()` before starting the tracker; if no usable topology exists, retain ready windows for later adoption rather than inventing a monitor id. The settings bridge uses the effective count even when the parsed config count was zero:
 
@@ -442,7 +442,7 @@ apply: (config, workspaceCount) => {
   overrides.apply(planOverrides({...config, workspaceCount}));
 },
 ~~~
-- [ ] **Implement commit in the specified order.**
+- [x] **Implement commit in the specified order.**
 
 ~~~text
 accept/queue the engine mutation
@@ -460,13 +460,13 @@ Keep the container rect map for resize commands. Raise tiled subtrees only when 
 
 `relayout()` observes fresh native frames and recomputes layout through this pipeline; unchanged targets retain their existing retry allowance. Pill occupancy includes managed minimized windows even though they are detached from the tree. Test that minimizing a workspace's only window does not make its pill appear empty. Catch/log each subscriber failure independently so one failed listener cannot interrupt remaining notifications or leave the engine's committing flag set.
 
-- [ ] **Implement lifecycle membership and acknowledgements.** Keep maps for manual floating membership, minimized membership, expected workspace and engine-requested focus, plus a set of pending engine unmaximizations. Removal clears every map and pending frame read for that id. Minimize detaches and remembers membership; unminimize inserts as new, retaining floating status if applicable. Fullscreen keeps its tree slot. Catch maximization only for tiled windows outside fullscreen/minimized states; call native `unmaximize()` once, and force only after both axes are false. A false/gone native operation clears its pending marker.
+- [x] **Implement lifecycle membership and acknowledgements.** Keep maps for manual floating membership, minimized membership, expected workspace and engine-requested focus, plus a set of pending engine unmaximizations. Removal clears every map and pending frame read for that id. Minimize detaches and remembers membership; unminimize inserts as new, retaining floating status if applicable. Fullscreen keeps its tree slot. Catch maximization only for tiled windows outside fullscreen/minimized states; call native `unmaximize()` once, and force only after both axes are false. A false/gone native operation clears its pending marker.
 
 Before activating a selected leaf's descendant, record expected focus. A matching activation acknowledgement preserves a selected ancestor; a different genuine native focus selects that leaf/floating id. Deduplicate equal focus notifications even after the acknowledgement is consumed. Null/untracked native focus does not silently replace the engine selection. On unmanaged, source selection falls to the Tree facade's repaired selection and activates its surviving focused descendant.
 
 Before workspace moves, record expected destinations for every selected id. A matching event only clears its acknowledgement. A mismatching event invalidates the old acknowledgement and performs the ordinary external detach/insert using current native truth. Read current workspace at event handling time; do not replay captured stale values. Do not add a forced geometry generation for workspace changes.
 
-- [ ] **Test all four invalidations and native-event races.**
+- [x] **Test all four invalidations and native-event races.**
 
 ~~~ts
 it.each(['fullscreen', 'minimized', 'maximized'] as const)(
@@ -488,12 +488,12 @@ it.each(['fullscreen', 'minimized', 'maximized'] as const)(
 
 For maximization, configure the fake `unmaximize` to keep both flags true until the test sends the completion notifications; assert one unmaximize call, one fresh generation, and no force after only one axis clears. A separate monitor-change test uses identical work areas and asserts fresh application. Assert workspace move acknowledgement with identical target rect emits no geometry; external move reconciles membership exactly once. Include mismatches while fullscreen/minimized, stale queued generation observations, first-frame/unmanaged duplicates, a stubborn client, and no usable monitors followed by a valid topology.
 
-- [ ] **Implement reload/restart/count changes with their regression tests.** Validate the new config before mutation. Resolve effective N from the config or current count (1–36); apply overrides without `restoreAll()` between valid configurations. Reconfigure the existing Tree, recording the returned expected workspace destinations before native count changes. On shrink, issue those per-id workspace moves to the last retained workspace before reducing the native count, so Mutter's own removal fallback cannot choose a different destination and flatten the transferred structure. Test this call order and matching acknowledgements. Preserve surviving nodes/percentages on reload. If work areas for newly created native workspaces have not arrived, publish `ready: false` and defer their geometry until count/work-area notification supplies them. Enforce the desired static count after external changes.
+- [x] **Implement reload/restart/count changes with their regression tests.** Validate the new config before mutation. Resolve effective N from the config or current count (1–36); apply overrides without `restoreAll()` between valid configurations. Reconfigure the existing Tree, recording the returned expected workspace destinations before native count changes. On shrink, issue those per-id workspace moves to the last retained workspace before reducing the native count, so Mutter's own removal fallback cannot choose a different destination and flatten the transferred structure. Test this call order and matching acknowledgements. Preserve surviving nodes/percentages on reload. If work areas for newly created native workspaces have not arrived, publish `ready: false` and defer their geometry until count/work-area notification supplies them. Enforce the desired static count after external changes.
 
 Restart first requires a successful reload, then rebuilds from live windows using fresh initial classification and the same adapter ids. A rejected reload/restart preserves tree/config/grabs and selection; Task 6 adds nested-layout/pending-split regression fixtures once commands can construct those states. Add getter `lastLoadTime: number`, set from `ports.now()` when accepting the LoadedConfig, for the timestamp paired with existing `lastLoad`. Fix the stale “retrying once” message. Test count zero, grow/shrink, rejected restart, cache-source notification and native activation returning false.
 
-- [ ] **Verify GREEN:** engine/snapshot suites, `npm test`, `npm run typecheck`, `npm run check:layer0`, `npm run lint:tree`. Existing Phase 1 focused-window fake assertions become id-based assertions; delete only the obsolete “tiling not implemented” expectations.
-- [ ] **Commit:** `feat(engine): integrate tree lifecycle and geometry commits`.
+- [x] **Verify GREEN:** engine/snapshot suites, `npm test`, `npm run typecheck`, `npm run check:layer0`, `npm run lint:tree`. Existing Phase 1 focused-window fake assertions become id-based assertions; delete only the obsolete “tiling not implemented” expectations.
+- [x] **Commit:** `feat(engine): integrate tree lifecycle and geometry commits`.
 
 ## Task 6: Dispatch all Phase 2 commands from the engine selection
 
@@ -889,7 +889,7 @@ Self-review corrected the void-returning Tree.check assertions, stable-monitor l
 
 ## Execution record
 
-Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–4 are complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
+Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–5 are complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
 
 Ruling: Run the complex nested-layout/pending-split reload and selected-parent acknowledgement regressions in Task 6, once tree command dispatch exists. Task 5 still proves flat-tree retention and native lifecycle transitions. This avoids test-only mutation hooks or prematurely implementing the next task. Cost if wrong: complex reload defects may be discovered one task later; Task 6 must close the proof before completion.
 
@@ -899,5 +899,6 @@ Ruling: Run the complex nested-layout/pending-split reload and selected-parent a
 | 2 — topology migration | GPT-5.6 Sol / GPT-5.6 Sol | `0818493` | 16 final focused tests; 253 full-suite tests; tree lint; both TypeScript programs; diff check | Spec compliant, quality approved; no findings. |
 | 3 — window tracking | GPT-5.6 Sol / GPT-5.6 Sol | `caf75b6`, `3edcdce` | 29 initial focused tests; 282 full-suite tests; 7 focused fix tests; both TypeScript programs; Layer 0; diff check | MRU enumeration finding fixed and re-reviewed clean. Minor native enum-mapping test coverage deferred to final review. |
 | 4 — geometry reconciliation | GPT-5.6 Sol / GPT-5.6 Sol | `3f70af4`, `1e4a455` | 11 initial focused tests; 294 full-suite tests; 11 topology/backend fix tests; both TypeScript programs; Layer 0; staged diff check | Partial topology publication finding fixed with a GI-free transactional collector and re-reviewed clean. |
+| 5 — engine lifecycle | GPT-6 Astra / GPT-6 Astra; fix re-review GPT-5.6 Sol | `603bc6f`, `f439d62` | 34 initial focused tests; 324 full-suite tests; 41 focused fix tests; both TypeScript programs; Layer 0; tree lint; staged diff check | Three focus/disposal race findings fixed with seven regressions and re-reviewed clean. |
 
 Ruling: Use Meta.TabList.NORMAL_ALL_MRU for per-workspace adoption instead of the NORMAL example in spec §8.5. The installed Mutter 18 API explicitly guarantees pure MRU order for this variant, including minimized windows; classification still decides which windows are managed. — Preserves the binding MRU intent rather than relying on unordered Workspace.list_windows or NORMAL grouping behavior. — Cost if wrong: adoption may include additional eligible windows or choose a different initial order; native integration must verify adoption and minimized-window behavior.
