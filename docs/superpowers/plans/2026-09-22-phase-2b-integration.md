@@ -575,7 +575,7 @@ Explicit x/y are absolute logical coordinates; center uses the selected window's
 - `DebugObject` takes Engine in addition to SessionWatcher and adds `Relayout(): void` calling `engine.relayout()`. Retain `PressKey` and `SimulateSessionMode` exclusively in test builds.
 - `sessionState.ts` exports `SessionState(initial: boolean, onLocked: () => void, onUnlocked: () => void)`, getter `isLocked` and `update(locked: boolean): void`; the native watcher supplies `isLocked || !hasWindows`.
 
-- [ ] **Write initial-lock and teardown regressions.**
+- [x] **Write initial-lock and teardown regressions.**
 
 ~~~ts
 const f = fakeEngine();
@@ -598,9 +598,9 @@ expect(f.calls.filter(c => c === 'settings.restore')).toHaveLength(1);
 
 Also enter resize before lock; verify default mode, zero grabs, hidden indicator, same tree after unlock and regrabged default bindings. Locked reload/start must never install bare-key grabs. Do not invent a fifth forced-generation event for unlock: read actual frames and reconcile under the existing generation, retaining the tree.
 
-- [ ] **Run RED:** focused lifecycle/session/control suites.
-- [ ] **Wire seeded session state and cleanup order.** Construct SessionWatcher before `engine.start(session.isLocked)`. Hide/show the indicator from the seeded state and each transition. On disable, stop publishing D-Bus, mark Engine stopped and cancel deferred work before restoring settings, then destroy windows/key/indicator adapters and disconnect all remaining signals. Retain partial-enable rollback. Per-window callbacks and all D-Bus method bodies, including debug methods, catch/log and return valid failure replies rather than throwing into Shell.
-- [ ] **Implement JSON methods and signal subscription.**
+- [x] **Run RED:** focused lifecycle/session/control suites.
+- [x] **Wire seeded session state and cleanup order.** Construct SessionWatcher before `engine.start(session.isLocked)`. Hide/show the indicator from the seeded state and each transition. On disable, stop publishing D-Bus, mark Engine stopped and cancel deferred work before restoring settings, then destroy windows/key/indicator adapters and disconnect all remaining signals. Retain partial-enable rollback. Per-window callbacks and all D-Bus method bodies, including debug methods, catch/log and return valid failure replies rather than throwing into Shell.
+- [x] **Implement JSON methods and signal subscription.**
 
 ~~~xml
 <method name="GetTree"><arg type="s" direction="out" name="json"/></method>
@@ -610,9 +610,9 @@ Also enter resize before lock; verify default mode, zero grabs, hidden indicator
 
 Subscribe when exporting; emit with `new GLib.Variant('()', [])` after each completed commit; unsubscribe before unexporting. `GetState` adds `pills` from the same state sent to the indicator. `ready` requires both usable engine topology and Shell NORMAL/OVERVIEW action mode. `GetConfigStatus` includes `loadTime` (the accepted config's Unix millisecond timestamp) alongside its existing source/path/diagnostics. JSON error replies retain the existing `{error: ...}` convention. Test snapshots are immutable copies, contain no parent cycles, include leaf titles/wm-classes, expose actual frames separately from expected frames, and signal exactly after committed state becomes readable.
 
-- [ ] **Handle D-Bus name loss without a callback leak.** Supply a guarded `name_lost` callback to `bus_own_name`. On failed acquisition/loss, log and notify once, unsubscribe/unexport the control/debug objects, release ownership, and leave core keyboard/tiling behavior running. Teardown after name loss remains idempotent; acquiring a name owned by another process must not stop that process or replace its owner. Test this with an injected ownership/export facade or in the private-bus scenario in Task 10.
-- [ ] **Verify GREEN:** focused suites, full tests/typecheck, release build. Assert the release bundle contains none of `name="org.i3shell.Debug"`, `SimulateSessionMode` or the debug-only `Relayout` method implementation; test build exports all three debug methods. Preserve dead-code elimination at both construction and export sites.
-- [ ] **Commit:** `feat(control): expose tree state and harden session lifecycle`.
+- [x] **Handle D-Bus name loss without a callback leak.** Supply a guarded `name_lost` callback to `bus_own_name`. On failed acquisition/loss, log and notify once, unsubscribe/unexport the control/debug objects, release ownership, and leave core keyboard/tiling behavior running. Teardown after name loss remains idempotent; acquiring a name owned by another process must not stop that process or replace its owner. Test this with an injected ownership/export facade or in the private-bus scenario in Task 10.
+- [x] **Verify GREEN:** focused suites, full tests/typecheck, release build. Assert the release bundle contains none of `name="org.i3shell.Debug"`, `SimulateSessionMode` or the debug-only `Relayout` method implementation; test build exports all three debug methods. Preserve dead-code elimination at both construction and export sites.
+- [x] **Commit:** `feat(control): expose tree state and harden session lifecycle`.
 
 ## Task 8: Finish bounded input/config carry-forward fixes
 
@@ -890,7 +890,7 @@ Self-review corrected the void-returning Tree.check assertions, stable-monitor l
 
 ## Execution record
 
-Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–6 are complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
+Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–7 are complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
 
 Ruling: Run the complex nested-layout/pending-split reload and selected-parent acknowledgement regressions in Task 6, once tree command dispatch exists. Task 5 still proves flat-tree retention and native lifecycle transitions. This avoids test-only mutation hooks or prematurely implementing the next task. Cost if wrong: complex reload defects may be discovered one task later; Task 6 must close the proof before completion.
 
@@ -902,6 +902,7 @@ Ruling: Run the complex nested-layout/pending-split reload and selected-parent a
 | 4 — geometry reconciliation | GPT-5.6 Sol / GPT-5.6 Sol | `3f70af4`, `1e4a455` | 11 initial focused tests; 294 full-suite tests; 11 topology/backend fix tests; both TypeScript programs; Layer 0; staged diff check | Partial topology publication finding fixed with a GI-free transactional collector and re-reviewed clean. |
 | 5 — engine lifecycle | GPT-6 Astra / GPT-6 Astra; fix re-review GPT-5.6 Sol | `603bc6f`, `f439d62` | 34 initial focused tests; 324 full-suite tests; 41 focused fix tests; both TypeScript programs; Layer 0; tree lint; staged diff check | Three focus/disposal race findings fixed with seven regressions and re-reviewed clean. |
 | 6 — selection-based commands | GPT-5.6 Sol / GPT-5.6 Sol | `d0117df` | 15 command tests; 55 focused compatibility tests; 346 full-suite tests; both TypeScript programs; Layer 0; staged diff check | Spec compliant, quality approved; no findings. Deferred nested reload/pending-split and selected-parent proofs completed. |
+| 7 — D-Bus and session lifecycle | GPT-5.6 Sol / GPT-5.6 Sol | `e477139` | 43 focused tests; 358 full-suite tests; both TypeScript programs; Layer 0; test/release builds and Debug exclusions; staged diff check | Spec compliant, quality approved; no findings. Native name-loss ownership proof assigned to Task 10. |
 
 Ruling: Use Meta.TabList.NORMAL_ALL_MRU for per-workspace adoption instead of the NORMAL example in spec §8.5. The installed Mutter 18 API explicitly guarantees pure MRU order for this variant, including minimized windows; classification still decides which windows are managed. — Preserves the binding MRU intent rather than relying on unordered Workspace.list_windows or NORMAL grouping behavior. — Cost if wrong: adoption may include additional eligible windows or choose a different initial order; native integration must verify adoption and minimized-window behavior.
 
