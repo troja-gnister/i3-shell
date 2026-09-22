@@ -1,5 +1,6 @@
 import type {Direction, Layout} from '../commands/model';
 import {nextFocus, type Wrapping} from './focus';
+import {resizeCon, type ResizeRequest} from './resize';
 import {moveCon, setLayout, splitCon, toggleLayout} from './operations';
 import {
   attach,
@@ -11,6 +12,7 @@ import {
   type Con,
   type LeafCon,
   type MonitorId,
+  type Rect,
   type Selection,
   type SplitCon,
   type WindowId,
@@ -179,6 +181,12 @@ export class Tree {
     this.select(selection.con);
     this.normalizeWorkspace(workspace, undefined, ancestorChain(selection.con.parent));
     return true;
+  }
+
+  resize(request: ResizeRequest, rectangles: ReadonlyMap<Con, Rect>): boolean {
+    const selection = this.selection();
+    if (selection?.kind !== 'tiled') return false;
+    return resizeCon(selection.con, request, rectangles);
   }
 
   select(con: Con): void {
