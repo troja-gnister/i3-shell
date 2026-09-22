@@ -13,7 +13,7 @@
     "lint:tree": "eslint src/tree test/unit/tree",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:integration": "bash test/integration/nested.sh -- bash test/integration/phase1-checks.sh"
+    "test:integration": "bash test/integration/run.sh"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",

@@ -70,7 +70,17 @@ wait_for 'private Wayland socket' "$SHELL_PID" 10 test -S "$XDG_RUNTIME_DIR/$WAY
 control_ready() {
   timeout 1s gdbus introspect --session --dest org.i3shell.Control --object-path /org/i3shell/Control >/dev/null 2>&1
 }
-if ! wait_for 'extension control service' "$SHELL_PID" 30 control_ready; then
+shell_ready() {
+  # Raw introspection only: property reads can block during Shell startup.
+  timeout 2s gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell \
+    --method org.freedesktop.DBus.Introspectable.Introspect >/dev/null 2>&1
+}
+if [[ "${I3SHELL_DISABLED:-0}" == 1 ]]; then
+  # enabled-extensions is empty, so neither the enable log line nor the Control
+  # name can appear until the scenario itself enables the extension. Waiting for
+  # either here would deadlock before the scenario ever runs.
+  wait_for 'gnome-shell session bus name' "$SHELL_PID" 30 shell_ready
+elif ! wait_for 'extension control service' "$SHELL_PID" 30 control_ready; then
   {
     echo '--- private session bus names ---'
     timeout 2s gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \

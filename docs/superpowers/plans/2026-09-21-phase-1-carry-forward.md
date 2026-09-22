@@ -4,7 +4,7 @@ Phase 1 (Foundation) was executed from `docs/superpowers/plans/2026-09-20-phase-
 (29 commits on top of `e4628e2`). Every task passed a spec + quality review; a whole-branch review ended
 "with fixes", the fix wave landed (`0da16d4`, `bc21876`, `f79660f`) and its scoped re-review was clean.
 Automated acceptance (`npm run test:integration`: A1, A3, A4, A5, A7 in a nested headless shell) is green.
-**The live walk in `docs/acceptance/phase-1.md` (A1–A7 on the real desktop) passed by user report on 2026-09-21.** No Phase 1 findings were reported. Phase 2A was subsequently implemented, reviewed and merged into `main`, with 234 tests passing. As of 2026-09-22, [Phase 2B](2026-09-22-phase-2b-integration.md) Tasks 1–9 are implemented and independently reviewed on `phase-2b`, with 371 tests and private native smoke/Phase 1 checks passing. The user paused work before Task 10 implementation. See the [handoff](../../handoff-2026-09-22.md); full A8–A14 automation/live acceptance and whole-branch review remain pending.
+**The live walk in `docs/acceptance/phase-1.md` (A1–A7 on the real desktop) passed by user report on 2026-09-21.** No Phase 1 findings were reported. Phase 2A was subsequently implemented, reviewed and merged into `main`, with 234 tests passing. As of 2026-09-22, [Phase 2B](2026-09-22-phase-2b-integration.md) is fully implemented on `phase-2b`, with 378 tests and the complete private native suite passing (Phase 1 checks plus 141 Phase 2 assertions). A8–A14 **live** acceptance ([docs/acceptance/phase-2.md](../../acceptance/phase-2.md)) and the whole-branch review remain pending.
 
 ## Follow-up analysis (2026-09-21, baseline `a41638f`)
 
@@ -52,11 +52,28 @@ Phase 4 target arrangements: laptop alone (`eDP-1` was the only connected output
 - Completed in Phase 2B Tasks 5–6: numeric-name workspace, cache-source and activation-result regressions, together with selected-container command and reload/restart coverage.
 - Completed in Phase 2B Task 8: the indicator accumulates `Clutter.ScrollDirection.SMOOTH` vertical deltas and resets that state on discrete scrolling, hide, and destroy. CSS classes for `active`/`occupied`/`empty` remain cosmetic only.
 - Phase 2B Task 8 revokes every external accelerator with `allowKeybinding(name, NONE)` before ungrabbing it, while `setBindings()` continues to grab only the current mode. GNOME 50 has no public API to delete the corresponding permission-map key; residual entries have value `NONE`, remain inert until Shell restarts, and must not be removed through `Main.wm` private fields.
-- Completed in Phase 2B Task 7: seed initial lock state and guard D-Bus name loss while leaving core behavior running. The real private-bus ownership-conflict proof remains Task 10.
+- Completed in Phase 2B Task 7, proven natively in Task 10: seed initial lock state and guard D-Bus name loss while leaving core behavior running. With another client holding `org.i3shell.Control`, the extension reports exactly one warning, notifies once, withdraws its control export, keeps its 65 grabs and keeps tiling; after the rival releases the name a disable/enable cycle restores the interface. Task 10 also corrected the severity: the report was a `CRITICAL` with a synthetic stack trace and is now a warning.
 - `esbuild` `minifySyntax` remains cosmetic only. README recovery steps were added in the pause documentation: reinstall the same UUID/schema, enable to load saved originals, then disable; never erase `overridden-settings` before restoration.
-- A2 is completed by Phase 2B Tasks 7/9: committed pills in `GetState`, with native names/active/occupied assertions. **A6 native before/after settings restoration and repeated enable remain Task 10**, using a genuinely initially-disabled private session.
+- A2 is completed by Phase 2B Tasks 7/9: committed pills in `GetState`, with native names/active/occupied assertions. **A6 is completed by Task 10**: a genuinely initially-disabled private session captures 234 real GNOME setting values before the first enable, asserts 32 colliding keys cleared with nothing ever added, asserts every original restored on disable while the live window frames are untouched, then asserts the same clearing on re-enable with 65 grabs and the live windows re-adopted.
 
 Phase 2B Task 9 also fixed native teardown failures found by real GTK windows: exclude retiring windows at `unmanaging`, retain safe MRU enumeration during teardown, publish removal at `unmanaged`, and invalidate first-frame cleanup on actor destruction. Native smoke and retained Phase 1 checks pass; release `make install` completed. The full execution record retains all six Phase 2B rulings and their costs, including the private `--no-x11` coverage limitation.
+
+## Open decision for the user (found by Phase 2B Task 10)
+
+**Accelerators claimed by another external grabber outside the five schemas of spec §13.** IBus takes
+`<Super>semicolon` (`org.freedesktop.ibus.panel.emoji hotkey`) and `<Super>space`
+(`org.freedesktop.ibus.general.hotkey triggers`) through the shell's `GrabAccelerators` — the same
+external-grab mechanism i3-shell uses — and our override scan never sees them. In the reference config
+those are `focus right` and `focus mode_toggle`, so the impact is concrete. Established by experiment:
+with IBus present a varying subset of our accelerators never dispatches; with IBus absent all twelve
+probed accelerators dispatch 3/3. The mechanism for the keys IBus does *not* claim is unconfirmed.
+Three options, none taken unilaterally: detect and warn when a configured accelerator never arrives;
+extend the override scan beyond the five schemas; or document only. The nested harness suppresses IBus
+so the suite is deterministic, and the Phase 2 live checklist covers those two keys by hand.
+
+**Compositor signals during shutdown.** `workareas-changed` still drives a full `commit()` while the
+session is tearing down, so `geometry.apply` can call `move_resize_frame` on windows being destroyed.
+Task 10 fixed the indicator half of this (the observed criticals) but did not widen the change.
 
 ## Deferred to Phase 4
 

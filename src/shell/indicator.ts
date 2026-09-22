@@ -22,6 +22,9 @@ export class Indicator implements IndicatorPort {
   private readonly _pills: St.Button[] = [];
   private _states: PillState[] = [];
   private _colors: Colors;
+  /** The shell destroys the panel before disable() runs at shutdown; GJS then
+   * logs a critical for every property written to a disposed actor. */
+  private _destroyed = false;
   private readonly _smoothScroll = new SmoothScroll();
 
   constructor(
@@ -56,25 +59,30 @@ export class Indicator implements IndicatorPort {
       }
       return Clutter.EVENT_PROPAGATE;
     }));
+    this._button.connect('destroy', guard('indicator destroy', () => { this._destroyed = true; }));
     Main.panel.addToStatusArea('i3-shell', this._button, 0, 'left');
     this.hideActivities();
   }
 
   /** GNOME's own workspace indicator (the "Activities" dots) is redundant next to the pills. */
   hideActivities(): void {
+    if (this._destroyed) return;
     Main.panel.statusArea.activities?.container.hide();
   }
 
   showActivities(): void {
+    if (this._destroyed) return;
     Main.panel.statusArea.activities?.container.show();
   }
 
   setColors(colors: Colors): void {
     this._colors = colors;
+    if (this._destroyed) return;
     this._restyle();
   }
 
   setMode(name: string | null): void {
+    if (this._destroyed) return;
     if (name === null) {
       this._modeLabel.hide();
     } else {
@@ -93,6 +101,8 @@ export class Indicator implements IndicatorPort {
   }
 
   setWorkspaces(states: PillState[]): void {
+    this._states = states;
+    if (this._destroyed) return;
     while (this._pills.length > states.length) {
       const pill = this._pills.pop() as St.Button;
       pill.destroy();
@@ -104,26 +114,29 @@ export class Indicator implements IndicatorPort {
       this._box.insert_child_at_index(pill, index);   // pills stay before the mode label
       this._pills.push(pill);
     }
-    this._states = states;
     this._restyle();
   }
 
   hide(): void {
     this._smoothScroll.reset();
+    if (this._destroyed) return;
     this._button.hide();
   }
 
   show(): void {
+    if (this._destroyed) return;
     this._button.show();
   }
 
   destroy(): void {
     this._smoothScroll.reset();
+    if (this._destroyed) return;
     this.showActivities();
     this._button.destroy();
   }
 
   private _restyle(): void {
+    if (this._destroyed) return;
     const c = this._colors;
     this._states.forEach((state, i) => {
       const pill = this._pills[i];

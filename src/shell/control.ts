@@ -145,7 +145,11 @@ export class DBusControl {
         if (this._destroyed || this._nameLossHandled) return;
         this._nameLossHandled = true;
         this._stopPublishing(true);
-        log.error(`D-Bus name ${name} was not acquired or was lost`, new Error('name ownership unavailable'));
+        // A rival owner is an environmental condition we handle, not a
+        // programming error: console.error would surface as a GNOME CRITICAL
+        // and claim the extension had failed when only this optional control
+        // surface is unavailable. The user is still notified once.
+        log.warn(`D-Bus name ${name} was not acquired or was lost`);
         notifyNameLoss('i3-shell D-Bus unavailable', `${name} was not acquired; tiling and keybindings remain active`);
       });
       this._ownerId = Gio.bus_own_name(Gio.BusType.SESSION, BUS_NAME, Gio.BusNameOwnerFlags.NONE, null, null, nameLost);
