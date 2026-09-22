@@ -422,7 +422,7 @@ DIALOG, MODAL_DIALOG, UTILITY and transient application windows are tracked in t
 
 ### 8.5 Adoption on enable / restart
 
-`global.get_window_actors()` filtered by §8.2, inserted per workspace in MRU order (`display.get_tab_list(Meta.TabList.NORMAL, workspace)`) so the most recent window is `focused`. The current GNOME focus window becomes the global `focused` if tiled. Then commit.
+`global.get_window_actors()` filtered by §8.2, inserted per workspace in MRU order (`display.get_tab_list(Meta.TabList.NORMAL_ALL_MRU, workspace)`) so the most recent window is `focused`. The current GNOME focus window becomes the global `focused` if tiled. Then commit.
 
 ## 9. Workspaces
 

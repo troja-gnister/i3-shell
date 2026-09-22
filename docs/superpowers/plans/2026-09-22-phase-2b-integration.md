@@ -197,7 +197,7 @@ Also assert that failed resets retain the original; non-default originals use th
 - Produces `Tree.reconfigure(workspaceCount: number, monitors: readonly MonitorId[], primary: MonitorId): Map<WindowId, number>`. The returned map lists only windows whose workspace changed.
 - Existing monitor ids/root objects survive when present in the new topology. No root is attached as a child; transferred root contents get a newly allocated non-root wrapper when needed.
 
-- [ ] **Write the vanished-monitor and shrinking-workspace tests.**
+- [x] **Write the vanished-monitor and shrinking-workspace tests.**
 
 ~~~ts
 it('appends vanished-root contents under the primary without losing descendants', () => {
@@ -230,10 +230,10 @@ it('moves removed workspace contents to the last retained workspace', () => {
 ~~~
 
 `Tree.check()` returns void and throws on an invalid tree; preserve that existing API.
-- [ ] **Run RED:** `npx vitest run test/unit/tree/topology.test.ts`. Missing `reconfigure` fails.
-- [ ] **Implement the transaction.** Validate count, unique nonnegative monitor ids and primary membership before any mutation. Add missing roots/workspaces. In each surviving workspace, append each vanished root's contents under its primary root in old monitor iteration order. Preserve subtree layout, percentages, descendant ids and focus, allowing the already-approved normalization rules.
-- [ ] **Implement count changes.** Growing adds empty workspaces. Shrinking appends each removed workspace's monitor contents to corresponding roots of index `workspaceCount - 1`, then appends its floating MRU list without duplicates. Record workspace moves for every affected id. Clamp the active index; preserve a moved active selection, otherwise retain the destination's selection. Normalize and repair ownership before returning.
-- [ ] **Implement root-content transfer inside the Tree module.** Validate the complete target topology first, then use this helper; subsequent normalization uses existing Tree rules.
+- [x] **Run RED:** `npx vitest run test/unit/tree/topology.test.ts`. Missing `reconfigure` fails.
+- [x] **Implement the transaction.** Validate count, unique nonnegative monitor ids and primary membership before any mutation. Add missing roots/workspaces. In each surviving workspace, append each vanished root's contents under its primary root in old monitor iteration order. Preserve subtree layout, percentages, descendant ids and focus, allowing the already-approved normalization rules.
+- [x] **Implement count changes.** Growing adds empty workspaces. Shrinking appends each removed workspace's monitor contents to corresponding roots of index `workspaceCount - 1`, then appends its floating MRU list without duplicates. Record workspace moves for every affected id. Clamp the active index; preserve a moved active selection, otherwise retain the destination's selection. Normalize and repair ownership before returning.
+- [x] **Implement root-content transfer inside the Tree module.** Validate the complete target topology first, then use this helper; subsequent normalization uses existing Tree rules.
 
 ~~~ts
 function appendRootContents(source: SplitCon, target: SplitCon, allocate: AllocateSplit): void {
@@ -251,9 +251,9 @@ function appendRootContents(source: SplitCon, target: SplitCon, allocate: Alloca
 }
 ~~~
 
-- [ ] **Add validation/identity/property coverage.** Invalid count/duplicate monitors/missing primary leave a serialized tree unchanged. Monitor array order changes preserve root identities. Exercise simultaneously removed workspace and monitor, empty roots, selected split/root, floating-only workspaces and growth after shrink. Property model maintains an independent id→workspace map and checks every surviving id exactly once plus existing per-container layout properties.
-- [ ] **Verify GREEN:** `npx vitest run test/unit/tree`, `npm run lint:tree`, `npm run typecheck`.
-- [ ] **Commit:** `feat(tree): preserve contents across workspace and monitor changes`.
+- [x] **Add validation/identity/property coverage.** Invalid count/duplicate monitors/missing primary leave a serialized tree unchanged. Monitor array order changes preserve root identities. Exercise simultaneously removed workspace and monitor, empty roots, selected split/root, floating-only workspaces and growth after shrink. Property model maintains an independent id→workspace map and checks every surviving id exactly once plus existing per-container layout properties.
+- [x] **Verify GREEN:** `npx vitest run test/unit/tree`, `npm run lint:tree`, `npm run typecheck`.
+- [x] **Commit:** `feat(tree): preserve contents across workspace and monitor changes`.
 
 ## Task 3: Track real windows by id and first-frame lifetime
 
@@ -268,7 +268,7 @@ function appendRootContents(source: SplitCon, target: SplitCon, allocate: Alloca
 - `windows.ts` exports `class ManagedWindows extends WindowTracker<Meta.Window>` with constructor `(emit: (event: WindowEvent) => void, monitorId: (index: number) => MonitorId | undefined)`. The injected lookup may return undefined during monitor transitions; snapshots represent that as null, and the engine uses the valid topology's primary id when it needs a destination.
 - Keep the old Phase 1 `Windows` wrapper temporarily so this commit builds independently; Task 5 removes it and all focused-window methods in one port cutover.
 
-- [ ] **Pin classification priority.**
+- [x] **Pin classification priority.**
 
 ~~~ts
 const normal: WindowFacts = {
@@ -283,8 +283,8 @@ expect(classifyWindow({...normal, sticky: true})).toBeNull();
 ~~~
 
 Table-test dialog/modal/utility, attached dialogs, hidden-taskbar ordinary windows, and every ignored native type. Ordinary sticky/skip-taskbar windows that meet none of the explicit floating cases are ignored; transient/dialog/fixed-size normal windows use the specified floating path. Map unrecognized native window types to `ignored`.
-- [ ] **Run RED:** `npx vitest run test/unit/runtime/classify.test.ts test/unit/shell/windowTracker.test.ts`.
-- [ ] **Implement classification with ignored types first.**
+- [x] **Run RED:** `npx vitest run test/unit/runtime/classify.test.ts test/unit/shell/windowTracker.test.ts`.
+- [x] **Implement classification with ignored types first.**
 
 ~~~ts
 export function classifyWindow(f: WindowFacts): WindowKind | null {
@@ -295,7 +295,7 @@ export function classifyWindow(f: WindowFacts): WindowKind | null {
 }
 ~~~
 
-- [ ] **Build a fake backend and lifetime tests.** Define `fakeWindowBackend()` in the test file with `backend: WindowBackend<object>`, `create(facts: WindowFacts): object`, `draw(w: object): void`, `remove(w: object): void`, `focus(w: object | null): void`, `subscriptionCount(): number`, callback maps and recorded operations. Callbacks remove themselves through returned disposers.
+- [x] **Build a fake backend and lifetime tests.** Define `fakeWindowBackend()` in the test file with `backend: WindowBackend<object>`, `create(facts: WindowFacts): object`, `draw(w: object): void`, `remove(w: object): void`, `focus(w: object | null): void`, `subscriptionCount(): number`, callback maps and recorded operations. Callbacks remove themselves through returned disposers.
 
 ~~~ts
 const f = fakeWindowBackend();
@@ -319,9 +319,9 @@ expect(f.subscriptionCount()).toBe(0);
 ~~~
 
 Also test preexisting windows require no new first-frame, duplicate draw/unmanaged notifications, MRU ordering, untracked splash, no id reuse, operations after destroy, and removal of both map directions before emitting `removed`.
-- [ ] **Implement tracker and native bridge.** Keep pending native handles without tracked ids; classify and assign a monotonic id at first-frame, when transient/resizable properties are settled. Existing mapped windows take this readiness path immediately. Ignored windows get no id and release their pending subscriptions. Ready windows appear in `list/get`. Register unmanaged before first-frame, cancel every per-window subscription on removal, and deduplicate repeated ready/focus events. The bridge connects both window focus and display focus notifications and reports current focus truth. Include title and `get_wm_class()` in fresh plain snapshots; never leak `Meta.Window` to Engine.
-- [ ] **Verify GREEN:** focused tests, `npm run typecheck`, `npm run check:layer0`. Add `src/runtime` to purity roots now.
-- [ ] **Commit:** `feat(windows): add id-based window tracking and first-frame adoption`.
+- [x] **Implement tracker and native bridge.** Keep pending native handles without tracked ids; classify and assign a monotonic id at first-frame, when transient/resizable properties are settled. Existing mapped windows take this readiness path immediately. Ignored windows get no id and release their pending subscriptions. Ready windows appear in `list/get`. Register unmanaged before first-frame, cancel every per-window subscription on removal, and deduplicate repeated ready/focus events. The bridge connects both window focus and display focus notifications and reports current focus truth. Include title and `get_wm_class()` in fresh plain snapshots; never leak `Meta.Window` to Engine.
+- [x] **Verify GREEN:** focused tests, `npm run typecheck`, `npm run check:layer0`. Add `src/runtime` to purity roots now.
+- [x] **Commit:** `feat(windows): add id-based window tracking and first-frame adoption`.
 
 ## Task 4: Apply geometry with bounded reconciliation
 
@@ -889,10 +889,14 @@ Self-review corrected the void-returning Tree.check assertions, stable-monitor l
 
 ## Execution record
 
-Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Task 1 is complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
+Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–3 are complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
 
 Ruling: Run the complex nested-layout/pending-split reload and selected-parent acknowledgement regressions in Task 6, once tree command dispatch exists. Task 5 still proves flat-tree retention and native lifecycle transitions. This avoids test-only mutation hooks or prematurely implementing the next task. Cost if wrong: complex reload defects may be discovered one task later; Task 6 must close the proof before completion.
 
 | Task | Implementer / reviewer | Commit | Verification | Status |
 |---|---|---|---|---|
 | 1 — settings reconciliation | GPT-5.6 Sol / GPT-5.6 Sol | `d36bf17` | 10 focused tests; 239 full-suite tests; both TypeScript programs; Layer 0; diff check | Spec compliant, quality approved; no findings. Task 5 effective-count dependency confirmed in its contract. |
+| 2 — topology migration | GPT-5.6 Sol / GPT-5.6 Sol | `0818493` | 16 final focused tests; 253 full-suite tests; tree lint; both TypeScript programs; diff check | Spec compliant, quality approved; no findings. |
+| 3 — window tracking | GPT-5.6 Sol / GPT-5.6 Sol | `caf75b6`, `3edcdce` | 29 initial focused tests; 282 full-suite tests; 7 focused fix tests; both TypeScript programs; Layer 0; diff check | MRU enumeration finding fixed and re-reviewed clean. Minor native enum-mapping test coverage deferred to final review. |
+
+Ruling: Use Meta.TabList.NORMAL_ALL_MRU for per-workspace adoption instead of the NORMAL example in spec §8.5. The installed Mutter 18 API explicitly guarantees pure MRU order for this variant, including minimized windows; classification still decides which windows are managed. — Preserves the binding MRU intent rather than relying on unordered Workspace.list_windows or NORMAL grouping behavior. — Cost if wrong: adoption may include additional eligible windows or choose a different initial order; native integration must verify adoption and minimized-window behavior.
