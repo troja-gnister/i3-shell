@@ -1,4 +1,5 @@
-import type {Layout} from '../commands/model';
+import type {Direction, Layout} from '../commands/model';
+import {nextFocus, type Wrapping} from './focus';
 import {
   attach,
   descendFocused,
@@ -118,6 +119,30 @@ export class Tree {
       : ws.focusedCon ? {kind: 'tiled', con: ws.focusedCon} : null;
   }
 
+  focus(direction: Direction, wrapping: Wrapping): LeafCon | null {
+    const selection = this.selection();
+    if (selection?.kind !== 'tiled') return null;
+    const target = nextFocus(selection.con, direction, wrapping);
+    if (target) this.select(target);
+    return target;
+  }
+
+  focusParent(): Con | null {
+    const selection = this.selection();
+    if (selection?.kind !== 'tiled') return null;
+    const target = selection.con.parent;
+    if (target) this.select(target);
+    return target;
+  }
+
+  focusChild(): Con | null {
+    const selection = this.selection();
+    if (selection?.kind !== 'tiled' || selection.con.kind === 'leaf') return null;
+    const target = selection.con.focusedChild;
+    if (target) this.select(target);
+    return target;
+  }
+
   select(con: Con): void {
     const workspace = this.owner(con);
     workspace.focusedCon = con;
@@ -222,7 +247,9 @@ export class Tree {
       }
 
       if (workspace.focusedCon !== null && !owned.has(workspace.focusedCon))
-        throw new Error(`workspace ${workspaceIndex} tiled selection is outside its workspace`);
+        throw new Error(
+          `workspace ${workspaceIndex} tiled selection container ${workspace.focusedCon.id} is outside its workspace`,
+        );
     }
 
     for (const [workspaceIndex, workspace] of this.workspaces) {
@@ -323,8 +350,10 @@ function inspectCon(
     throw new Error(`monitor root ${con.id} must be a split container`);
 
   if (con.kind === 'leaf') {
-    assertWindowId(con.window);
-    if (windowIds.has(con.window)) throw new Error(`duplicate window id ${con.window}`);
+    if (!Number.isInteger(con.window) || con.window <= 0)
+      throw new Error(`container ${con.id} has invalid window id ${String(con.window)}`);
+    if (windowIds.has(con.window))
+      throw new Error(`container ${con.id} has duplicate window id ${con.window}`);
     windowIds.add(con.window);
     return;
   }

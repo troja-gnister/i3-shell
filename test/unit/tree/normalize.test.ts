@@ -276,6 +276,33 @@ describe('Tree invariant checks', () => {
     expect(() => missingFloating.check()).toThrow(/floating/i);
   });
 
+  it('identifies the selected container when it is outside its workspace', () => {
+    const tree = new Tree(2, [0]);
+    const foreign = tree.root(1, 0);
+    tree.workspace(0).focusedCon = foreign;
+
+    expect(() => tree.check()).toThrow(
+      new RegExp(`workspace 0.*container ${foreign.id}.*outside`, 'i'),
+    );
+  });
+
+  it('identifies the leaf container for invalid and duplicate window ids', () => {
+    const invalid = new Tree(1, [0]);
+    const invalidLeaf = invalid.insert(1, 0, 0);
+    invalidLeaf.window = 0;
+    expect(() => invalid.check()).toThrow(
+      new RegExp(`container ${invalidLeaf.id}.*window id 0`, 'i'),
+    );
+
+    const duplicate = new Tree(1, [0]);
+    const first = duplicate.insert(1, 0, 0);
+    const duplicateLeaf = duplicate.insert(2, 0, 0);
+    duplicateLeaf.window = first.window;
+    expect(() => duplicate.check()).toThrow(
+      new RegExp(`container ${duplicateLeaf.id}.*duplicate window id ${first.window}`, 'i'),
+    );
+  });
+
   it('rejects invalid, duplicate and tiled floating ids', () => {
     const invalid = new Tree(1, [0]);
     invalid.workspace(0).floating = [0];
