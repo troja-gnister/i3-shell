@@ -1,4 +1,6 @@
 import type Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import type {Command} from './commands/model';
 import {DEFAULT_COLORS} from './config/model';
@@ -9,14 +11,14 @@ import {ConfigLoader} from './shell/configLoader';
 import {DBusControl, DebugObject} from './shell/control';
 import {spawnShell} from './shell/exec';
 import {Indicator} from './shell/indicator';
-import type {PillState} from './shell/indicator';
 import {KeyBinder} from './shell/keys';
 import {log} from './shell/log';
 import {notify} from './shell/notify';
 import {SessionWatcher} from './shell/session';
 import {SettingsOverrides} from './shell/settings';
-import {SignalTracker} from './shell/util/signals';
-import {Windows} from './shell/windows';
+import {guard, SignalTracker} from './shell/util/signals';
+import {ManagedWindows} from './shell/windows';
+import {Geometry} from './shell/geometry';
 import {Workspaces} from './shell/workspaces';
 
 export default class I3ShellExtension extends Extension {
@@ -24,10 +26,10 @@ export default class I3ShellExtension extends Extension {
   private _engine: Engine | null = null;
   private _keys: KeyBinder | null = null;
   private _indicator: Indicator | null = null;
-  private _workspaces: Workspaces | null = null;
   private _dbus: DBusControl | null = null;
-  private _overrides: SettingsOverrides | null = null;
-  private _started = false;
+  private _windows: ManagedWindows | null = null;
+  private _geometry: Geometry | null = null;
+  private readonly _deferred = new Set<number>();
 
   enable(): void {
     try {
@@ -47,13 +49,12 @@ export default class I3ShellExtension extends Extension {
     const settings: Gio.Settings = this.getSettings();
     const overrides = new SettingsOverrides(settings);
     const loader = new ConfigLoader(settings);
-    const windows = new Windows();
-    this._overrides = overrides;
-    const workspaces = new Workspaces(tracker, () => {
-      this._enforceWorkspaceCount();
-      this._refreshPills();
-    });
-    this._workspaces = workspaces;
+    const geometry = new Geometry(id => this._windows?.resolve(id));
+    this._geometry = geometry;
+    geometry.topology();
+    const windows = new ManagedWindows(event => this._engine?.onWindowEvent(event), index => geometry.monitorId(index));
+    this._windows = windows;
+    const workspaces = new Workspaces(tracker, () => this._engine?.onWorkspacesChanged());
 
     const runNow = (command: Command): void => {
       this._engine?.run([command], global.get_current_time());
@@ -70,9 +71,23 @@ export default class I3ShellExtension extends Extension {
       keys,
       workspaces,
       windows,
+      geometry,
+      deferred: {
+        defer: callback => {
+          const token = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, guard('engine idle', () => {
+            if (!this._deferred.delete(token)) return GLib.SOURCE_REMOVE;
+            callback();
+            return GLib.SOURCE_REMOVE;
+          }));
+          this._deferred.add(token);
+          return token;
+        },
+        cancel: token => { if (this._deferred.delete(token)) GLib.source_remove(token); },
+      },
+      now: Date.now,
       indicator,
       settings: {
-        apply: config => { overrides.apply(planOverrides(config)); },
+        apply: (config, workspaceCount) => { overrides.apply(planOverrides({...config, workspaceCount})); },
         restoreAll: () => overrides.restoreAll(),
       },
       exec: spawnShell,
@@ -83,12 +98,13 @@ export default class I3ShellExtension extends Extension {
     this._engine = engine;
 
     const session = new SessionWatcher(tracker,
-      () => { engine.onLocked(); indicator.hide(); },
-      () => { engine.onUnlocked(); indicator.show(); indicator.hideActivities(); });
+      () => { engine.onLocked(); },
+      () => { engine.onUnlocked(); indicator.hideActivities(); });
 
-    engine.start();
-    this._started = true;
-    this._refreshPills();
+    tracker.connect(Main.layoutManager, 'monitors-changed', () => engine.onMonitorsChanged());
+    tracker.connect(global.display, 'workareas-changed', () => engine.relayout());
+    windows.start();
+    engine.start(session.isLocked);
     const debug = __I3SHELL_TEST__ ? new DebugObject(session) : null;
     this._dbus = new DBusControl(engine, debug);
     log.info(`ready: ${engine.state().grabbed} bindings grabbed, config from ${engine.lastLoad.source} (${engine.lastLoad.path})`);
@@ -100,44 +116,17 @@ export default class I3ShellExtension extends Extension {
     this._dbus = null;
     this._engine?.stop();
     this._engine = null;
+    for (const token of this._deferred) GLib.source_remove(token);
+    this._deferred.clear();
+    this._windows?.destroy();
+    this._windows = null;
+    this._geometry?.destroy();
+    this._geometry = null;
     this._keys?.destroy();
     this._keys = null;
     this._indicator?.destroy();
     this._indicator = null;
     this._tracker?.disconnectAll();
     this._tracker = null;
-    this._workspaces = null;
-    this._overrides = null;
-    this._started = false;
-  }
-
-  /** §9: if something else changed the workspace count, put the config's count back. */
-  private _enforceWorkspaceCount(): void {
-    const engine = this._engine;
-    const workspaces = this._workspaces;
-    const overrides = this._overrides;
-    if (!this._started || !engine || !workspaces || !overrides)
-      return;
-    const wanted = engine.config.workspaceCount;
-    if (wanted > 0 && workspaces.count !== wanted)
-      overrides.apply(planOverrides(engine.config));
-  }
-
-  private _refreshPills(): void {
-    const engine = this._engine;
-    const indicator = this._indicator;
-    const workspaces = this._workspaces;
-    if (!this._started || !engine || !indicator || !workspaces)
-      return;
-    const names = engine.config.workspaceNames;
-    const states: PillState[] = [];
-    for (let i = 0; i < workspaces.count; i++) {
-      states.push({
-        name: names.get(i + 1) ?? String(i + 1),
-        active: i === workspaces.activeIndex,
-        occupied: workspaces.isOccupied(i),
-      });
-    }
-    indicator.setWorkspaces(states);
   }
 }

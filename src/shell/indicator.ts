@@ -2,18 +2,15 @@ import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import type {PillState} from '../runtime/model';
 import type {Colors} from '../config/model';
 import {guard} from './util/signals';
-
-export interface PillState {
-  name: string;
-  active: boolean;
-  occupied: boolean;
-}
 
 export interface IndicatorPort {
   setMode(name: string | null): void;
   setColors(colors: Colors): void;
+  setPills(pills: PillState[]): void;
+  setVisible(visible: boolean): void;
 }
 
 /** One pill per workspace in the left panel box, plus a binding-mode label (i3bar look). */
@@ -74,6 +71,15 @@ export class Indicator implements IndicatorPort {
       this._modeLabel.text = name;
       this._modeLabel.show();
     }
+  }
+
+  setPills(states: PillState[]): void {
+    this.setWorkspaces(states);
+  }
+
+  setVisible(visible: boolean): void {
+    if (visible) this.show();
+    else this.hide();
   }
 
   setWorkspaces(states: PillState[]): void {

@@ -1,3 +1,9 @@
+import {Tree} from './tree/tree';
+import {descendFocused, leaves, walk, type Con, type Rect, type WindowId} from './tree/node';
+import {layoutWithRects, stackingOrder} from './tree/layout';
+import {RectReconciler} from './runtime/reconcile';
+import {serializeTree, type TreeSnapshot, type WindowSnapshot} from './runtime/snapshot';
+import type {WindowsPort, GeometryPort, DeferredPort, PillState, Topology, WindowInfo, WindowEvent} from './runtime/model';
 import {parseCommands} from './commands/parse';
 import type {Command, WorkspaceTarget} from './commands/model';
 import type {Binding, Colors, Config, Diagnostic} from './config/model';
@@ -21,18 +27,19 @@ export interface EnginePorts {
     readonly activeIndex: number;
     activate(index: number, timestamp: number): boolean;
   };
-  windows: {
-    killFocused(timestamp: number): boolean;
-    fullscreenFocused(action: 'toggle' | 'enable' | 'disable'): boolean;
-    moveFocusedToWorkspace(index: number): boolean;
-  };
+  windows: WindowsPort;
+  geometry: GeometryPort;
+  deferred: DeferredPort;
+  now(): number;
   settings: {
-    apply(config: Config): void;
+    apply(config: Config, workspaceCount: number): void;
     restoreAll(): void;
   };
   indicator: {
     setMode(name: string | null): void;
     setColors(colors: Colors): void;
+    setPills(pills: PillState[]): void;
+    setVisible(visible: boolean): void;
   };
   exec(command: string): void;
   notify(title: string, body: string): void;
@@ -57,6 +64,32 @@ export class Engine {
   private _loaded!: LoadedConfig;
   private _mode = 'default';
   private _locked = false;
+  private _started = false;
+  private _disposed = false;
+  private _lastLoadTime = 0;
+  private _workspaceCount = 1;
+  private _tree: Tree | null = null;
+  private _topology: Topology | null = null;
+  private _ready = false;
+  private _revision = 0;
+  private _committing = false;
+  private readonly _queued: Array<() => void> = [];
+  private readonly _windows = new Map<WindowId, WindowInfo>();
+  private readonly _manualFloating = new Map<WindowId, boolean>();
+  private readonly _minimized = new Map<WindowId, boolean>();
+  private readonly _expectedWorkspace = new Map<WindowId, number>();
+  private readonly _expectedFocus = new Set<WindowId>();
+  private _lastFocus: WindowId | null = null;
+  private readonly _unmaximizing = new Set<WindowId>();
+  private readonly _forced = new Set<WindowId>();
+  private _monitorInvalidation = false;
+  private readonly _reconciler = new RectReconciler();
+  private _containerRects = new Map<Con, Rect>();
+  private readonly _floatingRects = new Map<WindowId, Rect>();
+  private readonly _frameReads = new Map<WindowId, {token: number; generation: number | undefined}>();
+  private readonly _listeners = new Set<() => void>();
+  private readonly _raiseOrders = new Map<number, string>();
+
 
   constructor(private readonly _ports: EnginePorts) {}
 
@@ -72,16 +105,302 @@ export class Engine {
     return this._loaded;
   }
 
-  start(): void {
+  get lastLoadTime(): number { return this._lastLoadTime; }
+
+  start(locked = false): void {
+    if (this._started || this._disposed) return;
     const loaded = this._ports.loadConfig('initial');
-    if (!loaded.config)
-      throw new Error('loadConfig("initial") must always provide a config');
+    if (!loaded.config) throw new Error('loadConfig("initial") must always provide a config');
+    this._locked = locked;
+    this._started = true;
     this._applyLoaded(loaded);
   }
 
   stop(): void {
+    if (this._disposed) return;
+    this._disposed = true;
+    for (const read of this._frameReads.values()) this._ports.deferred.cancel(read.token);
+    this._frameReads.clear();
+    this._queued.length = 0;
+    this._listeners.clear();
     this._ports.keys.ungrabAll();
     this._ports.settings.restoreAll();
+  }
+
+  treeSnapshot(): TreeSnapshot {
+    if (!this._ready || !this._tree || !this._topology)
+      return {version: 1, revision: this._revision, ready: false,
+        activeWorkspace: this._ports.workspaces.activeIndex, workspaces: []};
+    return serializeTree(this._tree, this._topology, this._containerRects, this._windows, this._revision);
+  }
+
+  windowsSnapshot(): WindowSnapshot[] {
+    return [...this._windows.keys()].flatMap(id => {
+      const info = this._ports.windows.get(id);
+      if (!info) return [];
+      const status = this._reconciler.status(id);
+      return [{...info, rect: {...info.rect}, state: info.minimized ? 'minimized' : this._floating(info) ? 'floating' : 'tiled',
+        expectedRect: status?.expected ?? null, generation: status?.generation ?? null, stubborn: status?.stubborn ?? false}];
+    });
+  }
+
+  subscribeTreeChanged(callback: () => void): () => void {
+    if (!this._disposed) this._listeners.add(callback);
+    return () => { this._listeners.delete(callback); };
+  }
+
+  onWindowEvent(event: WindowEvent): void {
+    if (!this._started || this._disposed) return;
+    if (event.type === 'frame') {
+      const generation = this._reconciler.generation(event.id);
+      const pending = this._frameReads.get(event.id);
+      if (pending) {
+        pending.generation = generation;
+        return;
+      }
+      const token = this._ports.deferred.defer(() => {
+        const read = this._frameReads.get(event.id);
+        this._frameReads.delete(event.id);
+        if (read) this.commit(() => this._observe(event.id, read.generation));
+      });
+      this._frameReads.set(event.id, {token, generation});
+      return;
+    }
+    this.commit(() => {
+      if (event.type === 'focused') {
+        this._acceptFocus(event.id);
+      } else if (event.type === 'removed') {
+        const location = this._tree?.location(event.id);
+        const selected = this._selectedIds().includes(event.id);
+        this._forget(event.id);
+        if (selected && location?.workspace === this._tree?.activeWorkspace) this._activateSelection(0);
+      } else {
+        this._syncWindow(event.id, event.type === 'workspace');
+      }
+    });
+  }
+
+  onWorkspacesChanged(): void {
+    this.commit(() => {
+      if (this._ports.workspaces.count !== this._workspaceCount)
+        this._ports.settings.apply(this._config, this._workspaceCount);
+    });
+  }
+
+  onMonitorsChanged(): void {
+    this.commit(() => { this._monitorInvalidation = true; });
+  }
+
+  relayout(): void {
+    this.commit(() => {
+      for (const id of this._windows.keys()) this._observe(id, this._reconciler.generation(id));
+    });
+  }
+
+  /** Native callbacks may enqueue work, but never mutate a tree during its traversal. */
+  private commit(change: () => void = () => {}): void {
+    if (!this._started || this._disposed) return;
+    this._queued.push(change);
+    if (this._committing) return;
+    this._committing = true;
+    try {
+      while (this._queued.length && !this._disposed) {
+        this._queued.shift()!();
+        if (this._disposed) break;
+        this._layoutAndPublish();
+      }
+    } finally {
+      this._committing = false;
+    }
+  }
+
+  private _layoutAndPublish(): void {
+    const topology = this._ports.geometry.topology();
+    this._ready = !!topology && topology.monitors.length > 0 &&
+      Array.from({length: this._workspaceCount}, (_, i) => i).every(index =>
+        topology.monitors.every(m => topology.workAreas.get(index)?.has(m.id)));
+    if (this._ready && topology) {
+      const isNew = !this._tree;
+      this._topology = topology;
+      if (!this._tree) this._tree = new Tree(this._workspaceCount, topology.monitors.map(m => m.id));
+      else if (this._tree.workspaces.size !== this._workspaceCount ||
+        [...this._tree.workspace(0).monitors.keys()].join(',') !== topology.monitors.map(m => m.id).join(','))
+        this._moveReconfigured(this._tree.reconfigure(this._workspaceCount, topology.monitors.map(m => m.id), topology.primary));
+      const tree = this._tree;
+      tree.activateWorkspace(Math.min(this._workspaceCount - 1, Math.max(0, this._ports.workspaces.activeIndex)));
+      const live = this._ports.windows.list();
+      const ids = new Set(live.map(w => w.id));
+      for (const id of this._windows.keys()) if (!ids.has(id)) this._forget(id);
+      for (const info of live) this._syncWindow(info.id);
+      if (isNew) {
+        const restored = new Set<number>();
+        for (const info of live) {
+          if (info.minimized || restored.has(info.workspace) || !tree.location(info.id)) continue;
+          this._selectWindow(info.id);
+          restored.add(info.workspace);
+        }
+        this._acceptFocus(this._ports.windows.focused());
+      }
+      tree.normalize(new Set(live.filter(w => !w.minimized).map(w => w.id)));
+      const expected = new Map<WindowId, Rect>();
+      this._containerRects = new Map();
+      for (const ws of tree.workspaces.values()) {
+        for (const [monitor, root] of ws.monitors) {
+          const layout = layoutWithRects(root, topology.workAreas.get(ws.index)!.get(monitor)!);
+          for (const [con, rect] of layout.containers) this._containerRects.set(con, rect);
+          for (const [id, rect] of layout.windows) {
+            const info = this._ports.windows.get(id);
+            if (info && !info.fullscreen && !info.minimized && !this._unmaximizing.has(id)) expected.set(id, rect);
+          }
+        }
+      }
+      if (this._monitorInvalidation) {
+        for (const id of this._windows.keys()) this._forced.add(id);
+        this._monitorInvalidation = false;
+      }
+      const changes = this._reconciler.plan(expected, this._forced);
+      for (const id of expected.keys()) this._forced.delete(id);
+      for (const [id, rect] of this._floatingRects) changes.set(id, rect);
+      this._floatingRects.clear();
+      if (changes.size) this._ports.geometry.apply(changes);
+      if (this._disposed) return;
+      this._raiseChanged();
+    } else {
+      // Keep ready ids known even while the compositor has no complete topology.
+      for (const info of this._ports.windows.list()) this._windows.set(info.id, {...info, rect: {...info.rect}});
+    }
+    if (this._disposed) return;
+    this._ports.indicator.setPills(Array.from({length: this._workspaceCount}, (_, index) => ({
+      name: this._config.workspaceNames.get(index + 1) ?? String(index + 1),
+      active: index === this._ports.workspaces.activeIndex,
+      occupied: [...this._windows.values()].some(w => w.workspace === index),
+    })));
+    this._revision++;
+    for (const callback of [...this._listeners]) {
+      try { callback(); } catch (error) { this._ports.log.warn(`tree subscriber failed: ${String(error)}`); }
+    }
+  }
+
+  private _floating(info: WindowInfo): boolean {
+    return this._manualFloating.get(info.id) ?? info.kind === 'floating';
+  }
+
+  private _syncWindow(id: WindowId, workspaceEvent = false): void {
+    const info = this._ports.windows.get(id);
+    if (!info) { this._forget(id); return; }
+    const old = this._windows.get(id);
+    this._windows.set(id, {...info, rect: {...info.rect}});
+    if (old?.fullscreen && !info.fullscreen) this._forced.add(id);
+    if (old?.minimized && !info.minimized) this._forced.add(id);
+    const expected = this._expectedWorkspace.get(id);
+    if (workspaceEvent) this._expectedWorkspace.delete(id);
+    const tree = this._tree;
+    if (!tree) return;
+    const location = tree.location(id);
+    if (info.minimized) {
+      this._minimized.set(id, this._minimized.get(id) ?? this._floating(info));
+      tree.remove(id);
+    } else {
+      const floating = this._minimized.get(id);
+      if (floating !== undefined) { this._manualFloating.set(id, floating); this._minimized.delete(id); }
+      const workspace = expected !== undefined && !workspaceEvent ? expected : info.workspace;
+      if (location && location.workspace !== workspace) tree.remove(id);
+      if (!tree.location(id) && tree.workspaces.has(workspace)) {
+        const monitor = tree.workspace(workspace).monitors.has(info.monitor!) ? info.monitor : this._topology?.primary;
+        if (monitor !== undefined && monitor !== null) {
+          if (this._floating(info)) tree.addFloating(id, workspace);
+          else tree.insert(id, workspace, monitor);
+        }
+      }
+    }
+    if (!info.fullscreen && !info.minimized && !this._floating(info)) {
+      if (info.maximizedH || info.maximizedV) {
+        if (!this._unmaximizing.has(id)) {
+          this._unmaximizing.add(id);
+          if (!this._ports.windows.unmaximize(id)) this._unmaximizing.delete(id);
+        }
+      } else if (this._unmaximizing.delete(id)) this._forced.add(id);
+    }
+  }
+
+  private _forget(id: WindowId): void {
+    this._tree?.remove(id);
+    this._windows.delete(id);
+    this._manualFloating.delete(id);
+    this._minimized.delete(id);
+    this._expectedWorkspace.delete(id);
+    this._expectedFocus.delete(id);
+    this._unmaximizing.delete(id);
+    this._forced.delete(id);
+    this._floatingRects.delete(id);
+    this._reconciler.forget(id);
+    const read = this._frameReads.get(id);
+    if (read) this._ports.deferred.cancel(read.token);
+    this._frameReads.delete(id);
+    if (this._lastFocus === id) this._lastFocus = null;
+  }
+
+  private _observe(id: WindowId, generation: number | undefined): void {
+    const info = this._ports.windows.get(id);
+    if (!info || info.fullscreen || info.minimized || this._floating(info) || this._unmaximizing.has(id)) return;
+    if (generation !== undefined) this._reconciler.observe(id, info.rect, generation);
+  }
+
+  private _selectWindow(id: WindowId): void {
+    const tree = this._tree;
+    const location = tree?.location(id);
+    if (!tree || !location) return;
+    if (location.floating) tree.selectFloating(id);
+    else { const leaf = tree.find(id); if (leaf) tree.select(leaf); }
+  }
+
+  private _acceptFocus(id: WindowId | null): void {
+    if (id === null || !this._tree?.location(id)) return;
+    const expected = this._expectedFocus.delete(id);
+    if (!expected && id !== this._lastFocus) this._selectWindow(id);
+    this._lastFocus = id;
+  }
+
+  private _selectedIds(): WindowId[] {
+    const selection = this._tree?.selection();
+    return selection?.kind === 'floating' ? [selection.window] : selection?.kind === 'tiled'
+      ? [...leaves(selection.con)].map(leaf => leaf.window) : [];
+  }
+
+  private _activateSelection(timestamp: number): void {
+    const selection = this._tree?.selection();
+    const id = selection?.kind === 'floating' ? selection.window : selection?.kind === 'tiled'
+      ? descendFocused(selection.con)?.window : undefined;
+    if (id === undefined) return;
+    this._expectedFocus.add(id);
+    if (!this._ports.windows.activate(id, timestamp)) this._expectedFocus.delete(id);
+  }
+
+  private _moveReconfigured(moves: ReadonlyMap<WindowId, number>): void {
+    for (const [id, destination] of moves) this._expectedWorkspace.set(id, destination);
+    for (const [id, destination] of moves)
+      if (!this._ports.windows.moveToWorkspace(id, destination)) this._expectedWorkspace.delete(id);
+  }
+
+  private _raiseChanged(): void {
+    if (!this._tree) return;
+    const active = new Set<number>();
+    let raised = false;
+    for (const ws of this._tree.workspaces.values()) {
+      for (const root of ws.monitors.values()) {
+        if (![...walk(root)].some(con => con.kind === 'split' && (con.layout === 'tabbed' || con.layout === 'stacked'))) continue;
+        active.add(root.id);
+        const order = stackingOrder(root);
+        const key = order.join(',');
+        if (this._raiseOrders.get(root.id) === key) continue;
+        this._raiseOrders.set(root.id, key);
+        for (const id of order) this._ports.windows.raise(id);
+        raised = true;
+      }
+    }
+    for (const id of this._raiseOrders.keys()) if (!active.has(id)) this._raiseOrders.delete(id);
+    if (raised && this._lastFocus !== null && this._tree.location(this._lastFocus)?.floating)
+      this._ports.windows.raise(this._lastFocus);
   }
 
   state(): EngineState {
@@ -108,18 +427,23 @@ export class Engine {
 
   /** Executes commands in order; returns a short human-readable result (also the D-Bus reply). */
   run(commands: Command[], timestamp: number): string {
+    if (this._disposed) return 'stopped';
     const messages = commands.map(c => this._runOne(c, timestamp)).filter(m => m !== '');
     return messages.length > 0 ? messages.join('; ') : 'ok';
   }
 
   onLocked(): void {
+    if (this._disposed) return;
     this._locked = true;
+    this._ports.indicator.setVisible(false);
     this._enterMode('default');
     this._ports.keys.ungrabAll();
   }
 
   onUnlocked(): void {
+    if (this._disposed) return;
     this._locked = false;
+    this._ports.indicator.setVisible(true);
     this._ports.keys.setBindings(this._modeBindings('default'));
   }
 
@@ -154,27 +478,42 @@ export class Engine {
       return false;
     }
 
-    this._loaded = loaded;
-    this._config = loaded.config;
-    this._ports.settings.restoreAll();
-    this._ports.settings.apply(this._config);
-    this._mode = 'default';
-    if (!this._locked) {
-      const report = this._ports.keys.setBindings(this._modeBindings('default'));
-      if (report.failed.length > 0)
-        this._ports.log.warn(`${report.failed.length} binding(s) could not be grabbed yet; retrying once`);
+    const config = loaded.config;
+    const count = config.workspaceCount || this._ports.workspaces.count;
+    if (!Number.isInteger(count) || count < 1 || count > 36) {
+      this._ports.notify('i3-shell: config rejected', 'workspace count must be between 1 and 36');
+      return false;
     }
-    this._ports.indicator.setMode(null);
-    this._ports.indicator.setColors(this._config.colors);
+    this.commit(() => {
+      this._loaded = loaded;
+      this._lastLoadTime = this._ports.now();
+      this._config = config;
+      this._workspaceCount = count;
+      if (this._tree && this._topology) {
+        const moves = this._tree.reconfigure(count, this._topology.monitors.map(m => m.id), this._topology.primary);
+        for (const info of this._windows.values()) if (info.workspace >= count) moves.set(info.id, count - 1);
+        this._moveReconfigured(moves);
+      }
+      this._ports.settings.apply(config, count);
+      this._mode = 'default';
+      if (!this._locked) {
+        const report = this._ports.keys.setBindings(this._modeBindings('default'));
+        if (report.failed.length > 0)
+          this._ports.log.warn(`${report.failed.length} binding(s) could not be grabbed`);
+      }
+      this._ports.indicator.setMode(null);
+      this._ports.indicator.setColors(this._config.colors);
+      this._ports.indicator.setVisible(!this._locked);
 
-    if (warnings.length > 0)
-      this._ports.notify('i3-shell', `${warnings.length} config warning(s) — see the shell log`);
-    if (this._config.rules.length > 0)
-      this._ports.log.info(`${this._config.rules.length} for_window rule(s) parsed; they are applied from Phase 4`);
-    if (loaded.source === 'cache')
-      this._ports.notify('i3-shell', 'using the last good config (the current file was rejected)');
-    else if (loaded.source === 'fallback')
-      this._ports.notify('i3-shell', 'using the built-in fallback config');
+      if (warnings.length > 0)
+        this._ports.notify('i3-shell', `${warnings.length} config warning(s) — see the shell log`);
+      if (this._config.rules.length > 0)
+        this._ports.log.info(`${this._config.rules.length} for_window rule(s) parsed; they are applied from Phase 4`);
+      if (loaded.source === 'cache')
+        this._ports.notify('i3-shell', 'using the last good config (the current file was rejected)');
+      else if (loaded.source === 'fallback')
+        this._ports.notify('i3-shell', 'using the built-in fallback config');
+    });
     return true;
   }
 
@@ -211,10 +550,15 @@ export class Engine {
       case 'exec':
         ports.exec(command.command);
         return `exec ${command.command}`;
-      case 'kill':
-        return ports.windows.killFocused(timestamp) ? 'kill' : 'kill: no focused window';
-      case 'fullscreen':
-        return ports.windows.fullscreenFocused(command.action) ? `fullscreen ${command.action}` : 'fullscreen: no focused window';
+      case 'kill': {
+        const ids = this._selectedIds();
+        return ids.map(id => ports.windows.kill(id, timestamp)).some(Boolean) ? 'kill' : 'kill: no focused window';
+      }
+      case 'fullscreen': {
+        const ids = this._selectedIds();
+        return ids.map(id => ports.windows.fullscreen(id, command.action)).some(Boolean)
+          ? `fullscreen ${command.action}` : 'fullscreen: no focused window';
+      }
       case 'workspace': {
         if (command.target.kind === 'back_and_forth')
           return 'workspace back_and_forth: not implemented until Phase 4';
@@ -234,15 +578,29 @@ export class Engine {
           return 'move container to workspace: no such workspace';
         if (index === ports.workspaces.activeIndex)
           return 'move container to workspace: already there';
-        return ports.windows.moveFocusedToWorkspace(index) ? `moved to workspace ${index + 1}` : 'move container to workspace: no focused window';
+        let moved = false;
+        this.commit(() => {
+          if (!this._tree || !this._topology) return;
+          const ids = this._tree.moveToWorkspace(index, this._topology.primary);
+          moved = ids.length > 0;
+          this._moveReconfigured(new Map(ids.map(id => [id, index])));
+        });
+        return moved ? `moved to workspace ${index + 1}` : 'move container to workspace: no focused window';
       }
       case 'mode':
         return this._enterMode(command.name) ? `mode ${command.name}` : `mode "${command.name}" is not defined`;
       case 'reload':
         return this._applyLoaded(ports.loadConfig('reload')) ? 'reloaded' : 'reload: config rejected, keeping previous';
       case 'restart':
-        // Phase 2 adds the tree rebuild (§6.6); until then restart == reload.
-        return this._applyLoaded(ports.loadConfig('reload')) ? 'restarted' : 'restart: config rejected, keeping previous';
+        if (!this._applyLoaded(ports.loadConfig('reload'))) return 'restart: config rejected, keeping previous';
+        this.commit(() => {
+          this._tree = null;
+          this._manualFloating.clear();
+          this._minimized.clear();
+          this._raiseOrders.clear();
+          this._lastFocus = null;
+        });
+        return 'restarted';
       case 'nop':
         return 'nop';
       case 'unknown':
