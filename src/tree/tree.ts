@@ -1,5 +1,6 @@
 import type {Direction, Layout} from '../commands/model';
 import {nextFocus, type Wrapping} from './focus';
+import {moveCon, setLayout, splitCon, toggleLayout} from './operations';
 import {
   attach,
   descendFocused,
@@ -141,6 +142,43 @@ export class Tree {
     const target = selection.con.focusedChild;
     if (target) this.select(target);
     return target;
+  }
+
+  split(orientation: 'h' | 'v' | 'toggle'): void {
+    const selection = this.selection();
+    if (selection?.kind !== 'tiled') return;
+    const workspace = this.owner(selection.con);
+    const target = splitCon(selection.con, orientation, this.allocateSplit);
+    this.select(target);
+    this.normalizeWorkspace(workspace, undefined, ancestorChain(target.parent));
+  }
+
+  setLayout(layout: Layout): void {
+    const selection = this.selection();
+    if (selection?.kind !== 'tiled') return;
+    const workspace = this.owner(selection.con);
+    const target = setLayout(selection.con, layout, this.allocateSplit);
+    this.select(target);
+    this.normalizeWorkspace(workspace, undefined, ancestorChain(target.parent));
+  }
+
+  toggleLayout(cycle: 'split' | 'all' | readonly Layout[]): void {
+    const selection = this.selection();
+    if (selection?.kind !== 'tiled') return;
+    const workspace = this.owner(selection.con);
+    const target = toggleLayout(selection.con, cycle, this.allocateSplit);
+    this.select(target);
+    this.normalizeWorkspace(workspace, undefined, ancestorChain(target.parent));
+  }
+
+  move(direction: Direction): boolean {
+    const selection = this.selection();
+    if (selection?.kind !== 'tiled') return false;
+    const workspace = this.owner(selection.con);
+    if (!moveCon(selection.con, direction)) return false;
+    this.select(selection.con);
+    this.normalizeWorkspace(workspace, undefined, ancestorChain(selection.con.parent));
+    return true;
   }
 
   select(con: Con): void {
