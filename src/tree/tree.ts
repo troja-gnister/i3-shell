@@ -215,6 +215,102 @@ export class Tree {
     this.activeWorkspace = index;
   }
 
+  reconfigure(
+    workspaceCount: number,
+    monitors: readonly MonitorId[],
+    primary: MonitorId,
+  ): Map<WindowId, number> {
+    assertInteger(workspaceCount, 'workspace count');
+    if (workspaceCount < 1 || workspaceCount > 36)
+      throw new Error('workspace count must be between 1 and 36');
+    if (monitors.length === 0) throw new Error('at least one monitor is required');
+    const targetMonitors = new Set<MonitorId>();
+    for (const monitor of monitors) {
+      assertNonnegativeInteger(monitor, 'monitor id');
+      if (targetMonitors.has(monitor)) throw new Error(`duplicate monitor id ${monitor}`);
+      targetMonitors.add(monitor);
+    }
+    assertNonnegativeInteger(primary, 'primary monitor id');
+    if (!targetMonitors.has(primary)) throw new Error(`primary monitor ${primary} is absent`);
+
+    for (const workspace of this.workspaces.values()) {
+      const roots = new Map<MonitorId, SplitCon>();
+      for (const monitor of monitors)
+        roots.set(monitor, workspace.monitors.get(monitor) ?? this.allocateSplit('splith', true));
+      const primaryRoot = roots.get(primary)!;
+      for (const [monitor, root] of workspace.monitors) {
+        if (targetMonitors.has(monitor)) continue;
+        const selectedRoot = workspace.focusedCon === root;
+        const hadContents = root.children.length > 0;
+        appendRootContents(root, primaryRoot, this.allocateSplit);
+        if (selectedRoot)
+          workspace.focusedCon = hadContents ? primaryRoot.children.at(-1)! : primaryRoot;
+      }
+      workspace.monitors = roots;
+      this.normalizeWorkspace(workspace, undefined, []);
+    }
+
+    for (let index = this.workspaces.size; index < workspaceCount; index++) {
+      const roots = new Map<MonitorId, SplitCon>();
+      for (const monitor of monitors) roots.set(monitor, this.allocateSplit('splith', true));
+      this.workspaces.set(index, {
+        index,
+        monitors: roots,
+        focusedCon: roots.values().next().value ?? null,
+        floating: [],
+        focusedFloating: null,
+      });
+    }
+
+    const moves = new Map<WindowId, number>();
+    if (workspaceCount < this.workspaces.size) {
+      const destination = this.workspace(workspaceCount - 1);
+      let movedActiveCon: Con | null = null;
+      let movedActiveFloating: WindowId | null = null;
+
+      for (let index = workspaceCount; index < this.workspaces.size; index++) {
+        const source = this.workspace(index);
+        let selectedCon = source.focusedCon;
+        for (const monitor of monitors) {
+          const sourceRoot = source.monitors.get(monitor)!;
+          for (const leaf of leaves(sourceRoot)) moves.set(leaf.window, destination.index);
+          const selectedRoot = selectedCon === sourceRoot;
+          const hadContents = sourceRoot.children.length > 0;
+          appendRootContents(sourceRoot, destination.monitors.get(monitor)!, this.allocateSplit);
+          if (selectedRoot)
+            selectedCon = hadContents
+              ? destination.monitors.get(monitor)!.children.at(-1)!
+              : null;
+        }
+        for (const window of source.floating) {
+          moves.set(window, destination.index);
+          if (!destination.floating.includes(window)) destination.floating.push(window);
+        }
+        if (index === this.activeWorkspace) {
+          if (source.focusedFloating !== null) movedActiveFloating = source.focusedFloating;
+          else movedActiveCon = selectedCon;
+        }
+      }
+
+      for (let index = this.workspaces.size - 1; index >= workspaceCount; index--)
+        this.workspaces.delete(index);
+      if (this.activeWorkspace >= workspaceCount) {
+        this.activeWorkspace = workspaceCount - 1;
+        if (movedActiveFloating !== null) {
+          destination.focusedFloating = movedActiveFloating;
+        } else if (movedActiveCon !== null) {
+          destination.focusedCon = movedActiveCon;
+          destination.focusedFloating = null;
+        }
+      }
+      this.normalizeWorkspace(destination, undefined, []);
+    }
+
+    this.activeWorkspace = Math.min(this.activeWorkspace, workspaceCount - 1);
+    this.normalize();
+    return moves;
+  }
+
   addFloating(window: WindowId, workspace: number): void {
     assertWindowId(window);
     const ws = this.workspace(workspace);
@@ -500,6 +596,20 @@ export class Tree {
         : parent.children.length,
     };
   }
+}
+
+function appendRootContents(source: SplitCon, target: SplitCon, allocate: AllocateSplit): void {
+  if (source.children.length === 0) return;
+  const wrapper = allocate(source.layout);
+  wrapper.lastSplitLayout = source.lastSplitLayout;
+  wrapper.children = source.children;
+  wrapper.percents = source.percents;
+  wrapper.focusedChild = source.focusedChild;
+  for (const child of wrapper.children) child.parent = wrapper;
+  source.children = [];
+  source.percents = [];
+  source.focusedChild = null;
+  attach(target, wrapper, target.children.length);
 }
 
 function inspectCon(

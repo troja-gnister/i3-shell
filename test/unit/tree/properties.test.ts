@@ -52,6 +52,7 @@ const kinds = [
   'modeToggle',
   'workspace',
   'transfer',
+  'topology',
 ] as const;
 
 interface GeneratedOperation {
@@ -90,14 +91,16 @@ function applyGeneratedOperation(
 ): void {
   const ids = [...expected.keys()].sort((a, b) => a - b);
   const id = ids.length ? ids[op.pick % ids.length] : undefined;
+  const workspace = op.workspace % tree.workspaces.size;
+  const monitor = tree.workspace(workspace).monitors.keys().next().value!;
 
   switch (op.kind) {
     case 'insert': {
       const free = Array.from({length: 12}, (_, index) => index + 1)
         .find(candidate => !expected.has(candidate));
       if (free !== undefined) {
-        tree.insert(free, op.workspace, 0);
-        expected.set(free, op.workspace);
+        tree.insert(free, workspace, monitor);
+        expected.set(free, workspace);
       }
       return;
     }
@@ -151,13 +154,17 @@ function applyGeneratedOperation(
       return;
     }
     case 'floating':
-      if (id !== undefined) tree.setFloating(id, !tree.location(id)!.floating, 0);
+      if (id !== undefined) {
+        const owner = expected.get(id)!;
+        const ownerMonitor = tree.workspace(owner).monitors.keys().next().value!;
+        tree.setFloating(id, !tree.location(id)!.floating, ownerMonitor);
+      }
       return;
     case 'modeToggle':
       tree.focusModeToggle();
       return;
     case 'workspace':
-      tree.activateWorkspace(op.workspace);
+      tree.activateWorkspace(workspace);
       return;
     case 'transfer': {
       const selection = tree.selection();
@@ -166,10 +173,22 @@ function applyGeneratedOperation(
         : selection?.kind === 'tiled'
           ? [...leaves(selection.con)].map(con => con.window)
           : [];
-      const want = op.workspace === tree.activeWorkspace ? [] : candidates;
-      const moved = tree.moveToWorkspace(op.workspace, 0);
+      const want = workspace === tree.activeWorkspace ? [] : candidates;
+      const moved = tree.moveToWorkspace(workspace, monitor);
       expect(moved).toEqual(want);
-      for (const movedId of moved) expected.set(movedId, op.workspace);
+      for (const movedId of moved) expected.set(movedId, workspace);
+      return;
+    }
+    case 'topology': {
+      const count = op.workspace + 1;
+      const monitors = op.grow ? [1, 0] : [0];
+      const want = new Map<WindowId, number>();
+      for (const [window, owner] of expected) {
+        if (owner < count) continue;
+        want.set(window, count - 1);
+        expected.set(window, count - 1);
+      }
+      expect(tree.reconfigure(count, monitors, monitors[0])).toEqual(want);
       return;
     }
     default: {
@@ -187,7 +206,7 @@ it.each([20260921, 8675309])(
       fc.constantFrom(1, 17, 1919, 1920),
       fc.constantFrom(1, 19, 1049, 1080),
       (operations, width, height) => {
-        const tree = new Tree(2, [0]);
+        const tree = new Tree(2, [0, 1]);
         const expected = new Map<WindowId, number>();
         const area = {x: -13, y: 27, width, height};
 
