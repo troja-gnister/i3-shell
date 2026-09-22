@@ -36,7 +36,7 @@ cleanup() {
     echo 'native criticals found in shell.log' >&2
     status=1
   fi
-  if [[ -f "$FIXTURE_LOG" ]] && rg -q 'fixture [[:alnum:]]+ failed|Gjs-CRITICAL' "$FIXTURE_LOG"; then
+  if [[ -f "$FIXTURE_LOG" ]] && rg -q 'fixture [[:alnum:]]+ failed|(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' "$FIXTURE_LOG"; then
     echo 'fixture failures found in fixture.log' >&2
     status=1
   fi
