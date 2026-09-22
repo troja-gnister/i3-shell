@@ -385,6 +385,8 @@ Rects are integer. For each non-empty `splith` / `splitv` container, direct chil
 
 `windows.ts` assigns a monotonically increasing `WindowId` to every managed `Meta.Window` (`Map<WindowId, Meta.Window>` plus `WeakMap<Meta.Window, WindowId>`). The tree and engine only ever hold ids. `resolve(id)` returning `undefined` means "gone; skip". On `unmanaged`, the id is removed from both maps in the same handler that tells the engine.
 
+Native teardown begins earlier, at `unmanaging`: reads, operations and change callbacks must already exclude that window while its actor, focus and workspace are being removed. During this interval the adapter filters its last safe MRU enumeration instead of asking Mutter to enumerate partially removed windows; fresh native enumeration resumes after the final `unmanaged` boundary. A pending first-frame subscription must become inert when its actor is destroyed, so later cleanup never disconnects a disposed actor.
+
 ### 8.2 Which windows tile
 
 A window is **tiled** iff all of: `window_type == NORMAL`; not `skip_taskbar`; `get_transient_for() == null`; not `is_attached_dialog()`; not on all workspaces; `allows_resize()`; not matched by a `floating enable` rule (Phase 4).

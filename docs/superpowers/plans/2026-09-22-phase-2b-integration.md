@@ -665,7 +665,7 @@ No changes to the Phase 4 criteria parser. For `SMOOTH` scroll events read `get_
 
 ## Task 9: Run real GTK fixtures only inside the nested session
 
-**Files:** Modify `test/integration/nested.sh`, `test/integration/inside.sh`, `test/integration/phase1-checks.sh`; create `test/integration/windows.js` and `test/integration/client.py`.
+**Files:** Modify `test/integration/nested.sh`, `test/integration/inside.sh`, `test/integration/phase1-checks.sh`; create `test/integration/windows.js` and `test/integration/client.py`. Native smoke exposed teardown failures, so this task also modifies `src/shell/windows.ts`, `src/shell/windowTracker.ts` and `test/unit/shell/windowTracker.test.ts`, and creates `src/shell/nativeWindowLifecycle.ts` with `test/unit/shell/nativeWindowLifecycle.test.ts`.
 
 **Interfaces:**
 - `windows.js` is a GJS GTK4 process with its own private-bus service `org.i3shell.TestWindows`, object path `/org/i3shell/TestWindows` and matching interface. It is never bundled in the extension.
@@ -673,7 +673,7 @@ No changes to the Phase 4 criteria parser. For `SMOOTH` scroll events read `get_
 - `client.py` exports `call(interface, method, signature='()', args=())`, `state()`, `tree()`, `windows()`, `command(text)`, `fixture(method, signature='()', args=())` and `wait_until(predicate, description, timeout=10)`. It uses Python Gio/GLib (already installed) to unpack D-Bus replies directly; never parse object dumps with shell string matching.
 - Nested CLI adds repeatable `--monitor WxH`; default remains one 1920×1080 monitor. `inside.sh` starts the empty fixture service before invoking checks and stops it during teardown.
 
-- [ ] **Write the isolation/fixture smoke assertion first.**
+- [x] **Write the isolation/fixture smoke assertion first.**
 
 ~~~python
 from pathlib import Path
@@ -693,9 +693,15 @@ wait_until(lambda: not windows(), "unmanaged removal")
 
 Put this smoke sequence in the `client.py` CLI command `smoke` so Task 9 has its own runnable acceptance. It initially fails because the fixture/service/private runtime are absent.
 
-- [ ] **Prepare a private runtime/socket.** Add `sandbox/runtime` with mode 0700 alongside private config/data/cache and private D-Bus. Set nested `XDG_RUNTIME_DIR` to it. Launch Shell with `--wayland-display=i3-shell-test` and the configured virtual monitors. Only after launching the compositor, set client `WAYLAND_DISPLAY=i3-shell-test`, `GDK_BACKEND=wayland` and unset `DISPLAY`. Headless Shell must not inherit a live display connection. For `--visible`, save the parent Wayland socket as an absolute path before replacing runtime variables and pass it only to the nested compositor process; all fixtures still use the private nested socket. Wait for that socket and the fixture bus name, with bounded timeouts and log dumps on failure.
+Before creating a fixture, wait for Shell readiness, leave the initial overview with Escape, and poll for NORMAL action mode. Native evidence showed the synthetic GTK fixture's first frame is delayed while the initial overview is open. Do not fake first-frame readiness. Closing a pending or adopted fixture must also leave no disposed-actor, null-workspace or unmanaging-window criticals: reproduce those lifecycle orderings in focused unit tests before the native bridge fix. Retiring windows must not receive native reads or operations, removal must occur once at a safe teardown boundary, and MRU adoption plus frame-generation semantics must remain intact. After process cleanup, fail the harness on Shell/GJS/GLib-GObject/Mutter criticals or fixture method failures rather than allowing a successful scenario command to hide them.
 
-- [ ] **Implement the GTK process and D-Bus client.** Use `Gtk.Application` with an explicit hold so it survives an empty window set. Store windows by fixture name; reject duplicate names, absent parents and invalid kinds/actions with false replies. Each window contains a `Gtk.Entry` so the tests can prove resize-mode keys are not typed into applications.
+- [x] **Prepare a private runtime/socket.** Add `sandbox/runtime` with mode 0700 alongside private config/data/cache and private D-Bus. Set nested `XDG_RUNTIME_DIR` to it. Launch Shell with `--wayland-display=i3-shell-test` and the configured virtual monitors. Only after launching the compositor, set client `WAYLAND_DISPLAY=i3-shell-test`, `GDK_BACKEND=wayland` and unset `DISPLAY`. Headless Shell must not inherit a live display connection. For `--visible`, save the parent Wayland socket as an absolute path before replacing runtime variables and pass it only to the nested compositor process; all fixtures still use the private nested socket. Wait for that socket and the fixture bus name, with bounded timeouts and log dumps on failure.
+
+Run the private compositor with --no-x11: the required GTK fixtures are native Wayland, and the host’s nested Xwayland startup stalls the Shell main loop even with the pre-integration build. Xwayland client behavior is not claimed by these automated checks.
+
+In the disposable data directory, seed `data/gnome-shell/update-check-50` before launching Shell. The installed GNOME 50 loader otherwise awaits its first-major-version network update check before importing extensions; this private harness does not test the GNOME extension updater.
+
+- [x] **Implement the GTK process and D-Bus client.** Use `Gtk.Application` with an explicit hold so it survives an empty window set. Store windows by fixture name; reject duplicate names, absent parents and invalid kinds/actions with false replies. Each window contains a `Gtk.Entry` so the tests can prove resize-mode keys are not typed into applications.
 
 ~~~js
 const window = new Gtk.ApplicationWindow({
@@ -733,13 +739,13 @@ def wait_until(predicate, description, timeout=10):
 
 Catch fixture method errors, print stack traces to its private log and return the declared failure type. Kill/wait both fixture and Shell on exit; retain `--keep` for logs. Do not leave a GTK process connected after the private bus shuts down.
 
-- [ ] **Replace obsolete Phase 1 dispatch proofs.** Keep empty-window A1 before any fixtures open. For A4 create two normal windows and wait for actual frames to match their independent half-workspace expectations. Focus the second, press `<Super>r`, verify 11 grabs, then press bare `j`. Assert the selected tile shrinks by 10 percentage points and the neighbor grows correspondingly, and both fixture Entry texts remain empty. Escape/Return/mod+r still leave resize mode with 65 grabs. Close the fixtures after the checks.
+- [x] **Replace obsolete Phase 1 dispatch proofs.** Keep empty-window A1 before any fixtures open. For A4 create two normal windows and wait for actual frames to match their independent half-workspace expectations. Focus the second, press `<Super>r`, verify 11 grabs, then press bare `j`. Assert the selected tile shrinks by 10 percentage points and the neighbor grows correspondingly, and both fixture Entry texts remain empty. Escape/Return/mod+r still leave resize mode with 65 grabs. Close the fixtures after the checks.
 
 Correct the retry comment to `500 ms, 1.5 s, 4 s`. Keep real exec, valid/invalid reload, lock/unlock, missing-file rejection and config-source assertions. Add A2 pills/name/active/occupied assertions from `GetState`.
 
-- [ ] **Verify GREEN:** `npm run build:test`, then run the smoke and Phase 1 checks through `nested.sh`. A command failure must print the preserved shell/fixture logs; do not silently skip a scenario.
-- [ ] **Restore release install even if checks fail:** `make install`; verify `dist/extension.js` has no debug interface. Record the actual outcomes; no live logout/login is performed.
-- [ ] **Commit:** `test(integration): isolate GTK fixtures and retain phase one acceptance`.
+- [x] **Verify GREEN:** `npm run build:test`, then run the smoke and Phase 1 checks through `nested.sh`. A command failure must print the preserved shell/fixture logs; do not silently skip a scenario.
+- [x] **Restore release install even if checks fail:** `make install`; verify `dist/extension.js` has no debug interface. Record the actual outcomes; no live logout/login is performed.
+- [x] **Commit:** `test(integration): isolate GTK fixtures and retain phase one acceptance`.
 
 ## Task 10: Exercise A8–A14 and record delivery evidence
 
@@ -890,7 +896,7 @@ Self-review corrected the void-returning Tree.check assertions, stable-monitor l
 
 ## Execution record
 
-Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–8 are complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
+Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–9 are complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
 
 Ruling: Run the complex nested-layout/pending-split reload and selected-parent acknowledgement regressions in Task 6, once tree command dispatch exists. Task 5 still proves flat-tree retention and native lifecycle transitions. This avoids test-only mutation hooks or prematurely implementing the next task. Cost if wrong: complex reload defects may be discovered one task later; Task 6 must close the proof before completion.
 
@@ -904,7 +910,14 @@ Ruling: Run the complex nested-layout/pending-split reload and selected-parent a
 | 6 — selection-based commands | GPT-5.6 Sol / GPT-5.6 Sol | `d0117df` | 15 command tests; 55 focused compatibility tests; 346 full-suite tests; both TypeScript programs; Layer 0; staged diff check | Spec compliant, quality approved; no findings. Deferred nested reload/pending-split and selected-parent proofs completed. |
 | 7 — D-Bus and session lifecycle | GPT-5.6 Sol / GPT-5.6 Sol | `e477139` | 43 focused tests; 358 full-suite tests; both TypeScript programs; Layer 0; test/release builds and Debug exclusions; staged diff check | Spec compliant, quality approved; no findings. Native name-loss ownership proof assigned to Task 10. |
 | 8 — config/input follow-ups | GPT-5.6 Sol / GPT-5.6 Sol | `0772df1` | 23 focused tests; 367 full-suite tests; both TypeScript programs; staged diff check | Spec compliant, quality approved; no findings. Native exclusive grabs and re-enable proof assigned to Tasks 9–10. |
+| 9 — private GTK fixtures/native lifetime | GPT-6 Astra / GPT-6 Astra; fix re-review GPT-5.6 Sol | `bdf0cb8`, `c8b64cd` | 10 focused tests; 371 full-suite tests; both TypeScript programs/Layer 0; native smoke and Phase 1 acceptance; 14 cleanup-gate cases; release install, Debug exclusions and symlink | Fixture critical-log gate omission fixed and re-reviewed clean. Native teardown regressions fixed. Ancillary host warnings remain disclosed; visible mode and Xwayland clients are unverified. Monitor scenarios follow in Task 10. |
 
 Ruling: Use Meta.TabList.NORMAL_ALL_MRU for per-workspace adoption instead of the NORMAL example in spec §8.5. The installed Mutter 18 API explicitly guarantees pure MRU order for this variant, including minimized windows; classification still decides which windows are managed. — Preserves the binding MRU intent rather than relying on unordered Workspace.list_windows or NORMAL grouping behavior. — Cost if wrong: adoption may include additional eligible windows or choose a different initial order; native integration must verify adoption and minimized-window behavior.
 
 Ruling: Include src/engine.ts in Task 7 so EngineState exposes a copied snapshot of the committed pill state used by the indicator. — Task 7 requires GetState.pills to use those same values, but its file list omitted the engine that produces them; duplicating pill calculation in ControlObject would create two sources of truth. — Cost if wrong: one additional public state field and its engine storage may need adjustment; command semantics are unchanged.
+
+Ruling: Seed GNOME 50’s update-check-50 marker in the disposable private data directory before nested Shell startup. — The installed extension loader awaits a first-major-version network update check before importing extensions, which can delay a fresh private session. Seeding the marker did not resolve the observed startup stall; the subsequent --no-x11 probe isolated that separately. — Cost if wrong: the harness could bypass an unrelated future startup check; these tests do not exercise GNOME’s network updater.
+
+Ruling: Launch the private GTK integration compositor with --no-x11. — A pre-integration build also hung on a single socket read during Xwayland startup; changing only this supported Shell option made Control, retry timers and teardown responsive. The required fixtures use native Wayland. — Cost if wrong: the automated suite does not cover Xwayland client behavior; that coverage remains outside this fixture run.
+
+Ruling: Include the native window lifetime bridge and focused regressions in Task 9. — Real GTK teardown exposed disposed actor disconnection and reads of a window whose workspace had already become null before unmanaged; the fixture task cannot pass honestly while those production errors remain. — Cost if wrong: this expands the harness task into native lifecycle code, and a mistaken ordering fix could change removal timing or MRU behavior; focused ordering tests and native smoke are required before review.
