@@ -44,6 +44,7 @@ function fakeWindowBackend() {
   };
 
   const backend: WindowBackend<NativeWindow> = {
+    isLive: () => true,
     existing: () => [...order].sort((a, b) => {
       const workspace = info.get(a)!.workspace - info.get(b)!.workspace;
       return workspace || order.indexOf(a) - order.indexOf(b);

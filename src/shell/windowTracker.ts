@@ -13,6 +13,7 @@ type Dispose = () => void;
 
 export interface WindowBackend<W extends object> {
   existing(): readonly W[];
+  isLive(window: W): boolean;
   facts(window: W): WindowFacts;
   info(window: W): Omit<WindowInfo, 'id' | 'kind'>;
   focused(): W | null;
@@ -79,13 +80,15 @@ export class WindowTracker<W extends object> implements WindowsPort {
   }
 
   resolve(id: WindowId): W | undefined {
-    return this._byId.get(id)?.window;
+    const window = this._byId.get(id)?.window;
+    return window && this._native.isLive(window) ? window : undefined;
   }
 
   list(): readonly WindowInfo[] {
     if (this._destroyed) return [];
     const result: WindowInfo[] = [];
     for (const window of this._native.existing()) {
+      if (!this._native.isLive(window)) continue;
       const id = this._idByWindow.get(window);
       if (id === undefined) continue;
       const tracked = this._byId.get(id);
@@ -97,13 +100,13 @@ export class WindowTracker<W extends object> implements WindowsPort {
   get(id: WindowId): WindowInfo | undefined {
     if (this._destroyed) return undefined;
     const tracked = this._byId.get(id);
-    return tracked ? this._snapshot(id, tracked) : undefined;
+    return tracked && this._native.isLive(tracked.window) ? this._snapshot(id, tracked) : undefined;
   }
 
   focused(): WindowId | null {
     if (this._destroyed) return null;
     const window = this._native.focused();
-    return window ? this._idByWindow.get(window) ?? null : null;
+    return window && this._native.isLive(window) ? this._idByWindow.get(window) ?? null : null;
   }
 
   activate(id: WindowId, timestamp: number): boolean {
@@ -131,7 +134,7 @@ export class WindowTracker<W extends object> implements WindowsPort {
   }
 
   private _beginPending(window: W): void {
-    if (this._destroyed || this._pending.has(window) || this._idByWindow.has(window)) return;
+    if (this._destroyed || !this._native.isLive(window) || this._pending.has(window) || this._idByWindow.has(window)) return;
     const pending: PendingWindow = {
       disposeWatch: this._native.watch(window, event => this._onEvent(window, event)),
       disposeFrame: () => undefined,
@@ -141,7 +144,7 @@ export class WindowTracker<W extends object> implements WindowsPort {
   }
 
   private _adoptReady(window: W): void {
-    if (this._destroyed || this._pending.has(window) || this._idByWindow.has(window)) return;
+    if (this._destroyed || !this._native.isLive(window) || this._pending.has(window) || this._idByWindow.has(window)) return;
     const pending: PendingWindow = {
       disposeWatch: this._native.watch(window, event => this._onEvent(window, event)),
       disposeFrame: () => undefined,
@@ -152,7 +155,7 @@ export class WindowTracker<W extends object> implements WindowsPort {
 
   private _makeReady(window: W): void {
     const pending = this._pending.get(window);
-    if (!pending || this._destroyed || this._idByWindow.has(window)) return;
+    if (!pending || this._destroyed || !this._native.isLive(window) || this._idByWindow.has(window)) return;
     this._pending.delete(window);
     pending.disposeFrame();
     const kind = classifyWindow(this._native.facts(window));
@@ -172,7 +175,7 @@ export class WindowTracker<W extends object> implements WindowsPort {
       return;
     }
     const id = this._idByWindow.get(window);
-    if (id === undefined || this._destroyed) return;
+    if (id === undefined || this._destroyed || !this._native.isLive(window)) return;
     if (event === 'focused') {
       const focused = this.focused();
       if (focused === this._lastFocus) return;

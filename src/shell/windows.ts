@@ -4,6 +4,7 @@ import type {WindowEvent, WindowFacts, WindowInfo} from '../runtime/model';
 import type {MonitorId} from '../tree/node';
 import {existingWindows} from './windowEnumeration';
 import {WindowTracker, type WindowBackend} from './windowTracker';
+import {NativeWindowLifecycle, watchFirstFrame} from './nativeWindowLifecycle';
 
 export class ManagedWindows extends WindowTracker<Meta.Window> {
   constructor(
@@ -17,20 +18,27 @@ export class ManagedWindows extends WindowTracker<Meta.Window> {
 function nativeWindowBackend(
   monitorId: (index: number) => MonitorId | undefined,
 ): WindowBackend<Meta.Window> {
+  const lifecycle = new NativeWindowLifecycle(nativeExistingWindows);
   return {
-    existing: nativeExistingWindows,
+    existing: () => lifecycle.existing(),
+    isLive: window => lifecycle.isLive(window),
     facts: windowFacts,
     info: window => windowInfo(window, monitorId),
     focused: () => global.display.focus_window,
     watchCreated: callback => {
-      const id = global.display.connect('window-created', (_display, window) => callback(window));
-      return disconnectOnce(global.display, id);
+      const id = global.display.connect('window-created', (_display, window) => {
+        lifecycle.track(window);
+        callback(window);
+      });
+      const disconnect = disconnectOnce(global.display, id);
+      return () => { disconnect(); lifecycle.destroy(); };
     },
-    watch: (window, callback) => watchWindow(window, callback),
+    watch: (window, callback) => watchWindow(window, event => {
+      if (event === 'removed' || lifecycle.isLive(window)) callback(event);
+    }),
     firstFrame: (window, callback) => {
       const actor = window.get_compositor_private<Meta.WindowActor>();
-      const id = actor.connect('first-frame', callback);
-      return disconnectOnce(actor, id);
+      return watchFirstFrame(actor, callback);
     },
     activate: (window, timestamp) => {
       window.activate(timestamp);
