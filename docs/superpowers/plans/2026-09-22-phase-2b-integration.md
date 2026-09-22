@@ -336,7 +336,7 @@ Also test preexisting windows require no new first-frame, duplicate draw/unmanag
 - `MonitorIds` in `geometryBackend.ts` provides `update(monitors: readonly {index: number; connectors: readonly string[]}[]): MonitorInfo[]`, `id(index: number): MonitorId | undefined` and `clear(): void`. It keeps connector-group identity across update calls and replaces the current index lookup each time.
 - `geometry.ts` exports `class Geometry implements GeometryPort` with constructor `(resolve: (id: WindowId) => Meta.Window | undefined)`, `monitorId(index: number): MonitorId | undefined`, and `destroy(): void`; it composes GeometryBackend and MonitorIds. No consumer imports those native types into the engine.
 
-- [ ] **Write the complete generation regression.**
+- [x] **Write the complete generation regression.**
 
 ~~~ts
 const r = new RectReconciler();
@@ -357,13 +357,13 @@ expect(r.observe(1, wrong, g)).toBe(false); // stale observation cannot spend th
 ~~~
 
 Add changed target resetting the budget; equal-value fresh rectangle objects not resetting it; duplicated size+position events; observed match after a retry not restoring its allowance; forgotten ids; empty apply; suspended fullscreen/minimized targets.
-- [ ] **Run RED:** `npx vitest run test/unit/runtime/reconcile.test.ts test/unit/shell/geometryBackend.test.ts`.
-- [ ] **Implement explicit state transitions.** Each entry owns expected rect, monotonic generation, correctionQueued, retried and stubborn. New target/force creates a generation; first mismatching observation queues correction; emitting that correction consumes the retry; a later mismatching observation marks stubborn. Matching and stale notifications have no effect on the budget. Clear queued correction when the observed frame returns to target before dispatch.
-- [ ] **Test apply-time resolution and monitor identity.** A fake writer removes id 2 while applying id 1; only id 1 is written and returned in the applied set. Confirm integer x/y/width/height are passed unchanged, repeated destroy is safe, native failure for one id does not prevent the next id's application, and a vanished id is skipped. Feed MonitorIds connector groups at indices 0/1, remove the former index 0, then feed the surviving connector at index 0: its stable id must remain unchanged. Re-add the vanished connector, test mirrored connector groups and verify clear empties the lookup.
-- [ ] **Implement geometry/topology bridge.** `move_resize_frame(false, x, y, width, height)` exists only in this adapter. Group active connectors by Mutter logical index, sort each connector group into a stable key, and retain an internal key→monotonic numeric id map across topology snapshots. Reindexing preserves ids; genuinely vanished/returned groups use their retained key identity. Read each workspace's work area using the current native index. Return null if no usable logical monitor/work area exists; Engine retains its current tree until a complete snapshot arrives.
-- [ ] **Pin asynchronous observation behavior.** Native size/position events are coalesced by Engine into a deferred fresh frame read (Task 5). Do not immediately read the pre-configure Wayland frame after `move_resize_frame` and call it a refusal. A consumed retry stays consumed if the client emits no further notification; do not poll forever or manufacture acknowledgement with an arbitrary delay.
-- [ ] **Verify GREEN:** focused suites, typecheck, Layer 0 check.
-- [ ] **Commit:** `feat(geometry): bound corrections by expected rectangle generation`.
+- [x] **Run RED:** `npx vitest run test/unit/runtime/reconcile.test.ts test/unit/shell/geometryBackend.test.ts`.
+- [x] **Implement explicit state transitions.** Each entry owns expected rect, monotonic generation, correctionQueued, retried and stubborn. New target/force creates a generation; first mismatching observation queues correction; emitting that correction consumes the retry; a later mismatching observation marks stubborn. Matching and stale notifications have no effect on the budget. Clear queued correction when the observed frame returns to target before dispatch.
+- [x] **Test apply-time resolution and monitor identity.** A fake writer removes id 2 while applying id 1; only id 1 is written and returned in the applied set. Confirm integer x/y/width/height are passed unchanged, repeated destroy is safe, native failure for one id does not prevent the next id's application, and a vanished id is skipped. Feed MonitorIds connector groups at indices 0/1, remove the former index 0, then feed the surviving connector at index 0: its stable id must remain unchanged. Re-add the vanished connector, test mirrored connector groups and verify clear empties the lookup.
+- [x] **Implement geometry/topology bridge.** `move_resize_frame(false, x, y, width, height)` exists only in this adapter. Group active connectors by Mutter logical index, sort each connector group into a stable key, and retain an internal key→monotonic numeric id map across topology snapshots. Reindexing preserves ids; genuinely vanished/returned groups use their retained key identity. Read each workspace's work area using the current native index. Return null if no usable logical monitor/work area exists; Engine retains its current tree until a complete snapshot arrives.
+- [x] **Pin asynchronous observation behavior.** Native size/position events are coalesced by Engine into a deferred fresh frame read (Task 5). Do not immediately read the pre-configure Wayland frame after `move_resize_frame` and call it a refusal. A consumed retry stays consumed if the client emits no further notification; do not poll forever or manufacture acknowledgement with an arbitrary delay.
+- [x] **Verify GREEN:** focused suites, typecheck, Layer 0 check.
+- [x] **Commit:** `feat(geometry): bound corrections by expected rectangle generation`.
 
 ## Task 5: Make Engine own the tree, lifecycle and commit pipeline
 
@@ -889,7 +889,7 @@ Self-review corrected the void-returning Tree.check assertions, stable-monitor l
 
 ## Execution record
 
-Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–3 are complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
+Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–4 are complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
 
 Ruling: Run the complex nested-layout/pending-split reload and selected-parent acknowledgement regressions in Task 6, once tree command dispatch exists. Task 5 still proves flat-tree retention and native lifecycle transitions. This avoids test-only mutation hooks or prematurely implementing the next task. Cost if wrong: complex reload defects may be discovered one task later; Task 6 must close the proof before completion.
 
@@ -898,5 +898,6 @@ Ruling: Run the complex nested-layout/pending-split reload and selected-parent a
 | 1 — settings reconciliation | GPT-5.6 Sol / GPT-5.6 Sol | `d36bf17` | 10 focused tests; 239 full-suite tests; both TypeScript programs; Layer 0; diff check | Spec compliant, quality approved; no findings. Task 5 effective-count dependency confirmed in its contract. |
 | 2 — topology migration | GPT-5.6 Sol / GPT-5.6 Sol | `0818493` | 16 final focused tests; 253 full-suite tests; tree lint; both TypeScript programs; diff check | Spec compliant, quality approved; no findings. |
 | 3 — window tracking | GPT-5.6 Sol / GPT-5.6 Sol | `caf75b6`, `3edcdce` | 29 initial focused tests; 282 full-suite tests; 7 focused fix tests; both TypeScript programs; Layer 0; diff check | MRU enumeration finding fixed and re-reviewed clean. Minor native enum-mapping test coverage deferred to final review. |
+| 4 — geometry reconciliation | GPT-5.6 Sol / GPT-5.6 Sol | `3f70af4`, `1e4a455` | 11 initial focused tests; 294 full-suite tests; 11 topology/backend fix tests; both TypeScript programs; Layer 0; staged diff check | Partial topology publication finding fixed with a GI-free transactional collector and re-reviewed clean. |
 
 Ruling: Use Meta.TabList.NORMAL_ALL_MRU for per-workspace adoption instead of the NORMAL example in spec §8.5. The installed Mutter 18 API explicitly guarantees pure MRU order for this variant, including minimized windows; classification still decides which windows are managed. — Preserves the binding MRU intent rather than relying on unordered Workspace.list_windows or NORMAL grouping behavior. — Cost if wrong: adoption may include additional eligible windows or choose a different initial order; native integration must verify adoption and minimized-window behavior.
