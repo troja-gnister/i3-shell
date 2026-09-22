@@ -7,6 +7,7 @@ import {
   descendFocused,
   detach,
   focusChain,
+  leaves,
   replace,
   type AllocateSplit,
   type Con,
@@ -214,27 +215,135 @@ export class Tree {
     this.activeWorkspace = index;
   }
 
+  addFloating(window: WindowId, workspace: number): void {
+    assertWindowId(window);
+    const ws = this.workspace(workspace);
+    if (this.location(window)) throw new Error(`window ${window} is already tracked`);
+    ws.floating.unshift(window);
+    ws.focusedFloating = window;
+  }
+
+  setFloating(window: WindowId, enabled: boolean, monitor: MonitorId): void {
+    assertWindowId(window);
+    const location = this.location(window);
+    if (!location) throw new Error(`window ${window} is not tracked`);
+    if (location.floating === enabled) return;
+
+    const workspace = this.workspace(location.workspace);
+    if (enabled) {
+      const leaf = this.find(window);
+      if (!leaf) throw new Error(`tiled window ${window} has no container`);
+      const fallback = workspace.focusedCon === leaf ? ancestorChain(leaf.parent) : [];
+      if (workspace.focusedCon === leaf) workspace.focusedCon = null;
+      detach(leaf);
+      this.normalizeWorkspace(workspace, undefined, fallback);
+      workspace.floating.unshift(window);
+      workspace.focusedFloating = window;
+      return;
+    }
+
+    this.root(location.workspace, monitor);
+    const index = workspace.floating.indexOf(window);
+    if (index === -1) throw new Error(`floating window ${window} is not owned by its workspace`);
+    workspace.floating.splice(index, 1);
+    if (workspace.focusedFloating === window)
+      workspace.focusedFloating = workspace.floating[0] ?? null;
+    this.insert(window, location.workspace, monitor);
+  }
+
+  focusModeToggle(): WindowId | null {
+    const selection = this.selection();
+    if (!selection) return null;
+    if (selection.kind === 'tiled') {
+      const workspace = this.owner(selection.con);
+      const target = workspace.floating[0];
+      if (target === undefined) return null;
+      this.selectFloating(target);
+      return target;
+    }
+
+    const location = this.location(selection.window);
+    if (!location) throw new Error(`floating window ${selection.window} is not tracked`);
+    const workspace = this.workspace(location.workspace);
+    const tiled = workspace.focusedCon ? descendFocused(workspace.focusedCon) : null;
+    if (!tiled) return null;
+    this.select(tiled);
+    return tiled.window;
+  }
+
+  moveToWorkspace(target: number, monitor: MonitorId): WindowId[] {
+    const targetWorkspace = this.workspace(target);
+    const targetRoot = this.root(target, monitor);
+    const selection = this.selection();
+    if (!selection) return [];
+
+    if (selection.kind === 'floating') {
+      const location = this.location(selection.window);
+      if (!location) throw new Error(`floating window ${selection.window} is not tracked`);
+      if (location.workspace === target) return [];
+      const sourceWorkspace = this.workspace(location.workspace);
+      const index = sourceWorkspace.floating.indexOf(selection.window);
+      if (index === -1)
+        throw new Error(`floating window ${selection.window} is not owned by its workspace`);
+      sourceWorkspace.floating.splice(index, 1);
+      sourceWorkspace.focusedFloating = sourceWorkspace.floating[0] ?? null;
+      targetWorkspace.floating = [
+        selection.window,
+        ...targetWorkspace.floating.filter(window => window !== selection.window),
+      ];
+      targetWorkspace.focusedFloating = selection.window;
+      return [selection.window];
+    }
+
+    const sourceWorkspace = this.owner(selection.con);
+    if (sourceWorkspace === targetWorkspace) return [];
+    const windows = [...leaves(selection.con)].map(leaf => leaf.window);
+    if (windows.length === 0) return [];
+
+    let moved: Con;
+    let fallback: Con[];
+    if (selection.con.kind === 'split' && selection.con.root) {
+      const sourceRoot = selection.con;
+      const wrapper = this.allocateSplit(sourceRoot.layout);
+      wrapper.lastSplitLayout = sourceRoot.lastSplitLayout;
+      wrapper.children = sourceRoot.children;
+      wrapper.percents = sourceRoot.percents;
+      wrapper.focusedChild = sourceRoot.focusedChild;
+      for (const child of wrapper.children) child.parent = wrapper;
+      sourceRoot.children = [];
+      sourceRoot.percents = [];
+      sourceRoot.focusedChild = null;
+      moved = wrapper;
+      fallback = [sourceRoot];
+    } else {
+      fallback = ancestorChain(selection.con.parent);
+      sourceWorkspace.focusedCon = null;
+      detach(selection.con);
+      moved = selection.con;
+    }
+
+    this.normalizeWorkspace(sourceWorkspace, undefined, fallback);
+    const insertion = this.insertionPoint(targetWorkspace, targetRoot);
+    attach(insertion.parent, moved, insertion.index);
+    this.select(moved);
+    this.normalizeWorkspace(targetWorkspace, undefined, ancestorChain(moved.parent));
+    return windows;
+  }
+
   insert(window: WindowId, workspace: number, monitor: MonitorId): LeafCon {
     assertWindowId(window);
     const ws = this.workspace(workspace);
     const root = this.root(workspace, monitor);
     if (this.location(window)) throw new Error(`window ${window} is already tracked`);
 
-    const selected = ws.focusedCon && contains(root, ws.focusedCon)
-      ? ws.focusedCon
-      : descendFocused(root) ?? root;
-    const parent = selected.kind === 'leaf' ? selected.parent : selected;
-    if (!parent) throw new Error(`selected container ${selected.id} has no insertion parent`);
-    const index = selected.kind === 'leaf'
-      ? parent.children.indexOf(selected) + 1
-      : parent.children.length;
+    const insertion = this.insertionPoint(ws, root);
     const leaf: LeafCon = {
       kind: 'leaf',
       id: this.nextNodeId++,
       parent: null,
       window,
     };
-    attach(parent, leaf, index);
+    attach(insertion.parent, leaf, insertion.index);
     ws.focusedCon = leaf;
     ws.focusedFloating = null;
     focusChain(leaf);
@@ -373,6 +482,23 @@ export class Tree {
       repairWorkspace(workspace, fallback);
     }
     repairWorkspace(workspace, fallback);
+  }
+
+  private insertionPoint(
+    workspace: WorkspaceCon,
+    root: SplitCon,
+  ): {parent: SplitCon; index: number} {
+    const selected = workspace.focusedCon && contains(root, workspace.focusedCon)
+      ? workspace.focusedCon
+      : descendFocused(root) ?? root;
+    const parent = selected.kind === 'leaf' ? selected.parent : selected;
+    if (!parent) throw new Error(`selected container ${selected.id} has no insertion parent`);
+    return {
+      parent,
+      index: selected.kind === 'leaf'
+        ? parent.children.indexOf(selected) + 1
+        : parent.children.length,
+    };
   }
 }
 
