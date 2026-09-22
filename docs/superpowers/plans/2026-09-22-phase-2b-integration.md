@@ -148,7 +148,7 @@ Task 5 extends `EnginePorts` atomically with `windows: WindowsPort`, `geometry: 
 - Produces unchanged `SettingsOverrides.apply(plan: OverridePlan): ClearedBinding[]`, now safe to call repeatedly without `restoreAll()` between calls; `restoreAll(): void` retains failure recovery and adds reset/sync.
 - The engine switches to this contract in Task 5. Until then, existing call sites still compile.
 
-- [ ] **Write the reload regression using the existing fixture.**
+- [x] **Write the reload regression using the existing fixture.**
 
 ~~~ts
 it('reconciles bindings without restoring the original workspace count', () => {
@@ -166,9 +166,9 @@ it('reconciles bindings without restoring the original workspace count', () => {
 });
 ~~~
 
-- [ ] **Run RED:** `npx vitest run test/unit/shell/settings.test.ts`. The restored former binding/no redundant workspace write assertions fail.
-- [ ] **Implement reconciliation.** For a saved binding, derive the next filtered value from its saved original, not its already-filtered current value. For unsaved keys use current values. Restore and retire a saved binding when the new plan no longer overrides it; preserve the snapshot entry on failure. Keep originals for workspace/mouse keys that remain overridden and only write when the desired value differs. Never temporarily restore `dynamic-workspaces` or `num-workspaces` while applying another plan.
-- [ ] **Extend the fake and write reset/sync tests.** Add explicit `defaults` and `userValues` stores to `FakeSettings`, `get_default_value(key)`, `get_value(key)`, `get_user_value(key)` and `reset(key)`, and an exported `syncCalls` counter incremented by `fakeGio.Settings.sync()`. Add `resetFakeSettings(): void` for beforeEach to clear schemas, writes and the counter. Defaults initially clone constructor values and can be changed by individual tests. Preserve false/throw injection; a false reset failure leaves the value and user override unchanged.
+- [x] **Run RED:** `npx vitest run test/unit/shell/settings.test.ts`. The restored former binding/no redundant workspace write assertions fail.
+- [x] **Implement reconciliation.** For a saved binding, derive the next filtered value from its saved original, not its already-filtered current value. For unsaved keys use current values. Restore and retire a saved binding when the new plan no longer overrides it; preserve the snapshot entry on failure. Keep originals for workspace/mouse keys that remain overridden and only write when the desired value differs. Never temporarily restore `dynamic-workspaces` or `num-workspaces` while applying another plan.
+- [x] **Extend the fake and write reset/sync tests.** Add explicit `defaults` and `userValues` stores to `FakeSettings`, `get_default_value(key)`, `get_value(key)`, `get_user_value(key)` and `reset(key)`, and an exported `syncCalls` counter incremented by `fakeGio.Settings.sync()`. Add `resetFakeSettings(): void` for beforeEach to clear schemas, writes and the counter. Defaults initially clone constructor values and can be changed by individual tests. Preserve false/throw injection; a false reset failure leaves the value and user override unchanged.
 
 ~~~ts
 it('resets an original equal to its default and syncs restoration', () => {
@@ -184,9 +184,9 @@ it('resets an original equal to its default and syncs restoration', () => {
 ~~~
 
 Also assert that failed resets retain the original; non-default originals use their typed setter; missing schemas retain entries; repeated restoration remains safe; each live mutation still follows persistence of the original.
-- [ ] **Implement confirmed restoration.** Compare the saved value with `get_default_value(key)?.deep_unpack()`. If equal, reset and confirm `get_user_value(key) === null` plus effective-value equality before retiring the entry. Otherwise use the existing typed setter path. Save the residual snapshot, then `Gio.Settings.sync()`. Guard failures per key and retain the existing recovery tests.
-- [ ] **Verify GREEN:** focused settings suite, `npm run typecheck` and `npm run check:layer0`.
-- [ ] **Commit:** `fix(settings): reconcile overrides without workspace resets`, with actual model trailer. No host settings are read or written by these unit tests.
+- [x] **Implement confirmed restoration.** Compare the saved value with `get_default_value(key)?.deep_unpack()`. If equal, reset and confirm `get_user_value(key) === null` plus effective-value equality before retiring the entry. Otherwise use the existing typed setter path. Save the residual snapshot, then `Gio.Settings.sync()`. Guard failures per key and retain the existing recovery tests.
+- [x] **Verify GREEN:** focused settings suite, `npm run typecheck` and `npm run check:layer0`.
+- [x] **Commit:** `fix(settings): reconcile overrides without workspace resets`, with actual model trailer. No host settings are read or written by these unit tests.
 
 ## Task 2: Preserve tree ownership across topology changes
 
@@ -490,7 +490,7 @@ For maximization, configure the fake `unmaximize` to keep both flags true until 
 
 - [ ] **Implement reload/restart/count changes with their regression tests.** Validate the new config before mutation. Resolve effective N from the config or current count (1–36); apply overrides without `restoreAll()` between valid configurations. Reconfigure the existing Tree, recording the returned expected workspace destinations before native count changes. On shrink, issue those per-id workspace moves to the last retained workspace before reducing the native count, so Mutter's own removal fallback cannot choose a different destination and flatten the transferred structure. Test this call order and matching acknowledgements. Preserve surviving nodes/percentages on reload. If work areas for newly created native workspaces have not arrived, publish `ready: false` and defer their geometry until count/work-area notification supplies them. Enforce the desired static count after external changes.
 
-Restart first requires a successful reload, then rebuilds from live windows using fresh initial classification and the same adapter ids. A rejected reload/restart preserves tree/config/grabs, including selections and pending split containers. Add getter `lastLoadTime: number`, set from `ports.now()` when accepting the LoadedConfig, for the timestamp paired with existing `lastLoad`. Fix the stale “retrying once” message. Test count zero, grow/shrink, rejected restart, cache-source notification and native activation returning false.
+Restart first requires a successful reload, then rebuilds from live windows using fresh initial classification and the same adapter ids. A rejected reload/restart preserves tree/config/grabs and selection; Task 6 adds nested-layout/pending-split regression fixtures once commands can construct those states. Add getter `lastLoadTime: number`, set from `ports.now()` when accepting the LoadedConfig, for the timestamp paired with existing `lastLoad`. Fix the stale “retrying once” message. Test count zero, grow/shrink, rejected restart, cache-source notification and native activation returning false.
 
 - [ ] **Verify GREEN:** engine/snapshot suites, `npm test`, `npm run typecheck`, `npm run check:layer0`, `npm run lint:tree`. Existing Phase 1 focused-window fake assertions become id-based assertions; delete only the obsolete “tiling not implemented” expectations.
 - [ ] **Commit:** `feat(engine): integrate tree lifecycle and geometry commits`.
@@ -557,6 +557,8 @@ expect(f.applied.at(-1)?.get(1)).toEqual({x: 345, y: 280, width: 310, height: 20
 ~~~
 
 Explicit x/y are absolute logical coordinates; center uses the selected window's workspace/monitor work area and integer rounding. Floating resize uses px even if ppt is present, rejects nonpositive/nonfinite results before mutation, and keeps position. Tiled `resize set` and `move position` warn without mutation. Subsequent floating size notifications cause no corrective writes.
+
+- [ ] **Prove reload retention on nested layouts and pending splits (execution ruling).** Use split/add/resize commands to create a vertical subtree with non-default percentages, then a pending horizontal split around its selected leaf. Save the workspace snapshot and reload an accepted config; every node id, layout, percentage and selection must survive. A rejected restart preserves the same snapshot; an accepted restart rebuilds from live windows. This completes the complex reload proof introduced in Task 5 without exposing a mutable Tree test hook.
 
 - [ ] **Cover commands through bindings and chains.** Use the real fixture's split/focus/move/resize bindings, 10-ppt resize behavior, parent move and root-content transfer, tabbed/stacked raise order, empty workspace no-op, fixed-size floating, wrong/gone ids, already-enabled floating/fullscreen, numeric string and named workspace targets, failed workspace activation and zero workspace wrap. Compound commands observe prior command mutations in order.
 - [ ] **Verify GREEN:** command/lifecycle suites plus `npm test`, typecheck and Layer 0 check.
@@ -881,10 +883,16 @@ Phase 1 deferred items are accounted for: default reset/sync and reload reconcil
 - [x] Check the five Review Focus cases each have a concrete regression in the owning task.
 - [x] Scan for placeholders and obsolete Phase 1 geometry assumptions.
 - [x] Verify document links, fence balance and `git diff --check`.
-- [ ] Present the completed plan for the required written-plan review; preserve the previously chosen subagent execution method.
+- [x] Present the completed plan for the required written-plan review; preserve the previously chosen subagent execution method. The user approved it before implementation.
 
 Self-review corrected the void-returning Tree.check assertions, stable-monitor lookup test seam, nullable monitor transitions, snapshot titles/wm-classes/config load time, callback-generation capture, effective count-zero settings, minimized pill occupancy, and initially-disabled harness startup. Fresh preparation verification: 234/234 tests in 22 files passed on the unchanged implementation; all ten task sections and local document links were checked. No integration suite or installation ran during planning.
 
 ## Execution record
 
-Implementation has not started. Add per-task implementer, reviewer, commit and verification evidence here during execution; do not pre-mark acceptance or reuse Phase 2A test results as Phase 2B evidence.
+Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Task 1 is complete and independently reviewed. Remaining tasks continue without another approval checkpoint.
+
+Ruling: Run the complex nested-layout/pending-split reload and selected-parent acknowledgement regressions in Task 6, once tree command dispatch exists. Task 5 still proves flat-tree retention and native lifecycle transitions. This avoids test-only mutation hooks or prematurely implementing the next task. Cost if wrong: complex reload defects may be discovered one task later; Task 6 must close the proof before completion.
+
+| Task | Implementer / reviewer | Commit | Verification | Status |
+|---|---|---|---|---|
+| 1 — settings reconciliation | GPT-5.6 Sol / GPT-5.6 Sol | `d36bf17` | 10 focused tests; 239 full-suite tests; both TypeScript programs; Layer 0; diff check | Spec compliant, quality approved; no findings. Task 5 effective-count dependency confirmed in its contract. |

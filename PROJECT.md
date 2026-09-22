@@ -9,7 +9,7 @@ with directional navigation. Three things are the non-negotiable core: **workspa
 **shortcuts**, **dynamic tiling**. Phases 1 and 2 deliver that core; Phases 3 and 4 add appearance and
 fidelity.
 
-**State (2026-09-22):** Phase 1 (Foundation) is implemented, reviewed and merged into `main`, with the two recovery fixes in `19eac12` and `7bb138b`. The user reported the full live A1–A7 walk green on 2026-09-21. Phase 2A is implemented, reviewed and merged into `main` (fast-forward to `849e181` on 2026-09-22). All 234 tests passed on the merged result, and the completed `phase-2` branch was deleted. The Phase 2B window/geometry integration plan is prepared for written-plan review; implementation has not started and live A8–A14 acceptance remains unclaimed. Phases 3–4 are designed but not yet planned in detail or built. GitHub `origin` is configured; `main` was pushed at `568855c` before the Phase 2B planning documentation.
+**State (2026-09-22):** Phase 1 (Foundation) is implemented, reviewed and merged into `main`, with the two recovery fixes in `19eac12` and `7bb138b`. The user reported the full live A1–A7 walk green on 2026-09-21. Phase 2A is implemented, reviewed and merged into `main` (fast-forward to `849e181` on 2026-09-22). All 234 tests passed on the merged result, and the completed `phase-2` branch was deleted. The user approved the Phase 2B window/geometry integration plan; implementation is in progress on `phase-2b`, and live A8–A14 acceptance remains unclaimed. Phases 3–4 are designed but not yet planned in detail or built. GitHub `origin` is configured; `main` was pushed at `568855c` before the Phase 2B planning documentation.
 
 ---
 
@@ -21,7 +21,7 @@ fidelity.
 | `docs/superpowers/plans/2026-09-20-phase-1-foundation.md` | The Phase 1 implementation plan (14 TDD tasks with full code). Several of its code blocks were wrong and were fixed during execution — where plan and code differ, the code (and the carry-forward doc) wins. |
 | `docs/superpowers/plans/2026-09-21-phase-1-carry-forward.md` | Execution record: every ruling made while building Phase 1, items deferred to Phases 2/4, security note. **Read before planning Phase 2.** |
 | `docs/superpowers/plans/2026-09-21-phase-2a-tree.md` | Phase 2A pure-tree plan, preparation audit and execution record. Implementation, delivery checks and reviews are complete; merged into `main` on 2026-09-22. Window lifecycle and geometry integration follow in Phase 2B. |
-| `docs/superpowers/plans/2026-09-22-phase-2b-integration.md` | Phase 2B implementation plan: settings reconciliation, topology, window tracking, bounded geometry corrections, engine lifecycle/commands, D-Bus/session handling, GTK integration and A8–A14. Prepared for user review; not implemented. |
+| `docs/superpowers/plans/2026-09-22-phase-2b-integration.md` | Phase 2B implementation plan: settings reconciliation, topology, window tracking, bounded geometry corrections, engine lifecycle/commands, D-Bus/session handling, GTK integration and A8–A14. Approved by the user; implementation in progress on `phase-2b`. |
 | `docs/acceptance/phase-1.md` | The live-session checklist for A1–A7, passed by user report on 2026-09-21. |
 | `README.md` | User-facing: install, control via D-Bus, dev commands. |
 | `src/` | The extension (TypeScript, see §4). |
@@ -135,7 +135,7 @@ Target arrangements: laptop alone (`eDP-1`) and docked with external display(s),
 
 1. Phase 1 live acceptance is recorded as passed; preserve its 64-test regression baseline, including the failed-restore and config-cache regressions, inside the current 234-test suite.
 2. Phase 2A is reviewed and merged into `main`; the completed `phase-2` branch is deleted. `origin` is `git@github.com:troja-gnister/i3-shell.git`, and `main` tracks `origin/main`. The user authorized the initial push at `568855c`.
-3. Review the prepared [Phase 2B plan](docs/superpowers/plans/2026-09-22-phase-2b-integration.md), then execute it on `phase-2b` in this checkout using the preserved workflow. Phase 2 is complete only after live tiling/resizing and A8–A14 acceptance are delivered.
+3. Continue the approved [Phase 2B plan](docs/superpowers/plans/2026-09-22-phase-2b-integration.md) on `phase-2b` in this checkout using the preserved workflow. Resume from its plan-scoped SDD ledger; never restart completed tasks. Phase 2 is complete only after live tiling/resizing and A8–A14 acceptance are delivered.
 4. Continue with `superpowers:subagent-driven-development`: one implementer per task, a reviewer per task, and a whole-branch review at the end. Keep the ledger and record every ruling.
 5. Verify claims before trusting them: type-check GNOME API usage against `@girs` in a scratch project, extract the shell's JS to check behaviour, and run the nested shell for anything runtime-dependent.
 
