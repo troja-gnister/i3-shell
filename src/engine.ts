@@ -226,12 +226,16 @@ export class Engine {
       else if (this._tree.workspaces.size !== this._workspaceCount ||
         [...this._tree.workspace(0).monitors.keys()].join(',') !== topology.monitors.map(m => m.id).join(','))
         this._moveReconfigured(this._tree.reconfigure(this._workspaceCount, topology.monitors.map(m => m.id), topology.primary));
+      if (this._disposed) return;
       const tree = this._tree;
       tree.activateWorkspace(Math.min(this._workspaceCount - 1, Math.max(0, this._ports.workspaces.activeIndex)));
       const live = this._ports.windows.list();
       const ids = new Set(live.map(w => w.id));
       for (const id of this._windows.keys()) if (!ids.has(id)) this._forget(id);
-      for (const info of live) this._syncWindow(info.id);
+      for (const info of live) {
+        this._syncWindow(info.id);
+        if (this._disposed) return;
+      }
       if (isNew) {
         const restored = new Set<number>();
         for (const info of live) {
@@ -275,9 +279,14 @@ export class Engine {
       active: index === this._ports.workspaces.activeIndex,
       occupied: [...this._windows.values()].some(w => w.workspace === index),
     })));
+    if (this._disposed) return;
     this._revision++;
     for (const callback of [...this._listeners]) {
-      try { callback(); } catch (error) { this._ports.log.warn(`tree subscriber failed: ${String(error)}`); }
+      if (this._disposed) return;
+      try { callback(); } catch (error) {
+        if (this._disposed) return;
+        this._ports.log.warn(`tree subscriber failed: ${String(error)}`);
+      }
     }
   }
 
@@ -317,7 +326,9 @@ export class Engine {
       if (info.maximizedH || info.maximizedV) {
         if (!this._unmaximizing.has(id)) {
           this._unmaximizing.add(id);
-          if (!this._ports.windows.unmaximize(id)) this._unmaximizing.delete(id);
+          const requested = this._ports.windows.unmaximize(id);
+          if (this._disposed) return;
+          if (!requested) this._unmaximizing.delete(id);
         }
       } else if (this._unmaximizing.delete(id)) this._forced.add(id);
     }
@@ -355,10 +366,13 @@ export class Engine {
   }
 
   private _acceptFocus(id: WindowId | null): void {
-    if (id === null || !this._tree?.location(id)) return;
-    const expected = this._expectedFocus.delete(id);
-    if (!expected && id !== this._lastFocus) this._selectWindow(id);
+    const expected = id !== null && this._expectedFocus.has(id);
+    // Any native focus report resolves or supersedes the one pending request.
+    this._expectedFocus.clear();
+    const duplicate = id === this._lastFocus;
     this._lastFocus = id;
+    if (id === null || !this._tree?.location(id)) return;
+    if (!expected && !duplicate) this._selectWindow(id);
   }
 
   private _selectedIds(): WindowId[] {
@@ -371,15 +385,21 @@ export class Engine {
     const selection = this._tree?.selection();
     const id = selection?.kind === 'floating' ? selection.window : selection?.kind === 'tiled'
       ? descendFocused(selection.con)?.window : undefined;
+    this._expectedFocus.clear();
     if (id === undefined) return;
     this._expectedFocus.add(id);
-    if (!this._ports.windows.activate(id, timestamp)) this._expectedFocus.delete(id);
+    const activated = this._ports.windows.activate(id, timestamp);
+    if (this._disposed) return;
+    if (!activated) this._expectedFocus.delete(id);
   }
 
   private _moveReconfigured(moves: ReadonlyMap<WindowId, number>): void {
     for (const [id, destination] of moves) this._expectedWorkspace.set(id, destination);
-    for (const [id, destination] of moves)
-      if (!this._ports.windows.moveToWorkspace(id, destination)) this._expectedWorkspace.delete(id);
+    for (const [id, destination] of moves) {
+      const moved = this._ports.windows.moveToWorkspace(id, destination);
+      if (this._disposed) return;
+      if (!moved) this._expectedWorkspace.delete(id);
+    }
   }
 
   private _raiseChanged(): void {
@@ -394,7 +414,10 @@ export class Engine {
         const key = order.join(',');
         if (this._raiseOrders.get(root.id) === key) continue;
         this._raiseOrders.set(root.id, key);
-        for (const id of order) this._ports.windows.raise(id);
+        for (const id of order) {
+          this._ports.windows.raise(id);
+          if (this._disposed) return;
+        }
         raised = true;
       }
     }
@@ -493,17 +516,23 @@ export class Engine {
         const moves = this._tree.reconfigure(count, this._topology.monitors.map(m => m.id), this._topology.primary);
         for (const info of this._windows.values()) if (info.workspace >= count) moves.set(info.id, count - 1);
         this._moveReconfigured(moves);
+        if (this._disposed) return;
       }
       this._ports.settings.apply(config, count);
+      if (this._disposed) return;
       this._mode = 'default';
       if (!this._locked) {
         const report = this._ports.keys.setBindings(this._modeBindings('default'));
+        if (this._disposed) return;
         if (report.failed.length > 0)
           this._ports.log.warn(`${report.failed.length} binding(s) could not be grabbed`);
       }
       this._ports.indicator.setMode(null);
+      if (this._disposed) return;
       this._ports.indicator.setColors(this._config.colors);
+      if (this._disposed) return;
       this._ports.indicator.setVisible(!this._locked);
+      if (this._disposed) return;
 
       if (warnings.length > 0)
         this._ports.notify('i3-shell', `${warnings.length} config warning(s) — see the shell log`);

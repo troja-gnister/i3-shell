@@ -167,4 +167,67 @@ describe('engine lifecycle', () => {
     expect(f.applied).toHaveLength(2); expect(f.engine.windowsSnapshot()[0].stubborn).toBe(true);
   });
 
+  it('invalidates an asynchronous focus request when another genuine focus wins', () => {
+    const f = fakeEngine(); f.engine.start(); f.add(1); f.add(2); f.add(3); f.flush();
+    const requests: number[] = [];
+    f.ports.windows.activate = id => { requests.push(id); return true; };
+    f.remove(3); expect(requests).toEqual([1]);
+    f.focus(2); f.focus(1); f.engine.run([{type: 'kill'}], 0);
+    expect(f.calls.at(-1)).toBe('kill:1');
+  });
+
+  it.each([null, 999])('processes returning tracked focus after native focus becomes %s', other => {
+    const f = fakeEngine(); f.engine.start(); f.add(1); f.focus(1); f.add(2);
+    f.focus(other); f.engine.run([{type: 'kill'}], 0);
+    expect(f.calls.at(-1)).toBe('kill:2');
+    f.focus(1); f.engine.run([{type: 'kill'}], 0);
+    expect(f.calls.at(-1)).toBe('kill:1');
+  });
+
+  it('stops adoption immediately when native unmaximize disposes the engine', () => {
+    const f = fakeEngine();
+    f.windows.set(1, windowInfo(1, {maximizedH: true, maximizedV: true}));
+    f.windows.set(2, windowInfo(2));
+    let stoppedTree: ReturnType<typeof f.engine.treeSnapshot> | undefined;
+    f.ports.windows.unmaximize = () => {
+      f.engine.stop(); stoppedTree = f.engine.treeSnapshot(); return false;
+    };
+    f.engine.start(); f.flush();
+    expect(f.applied).toEqual([]);
+    expect(f.engine.treeSnapshot()).toEqual(stoppedTree);
+    expect(f.engine.windowsSnapshot().map(w => w.id)).toEqual([1]);
+    expect(f.pills).toEqual([]);
+  });
+
+  it('stops delivering captured subscribers when a listener disposes the engine', () => {
+    const f = fakeEngine(); f.engine.start();
+    let laterCalls = 0;
+    f.engine.subscribeTreeChanged(() => f.engine.stop());
+    f.engine.subscribeTreeChanged(() => laterCalls++);
+    f.add(1); f.flush();
+    expect(laterCalls).toBe(0);
+  });
+
+  it('stops a shrinking reload after a native workspace move disposes the engine', () => {
+    const f = fakeEngine(); f.engine.start(); f.add(1, {workspace: 9}); f.add(2, {workspace: 9}); f.flush();
+    const loaded = f.load('bindsym Mod4+x kill');
+    f.setNextLoad({...loaded, config: {...loaded.config!, workspaceCount: 2}});
+    const moved: number[] = [];
+    f.ports.windows.moveToWorkspace = id => { moved.push(id); f.engine.stop(); return false; };
+    f.calls.length = 0; f.applied.length = 0;
+    f.engine.run([{type: 'reload'}], 0); f.flush();
+    expect(moved).toHaveLength(1);
+    expect(f.calls).toEqual(['ungrabAll', 'settings.restore']);
+    expect(f.applied).toEqual([]);
+  });
+
+  it('does not resume startup effects after settings application disposes the engine', () => {
+    const f = fakeEngine();
+    f.ports.settings.apply = () => f.engine.stop();
+    f.engine.start();
+    expect(f.calls).toEqual(['ungrabAll', 'settings.restore']);
+    expect(f.ports.keys.grabbedCount).toBe(0);
+    expect(f.applied).toEqual([]);
+  });
+
 });
