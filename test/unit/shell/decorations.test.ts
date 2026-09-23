@@ -498,10 +498,17 @@ describe('Decorations', () => {
       const rows = layout === 'stacked' ? tabs.length : 1;
       const bandBottom = rect.y + ROW_HEIGHT * rows;
       expect(box.geometry.y + box.geometry.height).toBe(bandBottom);
-      for (const button of tabActors().filter(button => !button.destroyed)) {
-        expect(button.geometry.height).toBeGreaterThan(0);     // sized at all
-        expect(box.geometry.y + button.geometry.height).toBeLessThanOrEqual(bandBottom);
-      }
+      const heights = tabActors().filter(button => !button.destroyed)
+        .map(button => button.geometry.height);
+      expect(heights).toHaveLength(tabs.length);
+      for (const height of heights) expect(height).toBeGreaterThan(0);   // sized at all
+      // A stacked band holds its tabs one under another, so it is the sum
+      // that has to fit: measuring a single tab passes even when every tab
+      // after the first hangs below the band and over the client. A tabbed
+      // row stacks nothing -- all its tabs share the one row.
+      const stacked = heights.reduce((total, height) => total + height, 0);
+      const occupied = layout === 'stacked' ? stacked : Math.max(...heights);
+      expect(box.geometry.y + occupied).toBeLessThanOrEqual(bandBottom);
       d.apply(empty);
     }
   });
@@ -513,6 +520,20 @@ describe('Decorations', () => {
     d.apply(row(R(0, 0, 400, 30), [tab(1, 'One'), tab(2, 'Two')], 'stacked'));
     expect(lastCreated('row').geometry).toEqual(R(0, 0, 400, 30));
     expect(tabActors().map(button => button.geometry.height)).toEqual([15, 15]);
+  });
+
+  it('draws a zero-height tab rather than a negative one when the band cannot hold a row', () => {
+    // The degenerate end of the clamp: rect.height < rows, so the band is the
+    // container's own height and floor(height / rows) is 0. Zero is the honest
+    // answer -- the engine reserved no usable row either (layoutWithRects
+    // clamps the same way) -- and it is the value that must not go negative,
+    // which would be a Clutter warning per tab and a band drawn over the
+    // client it is supposed to sit above.
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    d.apply(row(R(0, 0, 400, 1), [tab(1, 'One'), tab(2, 'Two')], 'stacked'));
+    expect(lastCreated('row').geometry).toEqual(R(0, 0, 400, 1));
+    expect(tabActors().map(button => button.geometry.height)).toEqual([0, 0]);
+    expect(criticals).toEqual([]);
   });
 
   it('re-orients a row in place when its container switches tabbed <-> stacked', () => {

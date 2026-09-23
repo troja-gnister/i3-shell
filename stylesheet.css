@@ -46,7 +46,14 @@
 
      No `spacing` either. The tab sizes already add up to the band exactly, so
      a gap between them would push the last tab past the box's allocation and
-     Clutter would answer by shrinking every tab to fit. */
+     Clutter would answer by shrinking every tab to fit.
+
+     And no vertical padding here, ever: a stacked band is one row per child,
+     so padding on the box is charged once while the rows it squeezes are
+     charged N times -- the taller the container's child count, the worse it
+     gets. Breathing room around a title belongs on `.i3-shell-tab`, which is
+     inside what measureRowHeight() reports and therefore inside what the
+     engine reserves. */
   background-color: transparent;
 }
 

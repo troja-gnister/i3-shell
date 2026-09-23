@@ -90,9 +90,11 @@ below are the ones in `examples/i3-shell.config`: `$mod+a` focus parent, `$mod+w
       taller.
 - [ ] Close one of them: its tab goes, and the remaining windows keep the same geometry rule
       (rect minus one row).
-- [ ] Set a noticeably larger interface font (Settings → Accessibility → Large Text, or
-      `gsettings set org.gnome.desktop.interface font-name 'Cantarell 16'`): the row gets taller
-      **and the windows move down with it** — the tab text is never clipped. Put the font back.
+- [ ] Set a noticeably larger interface font with
+      `gsettings set org.gnome.desktop.interface font-name 'Cantarell 16'`: the row gets taller
+      **and the windows move down with it** — the tab text is never clipped. Put the font back
+      with `gsettings reset org.gnome.desktop.interface font-name`. (Use that command, not
+      Accessibility → Large Text: see the limitation below.)
 
 ## A18 — a stacked container
 - [ ] With three tiles, press `$mod+s`: **three** title rows appear, stacked one above the other,
@@ -123,7 +125,8 @@ below are the ones in `examples/i3-shell.config`: `$mod+a` focus parent, `$mod+w
 - [ ] Dock an external display: a bar appears at the top of **that** monitor showing the same
       workspace pills as the panel on the primary, with the same active workspace highlighted.
 - [ ] The primary monitor still shows GNOME's own panel and does **not** grow a second bar.
-- [ ] Switching workspaces (`$mod+1..0`) moves the highlight on every bar at once.
+- [ ] Switching workspaces (`$mod+1`…`$mod+4` in `examples/i3-shell.config`; whatever your own
+      config binds) moves the highlight on every bar at once.
 - [ ] Clicking a pill on the external monitor's bar switches the workspace.
 - [ ] `$mod+r` (resize mode): the mode label appears on every bar, and leaving the mode removes it
       from every bar.
@@ -152,6 +155,12 @@ below are the ones in `examples/i3-shell.config`: `$mod+a` focus parent, `$mod+w
 - **`border toggle` is two-state.** It alternates between the configured width and `0`. i3 cycles
   `normal → none → pixel`; with no title bars to draw, `normal` and `pixel` are the same thing
   here, so the cycle would have two indistinguishable stops out of three.
+- **The title row does not re-measure when the *text scaling factor* changes.** The row follows
+  the interface **font**: the shell re-measures on `St.Settings`'s `font-name` change, which is the
+  only font signal `St.Settings` has. Accessibility → Large Text sets
+  `org.gnome.desktop.interface text-scaling-factor`, a different path that never reaches that
+  signal, so the tabs will grow with the scaled text while the row they sit in does not. Log out
+  and back in after a text-scaling change and the row is measured correctly again.
 - **A bar is never shorter than 28px**, whatever the theme says its content needs. It is a floor,
   not a size: the bar grows with the font and the scale factor, and only a very small font can make
   the floor visible as a slightly roomier bar than you expected.
@@ -178,7 +187,7 @@ native criticals.** It ticks nothing above.
 | Two virtual outputs | the secondary work area is shorter than its monitor by the bar's strut, and tiles there start below the bar | passed — the bar reserved **28px**, the work area started 28px below the monitor's top, and a tile there was 692px tall on a 720px output |
 | Native-critical gate | no GJS/Mutter `CRITICAL` across enable, disable and shutdown with decorations present | passed |
 
-Unit suite alongside it: **521 tests in 48 files**, both TypeScript programs, Layer 0 and tree
+Unit suite alongside it: **524 tests in 48 files**, both TypeScript programs, Layer 0 and tree
 lint.
 
 Every rectangle in those scenarios is computed by an independent implementation of the layout rule
@@ -191,18 +200,19 @@ than reproduced.
 **What the automation deliberately does not cover**, and why this walk matters more in 3A than in
 any phase before it:
 
-- **No automated test asserts decoration geometry on screen — at all.** This is the gap to
-  understand before anything else on this list. The native suite asserts the *tree's* rectangles
-  (where each window was moved to) and the *work area*; the unit suite asserts actor *lifetime*
-  (built, reused, restyled, destroyed, never touched after disposal). Nothing in either one asks
-  where a decoration actor ended up on screen, how big it is, or what is above or below it. Two
-  real defects lived in exactly that gap and survived two reviews of the renderer: borders were
-  drawn *underneath* their own windows, where nothing could see them, and a title row was sized to
-  its container's whole rectangle, so its reactive tab buttons covered the client and swallowed
-  clicks meant for the window. Both were found by reasoning about the code, not by a failing test,
-  and both would have reached you. **A15's first box and A17's "clicking a tab focuses that window"
-  box are therefore carrying the weight for that whole class of defect** — please be unkind to
-  them.
+- **No test asserts what is actually rendered.** This is the gap to understand before anything
+  else on this list. The native suite asserts the *tree's* rectangles — where each window was moved
+  to — and the work area. The unit suite does now assert the geometry the renderer *computes*: a
+  title row's band height, each tab's size, that every tab stays inside the band, the clamp on a
+  container too short to hold a row, the axis, and which actor sits above which. But it asserts all
+  of that against **actor doubles**, by asking the renderer what it would set. Nobody has seen the
+  result on a screen, and no assertion anywhere can. Two real defects lived in exactly that gap and
+  survived two reviews of the renderer: borders were drawn *underneath* their own windows, where
+  nothing could see them, and a title row was sized to its container's whole rectangle, so its
+  reactive tab buttons covered the client and swallowed clicks meant for the window. Both were
+  found by reading the code, not by a failing test — the tests above were written *after*, to pin
+  the fixes. **A15's first box and A17's "clicking a tab focuses that window" box are therefore
+  carrying the weight for that whole class of defect** — please be unkind to them.
 - **Nothing that is painted.** The harness reads geometry over D-Bus. Borders, the container
   outline, the tabs and their titles are `St` actors inside the shell process: their colour, their
   accent-following, which tab is highlighted, whether a title is readable, whether a click on a tab

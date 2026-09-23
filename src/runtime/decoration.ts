@@ -69,12 +69,27 @@ export function decorationPlan(input: DecorationInput): DecorationPlan {
     }
 
     if (rect && (con.layout === 'tabbed' || con.layout === 'stacked')) {
+      // Spec 3.2: a fullscreen leaf costs its *container* the whole title row,
+      // not just its own tab. A fullscreen window owns the monitor, so a row
+      // that survived with one tab fewer would simply be drawn on top of it --
+      // the chrome-over-fullscreen this spec and main spec 19 both forbid.
+      //
+      // It also keeps the engine and the renderer in step: layoutWithRects
+      // reserves one row per *child* of a stacked container, while the
+      // renderer divides that band by the number of *tabs* it was handed. A
+      // row with a tab missing would under-fill a band already reserved.
+      const fullscreen = con.children.some(
+        child => child.kind === 'leaf' && windows.get(child.window)?.fullscreen);
+      if (fullscreen) {
+        for (const child of con.children) visit(child, active);
+        return;
+      }
+
       const tabs: DecorationPlan['titleRows'][number]['tabs'] = [];
       for (const child of con.children) {
         const selected = child === con.focusedChild;
         if (child.kind === 'leaf') {
           const childInfo = windows.get(child.window);
-          if (childInfo?.fullscreen) continue;
           tabs.push({nodeId: child.id, window: child.window, title: childInfo?.title ?? '', selected});
           continue;
         }

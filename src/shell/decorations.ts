@@ -39,9 +39,12 @@ interface Band {
  * taller than that covers the client it titles.
  */
 function bandOf(row: TitleRow): Band {
-  // The count comes from the tabs about to be drawn, not from the container's
-  // children: decorationPlan() drops a fullscreen child's tab, and the band
-  // must be as tall as what goes in it, never taller.
+  // The count comes from the tabs about to be drawn, so the band is as tall
+  // as what goes in it and never taller. Tabs and children are one to one
+  // today -- a fullscreen child costs the container its whole row rather than
+  // its own tab (spec 3.2, src/runtime/decoration.ts), which is what keeps
+  // this equal to the rows layoutWithRects reserved -- and counting what is
+  // drawn keeps the band honest if that ever changes again.
   const rows = row.layout === 'stacked' ? Math.max(1, row.tabs.length) : 1;
   const height = Math.min(row.rect.height, row.rowHeight * rows);
   return {height, tabHeight: Math.floor(height / rows)};

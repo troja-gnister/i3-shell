@@ -131,6 +131,48 @@ describe('decorationPlan', () => {
     expect(plan.titleRows).toEqual([]);
   });
 
+  it('drops the whole title row when any child of the container is fullscreen', () => {
+    // Spec 3.2: "a leaf that is fullscreen contributes no border, and its
+    // container contributes no title row". Dropping only that child's tab
+    // leaves the row drawn -- over the fullscreen window, since a fullscreen
+    // window owns the whole monitor -- which is the chrome-over-fullscreen
+    // that this spec and main spec 19 both forbid.
+    const root = split('tabbed', [leaf(1), leaf(2)]);
+    const [a, b] = root.children;
+    const plan = decorationPlan({
+      roots: [{root, active: true}],
+      rects: new Map<Con, Rect>([[root, R(0, 0, 400, 300)],
+        [a, R(0, 20, 400, 280)], [b, R(0, 20, 400, 280)]]),
+      windows: new Map([[1, info(1, {fullscreen: true})], [2, info(2)]]),
+      focused: a, rowHeight: 20, borderWidth: 2, borderOverrides: new Map(),
+    });
+    expect(plan.titleRows).toEqual([]);
+    // The other child keeps its border: only the fullscreen window loses one.
+    expect(plan.borders.map(entry => entry.window)).toEqual([2]);
+  });
+
+  it('gives a row exactly one tab per child, so the engine reserves what the shell draws', () => {
+    // The engine reserves rowHeight x children.length for a stacked container
+    // (layoutWithRects) while the renderer divides the band by the number of
+    // tabs it was given. The two agree only while every child has a tab, so
+    // that is the invariant, not an incidental property: a row that omits a
+    // tab under-fills a band the engine already reserved.
+    const nested = split('splitv', [leaf(3)]);
+    const root = split('stacked', [leaf(1), leaf(2), nested]);
+    const plan = decorationPlan({
+      roots: [{root, active: true}],
+      rects: new Map<Con, Rect>([[root, R(0, 0, 400, 300)],
+        [root.children[0], R(0, 60, 400, 240)], [root.children[1], R(0, 60, 400, 240)],
+        [nested, R(0, 60, 400, 240)], [nested.children[0], R(0, 60, 400, 240)]]),
+      windows: new Map([[1, info(1)], [2, info(2)], [3, info(3)]]),
+      // A minimized child still gets a tab: i3 has no minimized state, and a
+      // tab the engine reserved a row for must be drawn in it.
+      focused: null, rowHeight: 20, borderWidth: 2, borderOverrides: new Map(),
+    });
+    expect(plan.titleRows).toHaveLength(1);
+    expect(plan.titleRows[0].tabs).toHaveLength(root.children.length);
+  });
+
   it('prefers a per-window border override to the configured default', () => {
     // Acceptance A19: the `border` command changes one window's width.
     const root = split('splith', [leaf(1), leaf(2)]);
