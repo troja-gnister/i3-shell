@@ -237,6 +237,13 @@ export class Decorations {
       actor.set_position(frame.rect.x, frame.rect.y);
       actor.set_size(frame.rect.width, frame.rect.height);
       actor.set_style(`border: ${FRAME_WIDTH}px solid ${this._colors.focused.border};`);
+      // On top of every window actor, re-asserted on every apply. add_child()
+      // alone is not enough: Mutter restacks window_group on every stacking
+      // change and leaves a plugin's foreign actors to maintain their own
+      // order, so an outline only ever added would sit above one window and
+      // below the next. This is also what makes the reasoning recorded in
+      // src/runtime/decoration.ts (hasFullscreenLeaf) true rather than hopeful.
+      global.window_group.set_child_above_sibling(actor, null);
     }
     for (const [nodeId, actor] of [...this._frames]) {
       if (seen.has(nodeId)) continue;
@@ -266,6 +273,9 @@ export class Decorations {
       // can flip between tabbed and stacked (`layout stacked`) under the same
       // NodeId, and the same box has to follow it.
       entry.box.set_vertical(row.layout === 'stacked');
+      // On top, re-asserted on every apply -- see the identical call in
+      // _applyFrames for why add_child() alone leaves the order to chance.
+      global.window_group.set_child_above_sibling(entry.box, null);
       this._applyTabs(entry, row, band);
     }
     for (const [nodeId, entry] of [...this._rows]) {

@@ -34,14 +34,13 @@ export interface DecorationInput {
  * so every decoration on that monitor would be drawn over it -- not only the
  * title row of the container that happens to hold it.
  *
- * That "over it" is literal, and it is why this is a root-level rule. Borders
- * are stacked explicitly, immediately above their own window actor. Frames and
- * title rows are not stacked at all: src/shell/decorations.ts adds them to
- * `global.window_group` and lets them land wherever that puts them, which is
- * on top of every window actor, fullscreen ones included. So a tab bar on a
- * container nowhere near the fullscreen window would still paint across it.
- * **If anyone gives frames and rows explicit stacking, revisit this** -- the
- * suppression is currently what keeps their lack of it from being visible.
+ * That "over it" is literal, and it is why this is a root-level rule. Every
+ * decoration is stacked explicitly, on every apply: a border immediately above
+ * its own window actor, and a frame or title row above every window actor in
+ * `global.window_group` (src/shell/decorations.ts). So a tab bar on a
+ * container nowhere near the fullscreen window would still paint across it --
+ * deterministically, not by accident of the last restack -- which is exactly
+ * what this suppression prevents.
  */
 function hasFullscreenLeaf(con: Con, windows: DecorationInput['windows']): boolean {
   if (con.kind === 'leaf') return windows.get(con.window)?.fullscreen === true;

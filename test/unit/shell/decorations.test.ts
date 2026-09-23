@@ -199,6 +199,36 @@ describe('Decorations', () => {
     expect(windowGroup.children[3]).toBe(borders[1]);
   });
 
+  it('stacks every frame and title row above the window actors, on every apply', () => {
+    // Mutter restacks window_group on every stacking change and requires a
+    // plugin to maintain its own foreign actors' order itself, so a frame or
+    // row that is only ever add_child()ed lands wherever the last restack left
+    // it -- above one window, below the next. src/runtime/decoration.ts's
+    // fullscreen suppression is written on the recorded assumption that frames
+    // and rows sit on top of every window actor; this is what makes that true
+    // rather than a hope.
+    const windowActor = new FakeActor('meta-window-actor');
+    windowGroup.add_child(windowActor);
+    resolvable.set(1, fakeWindow(windowActor));
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    const plan: DecorationPlan = {
+      borders: [{window: 1, rect: R(0, 0, 100, 100), state: 'focused', width: 2}],
+      frames: [{nodeId: 5, rect: R(0, 0, 200, 200)}],
+      titleRows: [{
+        nodeId: 7, rect: R(0, 0, 200, 200), rowHeight: ROW_HEIGHT, layout: 'tabbed',
+        tabs: [{nodeId: 1, window: 1, title: 'One', selected: true}],
+      }],
+    };
+    d.apply(plan);
+    // What Mutter does on any raise: the window climbs over the plugin's
+    // actors, which stay where they were.
+    windowGroup.set_child_above_sibling(windowActor, null);
+    d.apply(plan);
+    const at = (actor: Actor): number => windowGroup.children.indexOf(actor);
+    expect(at(lastCreated('frame'))).toBeGreaterThan(at(windowActor));
+    expect(at(lastCreated('row'))).toBeGreaterThan(at(windowActor));
+  });
+
   it('keeps a border non-reactive, so a border above a window cannot swallow its input', () => {
     // Load-bearing since the border moved above the window actor: a reactive
     // actor covering the client would eat every click on it.
