@@ -109,13 +109,37 @@ export class FakeActor {
     this.children.splice(index, 0, child);
   }
 
-  /** Moves `child` to sit immediately below `sibling` (or to the bottom when `sibling` is null). */
-  set_child_below_sibling(child: FakeActor, sibling: FakeActor | null): void {
-    this.touch('set_child_below_sibling');
+  /** The actor's parent, as Clutter.Actor.get_parent() reports it. */
+  get_parent(): FakeActor | null {
+    this.touch('get_parent');
+    return this._parent;
+  }
+
+  /**
+   * Records what Clutter's own `g_return_if_fail (sibling->priv->parent ==
+   * self)` would report, and answers whether the reorder happens at all.
+   * Clutter refuses a sibling that is not this actor's child: it logs a
+   * Clutter-CRITICAL and returns, leaving the stacking untouched. Silently
+   * reordering anyway -- which this fake used to do -- hides from every unit
+   * test exactly what the native-critical gate exists to catch.
+   */
+  private _siblingOk(member: string, sibling: FakeActor | null): boolean {
+    if (!sibling) return true;
     // Real Clutter has to inspect the sibling to reorder around it, so a
     // disposed sibling -- a foreign actor this class does not own -- is
     // exactly the kind of access `criticals` exists to catch.
-    sibling?.touch('set_child_below_sibling');
+    if (sibling.touch(member)) return false;
+    if (sibling._parent !== this) {
+      criticals.push(`${this.kind}.${member}: sibling is not a child`);
+      return false;
+    }
+    return true;
+  }
+
+  /** Moves `child` to sit immediately below `sibling` (or to the bottom when `sibling` is null). */
+  set_child_below_sibling(child: FakeActor, sibling: FakeActor | null): void {
+    this.touch('set_child_below_sibling');
+    if (!this._siblingOk('set_child_below_sibling', sibling)) return;
     const current = this.children.indexOf(child);
     if (current >= 0) this.children.splice(current, 1);
     const at = sibling ? this.children.indexOf(sibling) : -1;
@@ -125,9 +149,7 @@ export class FakeActor {
   /** Moves `child` to sit immediately above `sibling` (or to the top when `sibling` is null). */
   set_child_above_sibling(child: FakeActor, sibling: FakeActor | null): void {
     this.touch('set_child_above_sibling');
-    // As above: reordering around a foreign sibling has to inspect it, so a
-    // disposed one is exactly what `criticals` exists to catch.
-    sibling?.touch('set_child_above_sibling');
+    if (!this._siblingOk('set_child_above_sibling', sibling)) return;
     const current = this.children.indexOf(child);
     if (current >= 0) this.children.splice(current, 1);
     const at = sibling ? this.children.indexOf(sibling) : -1;
@@ -266,7 +288,11 @@ export function liveActors(): FakeActor[] {
   return created.filter(actor => !actor.destroyed);
 }
 
-/** Every access GJS would have reported as a critical against a disposed actor. */
+/**
+ * Every critical the doubles recorded: an access GJS would have reported
+ * against a disposed actor, and a Clutter precondition the caller broke (a
+ * restack against a sibling that is not a child -- see `_siblingOk`).
+ */
 export function disposedAccesses(): readonly string[] {
   return criticals;
 }

@@ -199,6 +199,25 @@ describe('Decorations', () => {
     expect(windowGroup.children[3]).toBe(borders[1]);
   });
 
+  it('does not restack a border against a window actor parented outside window_group', () => {
+    // Clutter's set_child_above_sibling begins with
+    // `g_return_if_fail (sibling->priv->parent == self)`: a sibling that is not
+    // a child of the actor being restacked is refused with a Clutter-CRITICAL,
+    // and nothing is reordered. Mutter reparents a Meta.WindowActor out of
+    // window_group for effects and for its other window groups, so an
+    // unguarded call would log one critical per commit for that window -- the
+    // exact class of defect the native-critical gate exists to catch -- and
+    // still stack nothing. Checking the parent first costs the same stacking
+    // and none of the criticals.
+    const elsewhere = new FakeActor('some-other-group');
+    const windowActor = new FakeActor('meta-window-actor');
+    elsewhere.add_child(windowActor);
+    resolvable.set(1, fakeWindow(windowActor));
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    d.apply(border(1));
+    expect(criticals).toEqual([]);
+  });
+
   it('stacks every frame and title row above the window actors, on every apply', () => {
     // Mutter restacks window_group on every stacking change and requires a
     // plugin to maintain its own foreign actors' order itself, so a frame or

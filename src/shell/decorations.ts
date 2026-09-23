@@ -215,7 +215,17 @@ export class Decorations {
       // Load-bearing consequence: the actor must stay `reactive: false` (set
       // at construction above), or an actor covering the client would swallow
       // the input it covers. decorations.test.ts pins that.
-      global.window_group.set_child_above_sibling(entry.actor, windowActor);
+      //
+      // Only when the window actor really is a child of window_group. Clutter
+      // opens set_child_above_sibling() with
+      // `g_return_if_fail (sibling->priv->parent == self)`: a sibling parented
+      // anywhere else is refused with a Clutter-CRITICAL and nothing is
+      // restacked. Mutter does reparent a Meta.WindowActor -- effects and its
+      // other window groups -- so without this check such a window would cost
+      // one critical per commit and gain no stacking for them. Skipping the
+      // call loses nothing that the unguarded call would have achieved.
+      if (windowActor.get_parent() === global.window_group)
+        global.window_group.set_child_above_sibling(entry.actor, windowActor);
     }
     for (const [window, entry] of [...this._borders]) {
       if (seen.has(window)) continue;
