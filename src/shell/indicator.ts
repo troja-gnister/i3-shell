@@ -5,6 +5,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import type {PillState} from '../runtime/model';
 import type {Colors} from '../config/model';
 import {SmoothScroll} from '../util/smoothScroll';
+import {applyMode, createModeLabel, createPill, samePills, stylePill, styleModeLabel} from './util/pills';
 import {guard} from './util/signals';
 
 export interface IndicatorPort {
@@ -12,12 +13,6 @@ export interface IndicatorPort {
   setColors(colors: Colors): void;
   setPills(pills: PillState[]): void;
   setVisible(visible: boolean): void;
-}
-
-function samePills(current: readonly PillState[], next: readonly PillState[]): boolean {
-  return current.length === next.length && current.every((pill, index) =>
-    pill.name === next[index].name && pill.active === next[index].active &&
-    pill.occupied === next[index].occupied);
 }
 
 /** One pill per workspace in the left panel box, plus a binding-mode label (i3bar look). */
@@ -42,8 +37,7 @@ export class Indicator implements IndicatorPort {
     this._button = new PanelMenu.Button(0.0, 'i3-shell', true);
     this._box = new St.BoxLayout({style_class: 'i3-shell-bar', y_align: Clutter.ActorAlign.CENTER});
     this._button.add_child(this._box);
-    this._modeLabel = new St.Label({style_class: 'i3-shell-mode', y_align: Clutter.ActorAlign.CENTER});
-    this._modeLabel.hide();
+    this._modeLabel = createModeLabel();
     this._box.add_child(this._modeLabel);
     this._button.connect('scroll-event', guard('scroll-event', (_actor: Clutter.Actor, event: Clutter.Event) => {
       const direction = event.get_scroll_direction();
@@ -89,12 +83,7 @@ export class Indicator implements IndicatorPort {
 
   setMode(name: string | null): void {
     if (this._destroyed) return;
-    if (name === null) {
-      this._modeLabel.hide();
-    } else {
-      this._modeLabel.text = name;
-      this._modeLabel.show();
-    }
+    applyMode(this._modeLabel, name);
   }
 
   setPills(states: PillState[]): void {
@@ -107,9 +96,6 @@ export class Indicator implements IndicatorPort {
   }
 
   setWorkspaces(states: PillState[]): void {
-    // The engine publishes pills on every commit and most are identical;
-    // restyling ten St.Buttons that did not change is pure cost on the
-    // compositor thread.
     if (samePills(this._states, states)) return;
     this._states = states;
     if (this._destroyed) return;
@@ -119,8 +105,7 @@ export class Indicator implements IndicatorPort {
     }
     while (this._pills.length < states.length) {
       const index = this._pills.length;
-      const pill = new St.Button({style_class: 'i3-shell-ws', reactive: true, can_focus: false, track_hover: true});
-      pill.connect('clicked', guard('clicked', () => this._onClick(index)));
+      const pill = createPill(() => this._onClick(index));
       this._box.insert_child_at_index(pill, index);   // pills stay before the mode label
       this._pills.push(pill);
     }
@@ -153,17 +138,7 @@ export class Indicator implements IndicatorPort {
   private _restyle(): void {
     if (this._destroyed) return;
     const c = this._colors;
-    this._states.forEach((state, i) => {
-      const pill = this._pills[i];
-      pill.label = state.name;
-      if (state.active) {
-        pill.set_style(`background-color: ${c.focused.background}; color: ${c.focused.text};`);
-        pill.opacity = 255;
-      } else {
-        pill.set_style(`background-color: transparent; color: ${c.unfocused.text};`);
-        pill.opacity = state.occupied ? 255 : 128;
-      }
-    });
-    this._modeLabel.set_style(`background-color: ${c.focusedInactive.background}; color: ${c.focusedInactive.text};`);
+    this._states.forEach((state, i) => stylePill(this._pills[i], state, c));
+    styleModeLabel(this._modeLabel, c);
   }
 }

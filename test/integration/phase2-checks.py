@@ -22,6 +22,9 @@ CONFIG = Path(os.environ['XDG_CONFIG_HOME']) / 'i3/config'
 UUID = 'i3-shell@troja'
 DEFAULT_GRABS = 65
 RESIZE_GRABS = 11
+# src/shell/bars.ts: a monitor bar is never shorter than this, whatever the
+# theme reports for its content.
+BAR_HEIGHT_FLOOR = 28
 # Upstream Mutter 50.5, not this extension: see scenario_fullscreen_at_map and
 # the matching filter in inside.sh.
 STACK_ASSERTION = ("meta_window_set_stack_position_no_sync: "
@@ -67,15 +70,36 @@ def js_round(value):
     return math.floor(value + 0.5)
 
 
-def place(expected, rect):
-    """title -> rectangle, derived from a work area and an expected structure."""
+def place(expected, rect, snapshot=None):
+    """title -> rectangle, derived from a work area and an expected structure.
+
+    `snapshot` is the live node matching `expected`, and it is needed for one
+    thing only: a tabbed or stacked container takes a title row off the top
+    (spec 3.1), and how tall one row is comes from the theme, through the
+    shell's own measurement -- nothing this harness can see. GetTree reports
+    the total the engine reserved for each container, and spec 6 says to
+    compare against that number rather than re-derive it. The *rule* is still
+    reimplemented here (reserve from the top, clamp to the container, hand
+    every child the remainder); only the pixel count is taken from the engine.
+    """
     if expected[0] == 'leaf':
         return {expected[1]: dict(rect)}
     layout, children, percents = expected
+    kids = snapshot['children'] if snapshot is not None else [None] * len(children)
+    assert len(kids) == len(children), (kids, children)
     placed = {}
     if layout in ('tabbed', 'stacked'):
-        for child in children:
-            placed.update(place(child, dict(rect)))
+        assert snapshot is not None, f'a {layout} container needs its live node to place children'
+        reported = snapshot['rowHeight']
+        # Zero is the pre-Phase-3A layout -- children back at the full rect,
+        # with the tabs drawn over them. Reproducing it silently here would
+        # make this function agree with the regression it exists to catch.
+        assert reported > 0, f'a {layout} container reports no title row: {reported!r}'
+        reserved = min(rect['height'], reported)
+        below = dict(x=rect['x'], y=rect['y'] + reserved,
+                     width=rect['width'], height=rect['height'] - reserved)
+        for child, kid in zip(children, kids):
+            placed.update(place(child, dict(below), kid))
         return placed
     weights = percents if percents is not None else [1 / len(children)] * len(children)
     assert len(weights) == len(children), (weights, children)
@@ -88,7 +112,7 @@ def place(expected, rect):
                 else min(remaining, max(0, js_round(extent * weights[index]))))
         child_rect = (dict(x=cursor, y=rect['y'], width=size, height=rect['height']) if horizontal
                       else dict(x=rect['x'], y=cursor, width=rect['width'], height=size))
-        placed.update(place(child, child_rect))
+        placed.update(place(child, child_rect, kids[index]))
         cursor += size
         remaining -= size
     return placed
@@ -160,6 +184,17 @@ def parent_of(title, workspace=None, monitor=None):
     return None
 
 
+def title_row(title, workspace=None, monitor=None):
+    """What the engine reserved for the titles of the container holding `title`.
+
+    GetTree reports the total per container: one row for a tabbed container,
+    one row per child for a stacked one (spec 3.1), and zero for a split.
+    """
+    container = parent_of(title, workspace, monitor)
+    assert container is not None, f'{title} has no parent container'
+    return container['rowHeight']
+
+
 def window_by_title(title):
     found = next((w for w in windows() if w['title'] == title), None)
     assert found is not None, f'{title} is not tracked'
@@ -195,7 +230,7 @@ def check_tiling(expected, label, workspace=None, monitor=None, timeout=10):
         wrong = percent_mismatch(expected, entry['root'])
         if wrong:
             return wrong
-        rects = place(expected, area)
+        rects = place(expected, area, entry['root'])
         live = {w['title']: w for w in windows() if w['title'] in rects}
         if set(live) != set(rects):
             return ('windows', sorted(live), sorted(rects))
@@ -644,8 +679,10 @@ def scenario_tabbed_stacked():
     for key, layout, step in (('<Super>w', 'tabbed', '<Super>semicolon'),
                               ('<Super>s', 'stacked', '<Super>k')):
         press(key)
+        # Since Phase 3A the shared rectangle is the parent's minus the title
+        # row; check_tiling subtracts exactly what the container reports.
         check_tiling(node('splith', [node(layout, [leaf('TS one'), leaf('TS two')], [0.5, 0.5])], [1.0]),
-                     f'TS {layout} children share the parent rectangle')
+                     f'TS {layout} children share the parent rectangle below the title row')
         ensure_selected('TS two', step)
         typed_two = type_key('x', 'TS two', {'TS one': fixture('Text', '(s)', ('TS one',))[0]})
         ensure_selected('TS one', step)
@@ -655,6 +692,77 @@ def scenario_tabbed_stacked():
     press('<Super>e')
     check_tiling(node('splith', [node('splith', [leaf('TS one'), leaf('TS two')], [0.5, 0.5])], [1.0]),
                  'TS layout toggle returns the container to a split')
+
+
+# --------------------------------------------------------------------------
+# decorations: what a title row takes out of its container (A17, A18)
+# --------------------------------------------------------------------------
+
+def scenario_decorations():
+    """The half of Phase 3A a compositor can be asked about.
+
+    Borders, the focused-container frame and the tabs themselves are St actors
+    inside the shell process; nothing here can read them back, and the live
+    walk in docs/acceptance/phase-3.md is what certifies them. What is
+    checkable is the half that moves windows -- the geometry a title row takes
+    out of its container -- and it is checked against real GTK frames.
+    """
+    reset_windows()
+    create('DC one')
+    create('DC two')
+    halves = node('splith', [leaf('DC one'), leaf('DC two')], [0.5, 0.5])
+    check_tiling(halves, 'DC two halves before any title row')
+    area = work_area()
+    undecorated = place(halves, area)
+    check('DC a split container reserves no title row', title_row('DC one'), 0)
+
+    press('<Super>w')
+    check_tiling(node('splith', [node('tabbed', [leaf('DC one'), leaf('DC two')], [0.5, 0.5])], [1.0]),
+                 'DC tabbed children sit below the title row')
+    row = title_row('DC one')
+    assert row > 0, f'the tabbed container reserved no title row: {row!r}'
+    ok('DC the tabbed container reports a title row', f'{row}px')
+    rects = window_rects()
+    check('DC tabbed children share one rectangle', rects['DC one'], rects['DC two'])
+    check('DC a tabbed child starts exactly one row below its container',
+          rects['DC one']['y'], area['y'] + row)
+    check('DC a tabbed child is exactly one row shorter than its container',
+          rects['DC one']['height'], area['height'] - row)
+
+    press('<Super>e')
+    restored = node('splith', [node('splith', [leaf('DC one'), leaf('DC two')], [0.5, 0.5])], [1.0])
+    check_tiling(restored, 'DC leaving tabbed gives the children the whole rectangle back')
+    check('DC the container reserves nothing once it is a split again', title_row('DC one'), 0)
+    check('DC the restored rectangles are the ones from before the title row',
+          window_rects(), undecorated)
+
+    # One row per child, all of them visible at once, is what makes stacked
+    # different from tabbed. It is arithmetic, so it is checked against the
+    # per-row number the tabbed container above reported rather than against
+    # a constant this harness cannot know.
+    create('DC three')
+    thirds = [1 / 3, 1 / 3, 1 / 3]
+    leaves = [leaf('DC one'), leaf('DC two'), leaf('DC three')]
+    check_tiling(node('splith', [node('splith', leaves, thirds)], [1.0]), 'DC three tiles')
+    press('<Super>s')
+    check_tiling(node('splith', [node('stacked', leaves, thirds)], [1.0]),
+                 'DC stacked children sit below one title row per child')
+    reserved = title_row('DC one')
+    check('DC a stacked container reserves one row per child', reserved, row * 3)
+    rects = window_rects()
+    check('DC stacked children share one rectangle', rects['DC one'], rects['DC three'])
+    check('DC a stacked child starts below every one of its rows',
+          rects['DC one']['y'], area['y'] + reserved)
+    check('DC a stacked child is shorter by every one of its rows',
+          rects['DC one']['height'], area['height'] - reserved)
+
+    press('<Super>e')
+    check_tiling(node('splith', [node('splith', leaves, thirds)], [1.0]),
+                 'DC returning the container to splith restores the full rectangle')
+    check('DC the restored children reach the top of the work area',
+          window_rects()['DC one']['y'], area['y'])
+    reset_windows()
+    print('ok phase 3a decoration geometry', flush=True)
 
 
 # --------------------------------------------------------------------------
@@ -1161,6 +1269,37 @@ def monitor_ids(workspace=0):
     return [entry['id'] for entry in workspace_snapshot(workspace)['monitors']]
 
 
+def logical_monitor_rects():
+    """Each logical monitor's on-screen rectangle, from Mutter's own display
+    configuration.
+
+    The extension publishes work areas and never monitor geometry, so this is
+    the only independent source for what a bar's strut is subtracted from:
+    reading the monitor's size out of GetTree would make the strut assertion
+    compare the engine with itself.
+    """
+    _serial, monitors, logical, _properties = display_state()
+    by_connector = {monitor[0][0]: monitor for monitor in monitors}
+    rects = []
+    for x, y, scale, _transform, primary, specs, _props in logical:
+        # A logical monitor can drive several mirrored outputs; they share its
+        # mode, so the first one describes the rectangle.
+        monitor = by_connector[specs[0][0]]
+        _spec, modes, _props = monitor
+        mode = next((entry for entry in modes if entry[6].get('is-current')), modes[0])
+        rects.append({'x': x, 'y': y, 'width': js_round(mode[1] / scale),
+                      'height': js_round(mode[2] / scale), 'primary': bool(primary)})
+    return rects
+
+
+def secondary_monitor_rect():
+    """The one non-primary logical monitor. The primary is excluded on purpose:
+    it carries GNOME's own panel, not one of ours (spec 4.3)."""
+    rects = [entry for entry in logical_monitor_rects() if not entry['primary']]
+    assert len(rects) == 1, rects
+    return rects[0]
+
+
 def two_monitor_scenario():
     isolated()
     ready_normal()
@@ -1170,6 +1309,24 @@ def two_monitor_scenario():
     check('two outputs with distinct stable ids', len(set(ids)), 2)
     first_area, second_area = (work_area(monitor=m) for m in (primary_id, second_id))
     print('work areas:', json.dumps({'primary': first_area, 'second': second_area}), flush=True)
+
+    # A20. The bar on a non-primary output is chrome with affectsStruts, so
+    # that monitor's work area is shorter than the monitor itself by exactly
+    # the bar's height, and everything tiled there follows -- the strut is
+    # what makes the reduction self-correcting (spec 4.3).
+    second_monitor = secondary_monitor_rect()
+    bar = second_monitor['height'] - second_area['height']
+    print('secondary monitor:', json.dumps(second_monitor), 'bar height:', bar, flush=True)
+    assert bar >= BAR_HEIGHT_FLOOR, (
+        f'the secondary output reserved {bar}px; src/shell/bars.ts never builds a bar '
+        f'shorter than {BAR_HEIGHT_FLOOR}px, and a work area as tall as its monitor '
+        'means no strut was reserved at all')
+    ok('MM the secondary output reserves a strut for its workspace bar', f'{bar}px')
+    check('MM the secondary work area starts below its bar',
+          second_area['y'], second_monitor['y'] + bar)
+    check('MM the secondary work area keeps the monitor full width',
+          [second_area['x'], second_area['width']],
+          [second_monitor['x'], second_monitor['width']])
 
     reset_windows()
     create('MM stay')
@@ -1189,6 +1346,13 @@ def two_monitor_scenario():
                  'MM the primary root keeps only the remaining window', monitor=primary_id)
     check_tiling(node('splith', [leaf('MM move')], [1.0]),
                  'MM the moved window tiles on the second output', monitor=second_id)
+    # check_tiling ties the tile to the reported work area; this ties that work
+    # area back to the monitor, so a bar that stopped reserving space could not
+    # pass both.
+    check('MM a tile on the secondary output starts below its bar',
+          window_by_title('MM move')['rect']['y'], second_monitor['y'] + bar)
+    check('MM a tile on the secondary output is shorter by the bar',
+          window_by_title('MM move')['rect']['height'], second_monitor['height'] - bar)
     moved_node = leaf_node('MM move', monitor=second_id)['id']
     tracked = {w['title']: w['id'] for w in windows()}
     print('before removal:', json.dumps({'nodes': moved_node, 'windows': tracked,
@@ -1536,6 +1700,7 @@ def single_monitor():
     scenario_a12()
     scenario_a13()
     scenario_tabbed_stacked()
+    scenario_decorations()
     scenario_geometry_states()
     scenario_maximized_at_map()
     scenario_fullscreen_at_map()

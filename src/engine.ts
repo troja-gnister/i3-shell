@@ -1,8 +1,9 @@
 import {Tree} from './tree/tree';
-import {descendFocused, leaves, walk, type Con, type Rect, type WindowId} from './tree/node';
+import {descendFocused, leaves, walk, type Con, type NodeId, type Rect, type SplitCon, type WindowId} from './tree/node';
 import {layoutWithRects, stackingOrder} from './tree/layout';
 import {RectReconciler} from './runtime/reconcile';
 import {serializeTree, type TreeSnapshot, type WindowSnapshot} from './runtime/snapshot';
+import {decorationPlan, type DecorationPlan} from './runtime/decoration';
 import type {WindowsPort, GeometryPort, DeferredPort, PillState, Topology, WindowInfo, WindowEvent} from './runtime/model';
 import {parseCommands} from './commands/parse';
 import type {Command, WorkspaceTarget} from './commands/model';
@@ -57,6 +58,14 @@ export interface EnginePorts {
     current(): Accent | null;
     subscribe(callback: () => void): void;
   };
+  /**
+   * Receives a fresh plan on every commit, including the commit that empties
+   * it (a window removed, a workspace switched away from) — the renderer
+   * never has to infer teardown on its own. `setColors` mirrors the
+   * indicator's: the same effectiveColors() result _pushColors() computes
+   * goes to both, so a border and the workspace pill never disagree.
+   */
+  decorations: {apply(plan: DecorationPlan): void; setColors(colors: Colors): void};
   exec(command: string): void;
   notify(title: string, body: string): void;
   log: {info(message: string): void; warn(message: string): void};
@@ -83,6 +92,7 @@ export class Engine {
   private _locked = false;
   private _started = false;
   private _disposed = false;
+  private _closing = false;
   private _lastLoadTime = 0;
   private _workspaceCount = 1;
   private _tree: Tree | null = null;
@@ -103,6 +113,8 @@ export class Engine {
   private _monitorInvalidation = false;
   private readonly _reconciler = new RectReconciler();
   private _containerRects = new Map<Con, Rect>();
+  private _rowHeight = 0;
+  private readonly _borderOverrides = new Map<WindowId, number>();
   private readonly _floatingRects = new Map<WindowId, Rect>();
   private readonly _frameReads = new Map<WindowId, {token: number; generation: number | undefined}>();
   private readonly _listeners = new Set<() => void>();
@@ -134,15 +146,31 @@ export class Engine {
     this._started = true;
     this._ports.accent.subscribe(() => {
       // Only the pushed colours change; the tree and every rectangle are
-      // untouched, so this deliberately does not run a commit.
-      if (!this._disposed && this._started) this._pushColors();
+      // untouched, so this deliberately does not run a commit. It bypasses
+      // commit() entirely, so it needs its own _closing check: gating
+      // commit() alone would not stop this push.
+      if (!this._disposed && this._started && !this._closing) this._pushColors();
     });
     this._applyLoaded(loaded);
   }
 
   private _pushColors(): void {
-    this._ports.indicator.setColors(
-      effectiveColors(this._config.colors, this._config.specifiedColors, this._ports.accent.current()));
+    const colors = effectiveColors(this._config.colors, this._config.specifiedColors, this._ports.accent.current());
+    this._ports.indicator.setColors(colors);
+    this._ports.decorations.setColors(colors);
+  }
+
+  /**
+   * Meta.Display::closing has fired: the session is tearing down and GNOME
+   * will start destroying its own windows and actors underneath the
+   * extension, ahead of disable(). Unlike stop() this is not the teardown
+   * path -- it does not cancel grabs or deferred reads, only stops new work
+   * from reaching commit() (which covers every deferred continuation, not
+   * just the signals that call it synchronously) and stops the accent
+   * subscription's direct port push.
+   */
+  onClosing(): void {
+    this._closing = true;
   }
 
   stop(): void {
@@ -160,7 +188,7 @@ export class Engine {
     if (!this._ready || !this._tree || !this._topology)
       return {version: 1, revision: this._revision, ready: false,
         activeWorkspace: this._ports.workspaces.activeIndex, workspaces: []};
-    return serializeTree(this._tree, this._topology, this._containerRects, this._windows, this._revision);
+    return serializeTree(this._tree, this._topology, this._containerRects, this._windows, this._revision, this._rowHeight);
   }
 
   windowsSnapshot(): WindowSnapshot[] {
@@ -226,6 +254,84 @@ export class Engine {
     this.commit(() => { this._monitorInvalidation = true; });
   }
 
+  /** The shell measures the title-row height once fonts are known and reports it here; not a port, since it is the shell asking the engine, not the other way round. */
+  setRowHeight(height: number): void {
+    if (this._rowHeight === height) return;
+    this._rowHeight = height;
+    this.commit();
+  }
+
+  /** Records a per-window border-width override; `border` command handling calls this per targeted leaf. */
+  setBorder(window: WindowId, width: number): void {
+    this._borderOverrides.set(window, width);
+    this.commit();
+  }
+
+  /**
+   * Focuses one window by id -- what a click on its tab means. Like
+   * setRowHeight() this is the shell asking the engine, not a port and not an
+   * i3 command: i3 has no "focus that window" syntax, so widening the `focus`
+   * command's target would invent one and drag it through the parser, the
+   * config and the D-Bus surface for a click.
+   *
+   * The id is refused unless it is on the active workspace: only that
+   * workspace has chrome on screen, and _activateSelection() reads the active
+   * workspace's selection, so accepting one from elsewhere would focus
+   * whatever that workspace had selected instead.
+   */
+  focusWindow(id: WindowId): void {
+    this.commit(() => {
+      const tree = this._tree;
+      const location = tree?.location(id);
+      // The click reaches here a main-loop turn after it happened (the
+      // renderer defers it), so the window may have closed in between.
+      if (!tree || !location || location.workspace !== tree.activeWorkspace) return false;
+      this._selectWindow(id);
+      // 0 = no native event timestamp: a deferred click no longer carries one,
+      // and the windows adapter substitutes the current server time so
+      // focus-stealing prevention cannot drop the activation.
+      this._activateSelection(0);
+      return true;
+    });
+  }
+
+  /**
+   * Focuses one container by node id -- what a click on the tab of a *nested*
+   * container means. Such a tab titles no window of its own (its plan entry's
+   * `window` is null; it shows the container's focused descendant's title),
+   * so its nodeId is the only thing the click can report.
+   *
+   * Like focusWindow() this is the shell asking the engine, not a port and not
+   * an i3 command, and it lands on the same place i3 does: the container's
+   * focused leaf. Selecting the *container* would activate the same window but
+   * would also make the selection a SplitCon, drawing the `$mod+a` outline
+   * around it -- which no tab click should produce.
+   *
+   * The node is refused unless it is on the active workspace, for the reason
+   * focusWindow() gives: only that workspace has chrome on screen, and
+   * _activateSelection() reads the active workspace's selection.
+   */
+  focusNode(nodeId: NodeId): void {
+    this.commit(() => {
+      const tree = this._tree;
+      if (!tree) return false;
+      // Searching only the active workspace's roots is what enforces the
+      // refusal: a node anywhere else is simply never found.
+      const workspace = tree.workspaces.get(tree.activeWorkspace);
+      let target: Con | null = null;
+      for (const root of workspace?.monitors.values() ?? [])
+        for (const con of walk(root)) if (con.id === nodeId) target = con;
+      // The click reaches here a main-loop turn after it happened (the
+      // renderer defers it), so the container may have been flattened away.
+      const leaf = target ? descendFocused(target) : null;
+      if (!leaf) return false;
+      tree.select(leaf);
+      // 0 = no native event timestamp, as in focusWindow().
+      this._activateSelection(0);
+      return true;
+    });
+  }
+
   relayout(): void {
     this.commit(() => {
       for (const id of this._windows.keys()) this._observe(id, this._reconciler.generation(id));
@@ -234,7 +340,7 @@ export class Engine {
 
   /** Native callbacks may enqueue work, but never mutate a tree during its traversal. */
   private commit(change: () => boolean | void = () => {}): void {
-    if (!this._started || this._disposed) return;
+    if (!this._started || this._disposed || this._closing) return;
     this._queued.push(change);
     if (this._committing) return;
     this._committing = true;
@@ -254,6 +360,8 @@ export class Engine {
     this._ready = !!topology && topology.monitors.length > 0 &&
       Array.from({length: this._workspaceCount}, (_, i) => i).every(index =>
         topology.monitors.every(m => topology.workAreas.get(index)?.has(m.id)));
+    const decoRoots: Array<{root: SplitCon; active: boolean}> = [];
+    let decoFocused: Con | null = null;
     if (this._ready && topology) {
       const isNew = !this._tree;
       this._topology = topology;
@@ -285,14 +393,31 @@ export class Engine {
       this._containerRects = new Map();
       for (const ws of tree.workspaces.values()) {
         for (const [monitor, root] of ws.monitors) {
-          const layout = layoutWithRects(root, topology.workAreas.get(ws.index)!.get(monitor)!);
+          const layout = layoutWithRects(root, topology.workAreas.get(ws.index)!.get(monitor)!, this._rowHeight);
           for (const [con, rect] of layout.containers) this._containerRects.set(con, rect);
           for (const [id, rect] of layout.windows) {
             const info = this._ports.windows.get(id);
             if (info && !info.fullscreen && !info.minimized && !this._unmaximizing.has(id)) expected.set(id, rect);
           }
+          // Only the active workspace's roots are drawn. The layout above still
+          // runs for every workspace -- inactive ones stay pre-tiled, which is
+          // what makes a switch instant -- but their chrome must not be planned:
+          // src/shell/decorations.ts parents its actors to window_group with no
+          // tie to window visibility, so while Mutter hides an inactive
+          // workspace's windows its borders, frame and tab bar would stay
+          // painted over the active workspace, where the reactive tabs would
+          // also swallow the clicks in their band.
+          //
+          // `active` is therefore true for every root the engine pushes.
+          // decorationPlan() keeps the flag because it is a pure function of
+          // its input and the spec's state table is written in terms of it
+          // (an inactive workspace's focused leaf is `focused_inactive`); the
+          // engine simply never asks it to draw one.
+          if (ws.index === tree.activeWorkspace) decoRoots.push({root, active: true});
         }
       }
+      const selection = tree.selection();
+      decoFocused = selection?.kind === 'tiled' ? selection.con : null;
       if (this._monitorInvalidation) {
         for (const id of this._windows.keys()) this._forced.add(id);
         this._monitorInvalidation = false;
@@ -320,6 +445,16 @@ export class Engine {
       occupied: [...this._windows.values()].some(w => w.workspace === index),
     }));
     this._ports.indicator.setPills(this._copyPills());
+    if (this._disposed) return;
+    this._ports.decorations.apply(decorationPlan({
+      roots: decoRoots,
+      rects: this._containerRects,
+      windows: this._windows,
+      focused: decoFocused,
+      rowHeight: this._rowHeight,
+      borderWidth: this._config.defaultBorder.width,
+      borderOverrides: this._borderOverrides,
+    }));
     if (this._disposed) return;
     this._revision++;
     for (const callback of [...this._listeners]) {
@@ -398,6 +533,7 @@ export class Engine {
     this._unmaximizeAttempts.delete(id);
     this._forced.delete(id);
     this._floatingRects.delete(id);
+    this._borderOverrides.delete(id);
     this._reconciler.forget(id);
     const read = this._frameReads.get(id);
     if (read) this._ports.deferred.cancel(read.token);
@@ -877,8 +1013,25 @@ export class Engine {
         if (split) ports.log.warn('floating applies only to individual windows');
         return changed ? `floating ${command.action}` : `floating ${command.action}: no change`;
       }
-      case 'border':
-        return 'border: not implemented until Phase 3';
+      case 'border': {
+        const selection = this._tree?.selection();
+        const targets = selection?.kind === 'tiled' ? [...leaves(selection.con)] : [];
+        if (targets.length === 0) return `border ${command.style}: no tiled container`;
+        // Every targeted leaf must land in the same commit: writing the map
+        // directly and committing once keeps a container selection's border
+        // change, its layout/decoration recompute and its revision bump
+        // atomic, instead of N separate top-level commits (N-1 of them
+        // publishing an inconsistent, half-updated plan).
+        for (const target of targets) {
+          const width = command.style === 'toggle'
+            ? (this._borderOverrides.get(target.window) ?? this._config.defaultBorder.width) > 0
+              ? 0 : this._config.defaultBorder.width
+            : command.style === 'none' ? 0 : command.width;
+          this._borderOverrides.set(target.window, width);
+        }
+        this.commit();
+        return `border ${command.style}`;
+      }
       case 'mode':
         return this._enterMode(command.name) ? `mode ${command.name}` : `mode "${command.name}" is not defined`;
       case 'reload':

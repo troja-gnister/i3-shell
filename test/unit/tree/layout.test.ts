@@ -122,3 +122,55 @@ describe('tree layout', () => {
     ]));
   });
 });
+
+describe('title row reservation', () => {
+  it('reserves one row for a tabbed container, whatever the child count', () => {
+    const root = split('tabbed', [leaf(1), leaf(2), leaf(3)]);
+    const {windows} = layoutWithRects(root, {x: 0, y: 0, width: 400, height: 300}, 20);
+    // i3 draws a single row of tabs across the top, so every child starts at y+20
+    // and every child is 20px shorter -- three children, one row.
+    for (const id of [1, 2, 3])
+      expect(windows.get(id)).toEqual({x: 0, y: 20, width: 400, height: 280});
+  });
+
+  it('reserves one row per child for a stacked container', () => {
+    const root = split('stacked', [leaf(1), leaf(2), leaf(3)]);
+    const {windows} = layoutWithRects(root, {x: 0, y: 0, width: 400, height: 300}, 20);
+    // i3 shows every stacked child's title row simultaneously: 3 x 20 = 60.
+    for (const id of [1, 2, 3])
+      expect(windows.get(id)).toEqual({x: 0, y: 60, width: 400, height: 240});
+  });
+
+  it('leaves split containers untouched', () => {
+    const root = split('splith', [leaf(1), leaf(2)]);
+    const {windows} = layoutWithRects(root, {x: 0, y: 0, width: 400, height: 300}, 20);
+    expect(windows.get(1)).toEqual({x: 0, y: 0, width: 200, height: 300});
+    expect(windows.get(2)).toEqual({x: 200, y: 0, width: 200, height: 300});
+  });
+
+  it('clamps to zero height rather than going negative when the rows do not fit', () => {
+    // Review Focus: a stacked container shorter than its own title rows.
+    const root = split('stacked', [leaf(1), leaf(2), leaf(3)]);
+    const {windows} = layoutWithRects(root, {x: 0, y: 0, width: 400, height: 40}, 20);
+    const rect = windows.get(1)!;
+    expect(rect.height).toBe(0);
+    expect(rect.y).toBe(40);
+  });
+
+  it('defaults to no reservation so existing callers are unchanged', () => {
+    const root = split('tabbed', [leaf(1)]);
+    const {windows} = layoutWithRects(root, {x: 0, y: 0, width: 400, height: 300});
+    expect(windows.get(1)).toEqual({x: 0, y: 0, width: 400, height: 300});
+  });
+
+  it('reserves nothing for a negative row height', () => {
+    // No caller passes one today -- measureRowHeight() has a floor and the
+    // engine's own default is 0 -- but a negative reservation is the one input
+    // that makes a child start ABOVE its container and be taller than it, a
+    // rectangle every consumer downstream would then trust. One clamp closes
+    // it for good rather than relying on every future caller.
+    const root = split('tabbed', [leaf(1)]);
+    const {windows} = layoutWithRects(root, {x: 0, y: 0, width: 400, height: 300}, -20);
+    expect(windows.get(1)).toEqual({x: 0, y: 0, width: 400, height: 300});
+  });
+});

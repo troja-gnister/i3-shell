@@ -9,9 +9,9 @@ with directional navigation. Three things are the non-negotiable core: **workspa
 **shortcuts**, **dynamic tiling**. Phases 1 and 2 deliver that core; Phases 3 and 4 add appearance and
 fidelity.
 
-**State (2026-09-22):** Phase 1 and Phase 2A are merged into `main`; A1–A7 passed by user report on 2026-09-21. On `phase-2b`, all ten tasks of the approved integration plan are implemented; Tasks 1–9 are independently reviewed and Task 10 delivers the A8–A14 integration suite. **A8–A14 live acceptance is still the user's walk** — [docs/acceptance/phase-2.md](docs/acceptance/phase-2.md) is written and deliberately unchecked. The whole-branch review is outstanding. The [pause handoff](docs/handoff-2026-09-22.md) remains the record of the earlier checkpoint.
+**State (2026-09-23):** Phases 1, 2A and 2B are merged and pushed; `main` carries the maximized/fullscreen classification fix, the GNOME accent colours and the IBus override, and the user walked and passed the Phase 2 acceptance checklist. Phase 3A is implemented on `phase-3a` across eight reviewed tasks plus two out-of-loop renderer fixes. What remains is the **whole-branch review** and the user's **live A15–A21 walk** — [docs/acceptance/phase-3.md](docs/acceptance/phase-3.md), 43 boxes, deliberately unchecked. Phase 3B (window-fact mutability) and Phase 4 remain unbuilt.
 
-Latest verification: **414/414 tests in 41 files**, both TypeScript programs, Layer 0, tree lint, and the full private nested suite — retained Phase 1 checks plus 159 Phase 2 assertions across single-monitor, two-monitor, settings-restoration and D-Bus-name-conflict scenarios. The suite found and fixed three production defects (see §5). Phase 2B is merged and pushed; `main` and `origin/main` are both `bbdf886`. Phases 3–4 remain unbuilt.
+Latest verification: **527 tests in 48 files**, both TypeScript programs, Layer 0, tree lint, and the full private nested suite — **228 integration assertions** across single-monitor (including the Phase 3A decoration geometry), two-monitor, settings-restoration and D-Bus-name-conflict scenarios. The suite found and fixed three production defects (see §5). Phase 3A adds the decoration geometry scenarios and the per-monitor bar strut assertions.
 
 ---
 
@@ -30,7 +30,8 @@ Latest verification: **414/414 tests in 41 files**, both TypeScript programs, La
 | `src/` | The extension (TypeScript, see §4). |
 | `test/unit/` | Vitest on Node: pure core and native adapter doubles, including `fixtures/reference.i3config`, the reference i3 config used by golden/native tests. |
 | `test/integration/` | Private nested harness (`nested.sh`, `inside.sh`), GTK4 fixture (`windows.js`), typed D-Bus client/smoke (`client.py`), Phase 1 checks (`phase1-checks.sh`), the Phase 2 A8–A14 driver (`phase2-checks.py`) and the failure-safe wrapper (`run.sh`). |
-| `docs/acceptance/phase-2.md` | The live-session checklist for A8–A14, **unchecked**: the user's walk. |
+| `docs/acceptance/phase-2.md` | The live-session checklist for A8–A14. The user **walked and passed** it; the boxes are left unticked as the record of what was walked. |
+| `docs/acceptance/phase-3.md` | The live-session checklist for A15–A21 (Phase 3A decorations), **unchecked**: the user's walk. |
 | `schemas/`, `metadata.json`, `stylesheet.css`, `esbuild.mjs`, `Makefile`, `tsconfig*.json` | Build and packaging. |
 
 The user's i3 config (`~/.config/i3/config`) is the source of truth for behaviour and stays outside the repo.
@@ -61,7 +62,7 @@ The user's i3 config (`~/.config/i3/config`) is the source of truth for behaviou
 
 ```sh
 npm ci                      # or npm install; .npmrc sets legacy-peer-deps
-npm test                    # vitest on Node — pure core + native adapter doubles (414 tests)
+npm test                    # vitest on Node — pure core + native adapter doubles (527 tests)
 npm run typecheck           # two programs: tsconfig.json (src, GNOME types) + tsconfig.test.json (tests + Layer 0, Node types)
 npm run check:layer0        # fails if Layer 0 imports gi:// / resource:// / src/shell (also part of `npm run build`)
 npm run build               # release bundle → dist/  (esbuild, single ESM file; schemas compiled)
@@ -137,7 +138,7 @@ Phase 2A's pure tree is merged and retained unchanged except the reviewed topolo
 
 Exactly four events force a new geometry generation: fullscreen exit, unminimize, monitors-changed and completion of engine-initiated unmaximize. Workspace/work-area/unlock use ordinary reconciliation. Reload preserves the tree; accepted restart rebuilds from live windows in per-workspace MRU order. Settings reconcile successive configurations without a temporary restore.
 
-**Task 10 is implemented.** `test/integration/phase2-checks.py` drives A8–A14 against real GTK windows: independent-rectangle assertions computed from the reported work area, real bound keys for focus/move/parent/layout/resize, transient/modal/fixed floating, fullscreen/unminimize/unmaximize forced generations, a client that refuses its tile, kill/transfer of a selected parent, reload/rejected-reload/restart, lock/unlock and a real disable/enable cycle; plus `--monitors` (real output removal *and* reconnection over `org.gnome.Mutter.DisplayConfig`), `--settings` (A6 before/after with real originals) and `--name-conflict`. What remains is the user's live walk and the whole-branch review.
+**Task 10 is implemented.** `test/integration/phase2-checks.py` drives A8–A14 against real GTK windows: independent-rectangle assertions computed from the reported work area, real bound keys for focus/move/parent/layout/resize, transient/modal/fixed floating, fullscreen/unminimize/unmaximize forced generations, a client that refuses its tile, kill/transfer of a selected parent, reload/rejected-reload/restart, lock/unlock and a real disable/enable cycle; plus `--monitors` (real output removal *and* reconnection over `org.gnome.Mutter.DisplayConfig`), `--settings` (A6 before/after with real originals) and `--name-conflict`. The user walked and passed the Phase 2 checklist on 2026-09-23; the whole-branch review completed before that merge.
 
 ### Phase 3 — layouts & appearance — spec §12
 `src/shell/decorations.ts`: per-leaf `St.Widget` borders in `global.window_group` sized to the leaf rect with `client.*` colours (focused / focused_inactive / unfocused / urgent), a single frame around a focused SplitCon, `default_border pixel N` and the `border` command (`normal` treated as `pixel`); tab/stack bars as `St.BoxLayout` of titles above tabbed/stacked containers (children get rect minus bar; click focuses). All actors created/updated/destroyed only from `commit()`.
@@ -152,7 +153,7 @@ Target arrangements: laptop alone (`eDP-1`) and docked with external display(s),
 
 ## 7. How to continue (process that worked)
 
-1. All ten Phase 2B tasks are implemented on `phase-2b` in this checkout. What remains is the **whole-branch review** over `b6fe8cc..HEAD` and the user's **live A8–A14 walk** ([docs/acceptance/phase-2.md](docs/acceptance/phase-2.md)). Phase 2 is not complete until both are done; do not start Phase 3 before then.
+1. Phase 2B is merged and pushed and its acceptance walk passed. Phase 3A is implemented on `phase-3a`: eight reviewed tasks plus two out-of-loop renderer fixes and one whole-branch fix wave. What remains is the user's **live A15-A21 walk** ([docs/acceptance/phase-3.md](docs/acceptance/phase-3.md), 43 unchecked boxes). **Nothing in Phase 3A has been seen on a real screen** - the native suite asserts the tree's rectangles and the work area, and the unit suite asserts the geometry the renderer computes against doubles.
 2. Phase 2A is reviewed and merged into `main`; the completed `phase-2` branch is deleted. `origin` is `git@github.com:troja-gnister/i3-shell.git`, and `main` tracks `origin/main`. The user authorized the initial push at `568855c`.
 3. Two items need a decision from the user rather than a unilateral fix, both recorded in the [carry-forward](docs/superpowers/plans/2026-09-21-phase-1-carry-forward.md): accelerators claimed by another external grabber outside spec §13's five schemas (IBus takes `<Super>semicolon` and `<Super>space`), and compositor signals still driving `commit()` during shutdown.
 4. Continue with `superpowers:subagent-driven-development`: one implementer per task, a reviewer per task, and a whole-branch review at the end. Keep the ledger and record every ruling.

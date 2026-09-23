@@ -551,7 +551,7 @@ Expected: FAIL with `Cannot find module '../../../src/shell/decorations'`.
 
 - [ ] **Step 3: Implement the renderer**
 
-`Decorations` holds `Map<WindowId, St.Widget>` for borders, `Map<NodeId, St.Widget>` for frames and `Map<NodeId, St.BoxLayout>` for rows. `apply()` diffs: create what is new, update geometry and style on what persists, destroy what the plan omits. Border colour is `effectiveColors(...)[state]`; border width comes from the plan. Actors go in `global.window_group`; a border is lowered to sit immediately below its window actor via `set_child_below_sibling`. A tab is an `St.Button` whose `clicked` handler calls the focus callback passed to the constructor — the renderer never mutates the tree. Labels are set with plain text; `use_markup` is never set.
+`Decorations` holds `Map<WindowId, St.Widget>` for borders, `Map<NodeId, St.Widget>` for frames and `Map<NodeId, St.BoxLayout>` for rows. `apply()` diffs: create what is new, update geometry and style on what persists, destroy what the plan omits. Border colour is `effectiveColors(...)[state]`; border width comes from the plan. Actors go in `global.window_group`; a border is lowered to sit immediately below its window actor via `set_child_below_sibling`. **Superseded by spec §4.1 (2026-09-23): a border is raised *above* its window actor with `set_child_above_sibling`, as a `reactive: false` ring with a transparent centre.** Below an opaque window, an actor given the window's own rect paints nothing anyone can see; do not revert this. A tab is an `St.Button` whose `clicked` handler calls the focus callback passed to the constructor — the renderer never mutates the tree. Labels are set with plain text; `use_markup` is never set.
 
 - [ ] **Step 4: Run the tests and verify they pass**
 

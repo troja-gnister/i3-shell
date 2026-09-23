@@ -1,6 +1,7 @@
 import {describe, it, expect} from 'vitest';
 import {readFileSync} from 'node:fs';
-import {fakeEngine, topology, windowInfo} from './fakeEngine';
+import {fakeEngine, topology, windowInfo, type EngineFixture} from './fakeEngine';
+import {parseCommands} from '../../../src/commands/parse';
 
 const referenceText = readFileSync(new URL('../fixtures/reference.i3config', import.meta.url), 'utf8');
 
@@ -56,6 +57,29 @@ describe('engine lifecycle', () => {
     f.change(1, {rect: {x: 2, y: 2, width: 2, height: 2}}, 'frame'); f.engine.stop();
     const count = f.applied.length; f.flush(); f.engine.relayout(); f.remove(1); expect(f.applied).toHaveLength(count);
   });
+  it('applies a deferred frame-read normally, but drops one that resolves after onClosing()', () => {
+    // Meta.Display::closing fires while the session tears down, but a frame
+    // read queued before it does not resolve synchronously -- it comes back
+    // on a later main-loop turn (see the 'frame' branch of onWindowEvent).
+    // Gating only the synchronous entry point would let that deferred tail
+    // still reach commit() -> _layoutAndPublish() after closing.
+    //
+    // Two windows, each observed exactly once: RectReconciler.observe()
+    // gives a window's *first* mismatch a correction and only marks it
+    // stubborn (and permanently silent) on a second one, so reusing one
+    // window for both halves of this test would make the "after" half
+    // pass whether or not onClosing() actually did anything.
+    const f = fakeEngine(); f.engine.start(); f.add(1); f.add(2); f.flush(); f.applied.length = 0; f.calls.length = 0;
+    f.change(1, {rect: {x: 3, y: 3, width: 3, height: 3}}, 'frame'); f.flush();
+    expect(f.applied.length).toBeGreaterThan(0); // still works normally: closing has not fired
+
+    f.applied.length = 0; f.calls.length = 0;
+    f.change(2, {rect: {x: 9, y: 9, width: 9, height: 9}}, 'frame'); // queues a deferred read
+    f.engine.onClosing();
+    f.flush(); // drains the queue; the read must not reach commit()
+    expect(f.applied).toEqual([]);
+    expect(f.calls).not.toContain('decorations');
+  });
   it('isolates failed subscribers and publishes detached values', () => {
     const f = fakeEngine(); f.engine.start(); let notified = 0;
     f.engine.subscribeTreeChanged(() => { throw new Error('listener failed'); });
@@ -89,7 +113,9 @@ describe('engine lifecycle', () => {
     f.change(1, {minimized: false}, 'minimized'); f.flush();
     expect(f.engine.treeSnapshot().workspaces[0].floating).toEqual([1]);
     expect(f.engine.windowsSnapshot()[0].state).toBe('floating');
-    f.focus(1); f.calls.length = 0; f.focus(1); f.flush(); expect(f.calls).toEqual([]);
+    // A duplicate focus report still runs a commit — which still republishes
+    // the (unchanged) decoration plan — but does nothing else observable.
+    f.focus(1); f.calls.length = 0; f.focus(1); f.flush(); expect(f.calls).toEqual(['decorations']);
   });
   it('enforces effective count for zero, moves before shrinking, and defers growing geometry', () => {
     const f = fakeEngine(); f.engine.start(); expect(f.engine.config.workspaceCount).toBe(0);
@@ -344,5 +370,243 @@ describe('accent colours', () => {
     f.engine.start();
     f.setAccent({background: '#e62d42', text: '#ffffff'});
     expect(f.pushedColors!.focused.background).toBe('#13BEAA');
+  });
+
+  it('repaints on an accent change normally, but not once onClosing() has fired', () => {
+    // notify::accent-color pushes straight to the indicator/decorations ports
+    // (Engine.start()'s accent.subscribe callback), bypassing commit()
+    // entirely -- so gating commit() alone would leave this path open.
+    const f = fakeEngine('bindsym Mod4+q kill');
+    f.engine.start();
+    f.setAccent({background: '#e62d42', text: '#ffffff'});
+    expect(f.pushedColors!.focused.background).toBe('#e62d42'); // still works normally: closing has not fired
+
+    f.engine.onClosing();
+    f.setAccent({background: '#111111', text: '#ffffff'});
+    expect(f.pushedColors!.focused.background).toBe('#e62d42'); // unchanged: the push after onClosing() never happened
+  });
+});
+
+describe('decorations', () => {
+  it('pushes a plan on every commit, including the one that empties it', () => {
+    const f = fakeEngine();
+    f.engine.start();
+    f.add(1);
+    f.flush();
+    expect(f.plan!.borders.map(b => b.window)).toEqual([1]);
+    f.remove(1);
+    f.flush();
+    expect(f.plan!.borders).toEqual([]);
+  });
+
+  it('lays out with the row height the shell measured', () => {
+    const f = fakeEngine();
+    f.engine.start();
+    f.engine.setRowHeight(20);
+    f.add(1);
+    f.flush();
+    f.engine.run(parseCommands('layout tabbed').commands, 0);
+    f.flush();
+    // The tabbed root reserved one row, so the window starts 20px lower.
+    const applied = f.applied.at(-1)!;
+    expect(applied.get(1)!.y).toBe(50);   // work area y 30 + 20
+  });
+
+  it('draws nothing for a workspace that is not the active one', () => {
+    // Every workspace is laid out on every commit -- inactive ones are
+    // pre-tiled -- but only the active one is on screen. Mutter hides an
+    // inactive workspace's windows; the renderer's actors are plain children
+    // of window_group with no tie to window visibility, so a plan naming an
+    // inactive workspace paints its borders, frame and tab bar straight over
+    // the active workspace, where the tabs also swallow clicks.
+    const f = fakeEngine();
+    f.engine.start();
+    f.engine.setRowHeight(20);
+    f.add(1);                                   // workspace 0, the active one
+    f.flush();
+    f.ports.workspaces.activate(4, 0);
+    f.flush();
+    f.add(2, {workspace: 4});
+    f.add(3, {workspace: 4});
+    f.flush();
+    f.engine.run(parseCommands('layout tabbed').commands, 0);
+    f.flush();
+    // While workspace 4 is the active one its chrome is exactly what is drawn.
+    expect(f.plan!.titleRows).toHaveLength(1);
+    expect(f.plan!.borders.map(b => b.window).sort()).toEqual([2, 3]);
+
+    f.ports.workspaces.activate(0, 0);
+    f.flush();
+    expect(f.plan!.borders.map(b => b.window)).toEqual([1]);
+    expect(f.plan!.titleRows).toEqual([]);
+    expect(f.plan!.frames).toEqual([]);
+  });
+});
+
+describe('focusWindow', () => {
+  /** Two windows in a tabbed container -- the shape whose title row is clickable. */
+  const tabbed = () => {
+    const f = fakeEngine();
+    f.engine.start();
+    f.add(1);
+    f.add(2);
+    f.flush();
+    f.engine.run(parseCommands('layout tabbed').commands, 0);
+    f.flush();
+    return f;
+  };
+
+  it('selects the clicked leaf and activates its window', () => {
+    const f = tabbed();
+    f.calls.length = 0;
+    f.engine.focusWindow(1);
+    f.flush();
+    expect(f.calls).toContain('focus:1');
+    // The plan the renderer gets back marks the clicked tab, not the old one.
+    const tabs = f.plan!.titleRows[0].tabs;
+    expect(tabs.map(tab => [tab.window, tab.selected])).toEqual([[1, true], [2, false]]);
+  });
+
+  it('commits once for one click', () => {
+    const f = tabbed();
+    f.calls.length = 0;
+    f.engine.focusWindow(1);
+    // One activation, the tabbed container's restack with the clicked window
+    // on top, and one publish for the selection -- then the publish that
+    // carries the native focus report back, exactly what a `focus` command
+    // costs. A second commit for the click itself would show up as a third
+    // 'decorations', and every publish re-pushes each window's rect.
+    expect(f.calls).toEqual(['focus:1', 'raise:2', 'raise:1', 'decorations', 'decorations']);
+  });
+
+  it('ignores a window that is not in the tree', () => {
+    // A tab click reaches the engine one main-loop turn late (Decorations
+    // defers it, so the click's own `clicked` emission has returned before
+    // apply() can destroy the button), so the window can be gone by then.
+    const f = tabbed();
+    f.remove(2);
+    f.flush();
+    f.calls.length = 0;
+    f.engine.focusWindow(2);
+    f.engine.focusWindow(99);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('ignores a window on another workspace', () => {
+    // Only the active workspace has chrome on screen, and activating the
+    // selection reads the active workspace's selection -- so accepting one
+    // from elsewhere would move the focus to whatever that workspace happened
+    // to have selected.
+    const f = tabbed();
+    f.add(3, {workspace: 4});
+    f.flush();
+    f.calls.length = 0;
+    f.engine.focusWindow(3);
+    expect(f.calls).toEqual([]);
+  });
+});
+
+describe('focusNode', () => {
+  /**
+   * `A | (B over C)` inside a tabbed root: two tabs, the second of which
+   * titles a nested container rather than a window. That tab's `window` is
+   * null -- its nodeId is the only thing a click on it can report.
+   */
+  const nested = () => {
+    const f = fakeEngine();
+    f.engine.start();
+    f.engine.setRowHeight(20);
+    f.add(1);
+    f.add(2);
+    f.flush();
+    f.engine.run(parseCommands('layout tabbed').commands, 0);
+    f.flush();
+    f.engine.focusWindow(2);
+    f.flush();
+    f.engine.run(parseCommands('split v').commands, 0);
+    f.flush();
+    f.add(3);
+    f.flush();
+    return f;
+  };
+
+  /** The nodeId of the tab that titles a container rather than a window. */
+  const containerTab = (f: EngineFixture): number => {
+    const tab = f.plan!.titleRows[0].tabs.find(candidate => candidate.window === null);
+    expect(tab).toBeDefined();
+    return tab!.nodeId;
+  };
+
+  it(`focuses the container tab's focused leaf`, () => {
+    const f = nested();
+    const nodeId = containerTab(f);
+    f.engine.focusWindow(1);             // focus the other tab first
+    f.flush();
+    f.calls.length = 0;
+    f.engine.focusNode(nodeId);
+    f.flush();
+    // The container's focused descendant, not the first leaf under it and not
+    // the container itself: i3 titles a nested tab with that descendant, so a
+    // click on it has to land on the same window the tab is showing.
+    expect(f.calls).toContain('focus:3');
+    expect(f.plan!.titleRows[0].tabs.map(tab => [tab.window, tab.selected]))
+      .toEqual([[1, false], [null, true]]);
+  });
+
+  it('leaves the selection a leaf, so no container outline appears', () => {
+    // Selecting the container itself would activate the same window but also
+    // draw the $mod+a frame, which no click on a tab should produce.
+    const f = nested();
+    const nodeId = containerTab(f);
+    f.engine.focusWindow(1);
+    f.flush();
+    f.engine.focusNode(nodeId);
+    f.flush();
+    expect(f.plan!.frames).toEqual([]);
+  });
+
+  it('commits once for one click', () => {
+    const f = nested();
+    const nodeId = containerTab(f);
+    f.engine.focusWindow(1);
+    f.flush();
+    f.calls.length = 0;
+    f.engine.focusNode(nodeId);
+    // One commit for the selection plus the one carrying the native focus
+    // report back -- what a `focus` command costs. A second commit for the
+    // click itself would show up as a third 'decorations', and every publish
+    // re-pushes each window's rect.
+    expect(f.calls.filter(call => call === 'decorations')).toHaveLength(2);
+  });
+
+  it('ignores a node id that is not in the tree', () => {
+    // The click reaches the engine a main-loop turn late, so the container may
+    // have been flattened away by then.
+    const f = nested();
+    f.calls.length = 0;
+    f.engine.focusNode(999999);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('ignores a node on another workspace', () => {
+    // Same reason focusWindow refuses one: only the active workspace has
+    // chrome on screen, and activating the selection reads that workspace's
+    // selection.
+    const f = fakeEngine();
+    f.engine.start();
+    f.engine.setRowHeight(20);
+    f.ports.workspaces.activate(4, 0);
+    f.flush();
+    f.add(1, {workspace: 4});
+    f.add(2, {workspace: 4});
+    f.flush();
+    f.engine.run(parseCommands('layout tabbed').commands, 0);
+    f.flush();
+    const nodeId = f.plan!.titleRows[0].nodeId;
+    f.ports.workspaces.activate(0, 0);
+    f.flush();
+    f.calls.length = 0;
+    f.engine.focusNode(nodeId);
+    expect(f.calls).toEqual([]);
   });
 });

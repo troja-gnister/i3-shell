@@ -3,6 +3,7 @@ import {loadConfigText} from '../../../src/config';
 import type {Binding, Colors} from '../../../src/config/model';
 import type {Accent} from '../../../src/config/colors';
 import type {PillState, Topology, WindowEvent, WindowInfo} from '../../../src/runtime/model';
+import type {DecorationPlan} from '../../../src/runtime/decoration';
 import type {Rect, WindowId} from '../../../src/tree/node';
 
 export function windowInfo(id: number, patch: Partial<WindowInfo> = {}): WindowInfo {
@@ -72,6 +73,10 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill') {
       current: () => accent,
       subscribe: callback => { accentChanged = callback; },
     },
+    decorations: {
+      apply: plan => { f.plan = plan; calls.push('decorations'); },
+      setColors: colors => { f.decorationColors = colors; calls.push('decorations.colors'); },
+    },
     now: () => 123456789,
     exec: command => { calls.push(`exec:${command}`); },
     notify: (title, body) => { calls.push(`notify:${title}|${body}`); },
@@ -81,8 +86,10 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill') {
   const engine = new Engine(ports);
   const f = {
     engine, ports, calls, applied, windows, load,
-    pills: [] as PillState[], pushedColors: null as Colors | null, visible: true, refuseGeometry: false, emitFrames: true, activationFails: false,
+    pills: [] as PillState[], pushedColors: null as Colors | null, decorationColors: null as Colors | null,
+    visible: true, refuseGeometry: false, emitFrames: true, activationFails: false,
     onApply: null as ((id: WindowId) => void) | null,
+    plan: null as DecorationPlan | null,
     add(id: WindowId, patch: Partial<WindowInfo> = {}) { windows.set(id, windowInfo(id, patch)); engine.onWindowEvent({type: 'added', id}); },
     change(id: WindowId, patch: Partial<WindowInfo>, eventType: Exclude<WindowEvent['type'], 'added' | 'removed' | 'focused'>) {
       const old = windows.get(id); if (!old) return;

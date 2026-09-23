@@ -13,7 +13,8 @@ describe('Engine', () => {
     const f = fakePorts(referenceText);
     const e = f.engine;
     e.start();
-    expect(f.calls).toEqual(['settings.apply', 'grab:65', 'mode:null', 'colors']);
+    // 'decorations' trails every commit — see the `decorations` describe block in lifecycle.test.ts.
+    expect(f.calls).toEqual(['settings.apply', 'grab:65', 'mode:null', 'colors', 'decorations.colors', 'decorations']);
     expect(e.mode).toBe('default');
     expect(e.state()).toMatchObject({mode: 'default', activeWorkspace: 0, workspaceCount: 10, grabbed: 65, configSource: 'file', errors: 0, warnings: 0});
   });
@@ -24,10 +25,13 @@ describe('Engine', () => {
     e.start();
     f.calls.length = 0;
     e.onBinding(binding(e.config, 'default', '<Super>3'), 1);
-    expect(f.calls).toEqual(['activate:2']);
+    expect(f.calls).toEqual(['activate:2', 'decorations']);
     f.add(1, {workspace: 2});
     e.onBinding(binding(e.config, 'default', '<Super><Shift>0'), 2);
-    expect(f.calls).toEqual(['activate:2', 'moveTo:1:9']);
+    // 'decorations' trails every commit, including the extra one a moved window's
+    // own workspace-changed event queues; filter it out to keep this assertion
+    // about the port calls the move itself makes.
+    expect(f.calls.filter(c => c !== 'decorations')).toEqual(['activate:2', 'moveTo:1:9']);
     expect(e.run([{type: 'workspace', target: {kind: 'name', name: '10:X'}}], 3)).toBe('workspace 10');
     expect(e.run([{type: 'workspace', target: {kind: 'next'}}], 4)).toBe('workspace: no such workspace');
     expect(e.run([{type: 'workspace', target: {kind: 'prev'}}], 5)).toBe('workspace 9');
@@ -63,7 +67,7 @@ describe('Engine', () => {
     expect(f.calls).toEqual(['mode:null', 'ungrabAll']);
     expect(f.ports.keys.grabbedCount).toBe(0);
     e.onUnlocked();
-    expect(f.calls.slice(2)).toEqual(['grab:65']);
+    expect(f.calls.slice(2)).toEqual(['grab:65', 'decorations']);
   });
 
   it('exec, kill and fullscreen reach their selected-id ports', () => {
@@ -75,7 +79,7 @@ describe('Engine', () => {
     e.onBinding(binding(e.config, 'default', '<Super>Return'), 1);
     e.onBinding(binding(e.config, 'default', '<Super><Shift>q'), 2);
     e.onBinding(binding(e.config, 'default', '<Super>f'), 3);
-    expect(f.calls).toEqual(['exec:kitty', 'kill:1', 'fullscreen:1:toggle']);
+    expect(f.calls).toEqual(['decorations', 'exec:kitty', 'kill:1', 'fullscreen:1:toggle']);
     expect(e.run([{type: 'nop', text: ''}, {type: 'unknown', text: 'frob'}], 5)).toBe('nop; unknown command: frob');
   });
 
@@ -103,8 +107,9 @@ describe('Engine', () => {
     expect(e.run([{type: 'reload'}], 1)).toBe('reloaded');
     expect(f.calls).toEqual([
       'warn:config warning line 2: exec is not supported by i3-shell yet; line skipped',
-      'settings.apply', 'grab:1', 'mode:null', 'colors',
+      'settings.apply', 'grab:1', 'mode:null', 'colors', 'decorations.colors',
       'notify:i3-shell|1 config warning(s) — see the shell log',
+      'decorations',
     ]);
     expect(e.state()).toMatchObject({grabbed: 1, warnings: 1, errors: 0});
   });
@@ -114,7 +119,8 @@ describe('Engine', () => {
     f.setNextLoad({...f.load(referenceText), source: 'fallback'});
     const e = f.engine;
     e.start();
-    expect(f.calls.at(-1)).toBe('notify:i3-shell|using the built-in fallback config');
+    // 'decorations' trails every commit, so the notification is second-to-last.
+    expect(f.calls.slice(-2)).toEqual(['notify:i3-shell|using the built-in fallback config', 'decorations']);
   });
 
   it('stop() releases grabs and restores GNOME settings', () => {

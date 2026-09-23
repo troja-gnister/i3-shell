@@ -6,7 +6,7 @@ export interface LayoutResult {
   containers: Map<Con, Rect>;
 }
 
-export function layoutWithRects(con: Con, rect: Rect): LayoutResult {
+export function layoutWithRects(con: Con, rect: Rect, rowHeight = 0): LayoutResult {
   assertValidRect(rect);
 
   const windows = new Map<WindowId, Rect>();
@@ -21,7 +21,20 @@ export function layoutWithRects(con: Con, rect: Rect): LayoutResult {
     }
 
     if (current.layout === 'tabbed' || current.layout === 'stacked') {
-      for (const child of current.children) visit(child, {...currentRect});
+      // i3 draws one row of tabs for `tabbed`, but one row per child for
+      // `stacked`, where every title stays visible at once.
+      const rows = current.layout === 'tabbed' ? 1 : current.children.length;
+      // Clamped at both ends: never taller than the container it is carved out
+      // of, and never negative -- a negative reservation would start the
+      // children above their own container and make them taller than it.
+      const reserved = Math.min(currentRect.height, Math.max(0, rowHeight) * rows);
+      const childRect = {
+        x: currentRect.x,
+        y: currentRect.y + reserved,
+        width: currentRect.width,
+        height: currentRect.height - reserved,
+      };
+      for (const child of current.children) visit(child, {...childRect});
       return;
     }
 

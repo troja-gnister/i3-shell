@@ -299,7 +299,55 @@ describe('engine command dispatch', () => {
     ], 1);
     expect(f.engine.windowsSnapshot()[0].state).toBe('floating');
     expect(f.applied.at(-1)?.get(1)).toEqual({x: 140, y: 170, width: 720, height: 420});
-    expect(f.engine.run([{type: 'border', style: 'none', width: 0}], 2)).toBe('border: not implemented until Phase 3');
+    // window 1 is floating at this point (the compound chain enabled it above); border only targets a tiled leaf.
+    expect(f.engine.run([{type: 'border', style: 'none', width: 0}], 2)).toBe('border none: no tiled container');
+  });
+
+  it('sets a per-window border override, targeting every leaf beneath a container selection', () => {
+    const f = fakeEngine(); f.engine.start(); f.add(1); f.add(2); f.flush();
+    f.focus(1);
+    f.engine.run([{type: 'border', style: 'pixel', width: 5}], 1);
+    expect(f.plan!.borders.find(b => b.window === 1)!.width).toBe(5);
+    expect(f.plan!.borders.find(b => b.window === 2)!.width).toBe(2); // untouched, configured default
+
+    f.engine.run([{type: 'focus', target: 'parent'}], 2);
+    f.engine.run([{type: 'border', style: 'none', width: 0}], 3);
+    expect(f.plan!.borders.every(b => b.width === 0)).toBe(true);
+  });
+
+  it('applies a border command against a container selection in exactly one commit', () => {
+    const f = fakeEngine(); f.engine.start(); f.add(1); f.add(2); f.flush();
+    f.engine.run([{type: 'focus', target: 'parent'}], 1); // selects the shared root, a 2-leaf container
+    f.calls.length = 0;
+    const before = f.engine.treeSnapshot().revision;
+    f.engine.run([{type: 'border', style: 'pixel', width: 5}], 2);
+    expect(f.calls.filter(c => c === 'decorations')).toHaveLength(1);
+    expect(f.engine.treeSnapshot().revision).toBe(before + 1);
+    expect(f.plan!.borders.every(b => b.width === 5)).toBe(true);
+  });
+
+  it('treats "normal" the same as "pixel" (there are no title bars to draw)', () => {
+    const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
+    f.engine.run([{type: 'border', style: 'normal', width: 7}], 1);
+    expect(f.plan!.borders[0].width).toBe(7);
+  });
+
+  it('toggles a window border between the configured default width and zero', () => {
+    const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
+    expect(f.plan!.borders[0].width).toBe(2); // configured default, no override yet
+    f.engine.run([{type: 'border', style: 'toggle', width: 0}], 1);
+    expect(f.plan!.borders[0].width).toBe(0);
+    f.engine.run([{type: 'border', style: 'toggle', width: 0}], 2);
+    expect(f.plan!.borders[0].width).toBe(2);
+  });
+
+  it('forgets a border override when the window is removed, so a reused id starts fresh', () => {
+    const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
+    f.engine.run([{type: 'border', style: 'pixel', width: 9}], 1);
+    expect(f.plan!.borders[0].width).toBe(9);
+    f.remove(1); f.flush();
+    f.add(1); f.flush();
+    expect(f.plan!.borders.find(b => b.window === 1)!.width).toBe(2);
   });
 
   it('handles empty, wrong and gone selections without native operations or mutation', () => {
