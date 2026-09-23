@@ -110,11 +110,12 @@ contradict that.
 new `EnginePorts` member:
 
 ```ts
-decorations: {
-  apply(plan: DecorationPlan): void;
-  setRowHeight(height: number): void;   // shell -> engine, see 4.2
-};
+decorations: {apply(plan: DecorationPlan): void};
 ```
+
+`rowHeight` travels the other way and is **not** a port method: the shell measures it (§4.2) and
+calls `Engine.setRowHeight(height)` directly, as it already calls `onMonitorsChanged()`. A port
+method the shell would invoke on itself is a port in name only.
 
 Nothing outside `commit()` may produce or mutate a plan. `apply` is called on every commit, including
 the commit that empties it, so the renderer never has to infer teardown.
@@ -133,8 +134,11 @@ A renderer with no decisions in it. On each plan:
   so raising a window raises its border with it.
 - Colours come from `effectiveColors()` (main spec §16.1), so borders follow the GNOME accent when
   the config leaves `client.focused` unset, and a config that sets it still wins.
-- Width comes from `default_border pixel N` and the `border` command; `normal` is treated as
-  `pixel N`, since there are no title bars to draw.
+- Width comes from the plan, never from the renderer's own reading of config. The engine resolves it
+  from `default_border pixel N` and per-window overrides set by the `border` command, which the
+  engine must now store; `normal` is treated as `pixel N`, since there are no title bars to draw.
+  `border none` yields `width: 0` and still produces a plan entry, so the actor persists and its
+  state colour continues to track focus.
 - A title row is an `St.BoxLayout` of `St.Button` tabs. Clicking a tab focuses that window by
   issuing a command through the same path a keybinding uses — the renderer never mutates the tree.
 
