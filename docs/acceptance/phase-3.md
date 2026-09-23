@@ -6,7 +6,7 @@ fix). Record the exact revision you built from — `git rev-parse --short HEAD` 
 at the end, because "it looked wrong" is only useful against a known build.
 **Build under test:** release `make install` (no `org.i3shell.Debug` interface or methods).
 **Environment:** GNOME Shell 50.5 / Mutter 18, Wayland, Fedora Silverblue 44.
-**Date prepared:** 2026-09-23. **Result: not yet walked.**
+**Date prepared:** 2026-09-23. **Result: walked and PASSED by the user on 2026-09-23**, after a logout and login onto the merged build. See "The user's report" at the end.
 
 Nothing in this repository ticks these boxes. The automated suite at the end is separate evidence
 and is listed only so the walk can concentrate on what automation cannot reach: Phase 3A is the
@@ -250,4 +250,25 @@ any phase before it:
 
 ## The user's report
 
-*(to be written after the walk)*
+**Walked 2026-09-23 by the user, after a logout and login. GNOME Shell 50.5, Wayland, Fedora
+Silverblue 44. Product revision `d6e790a` on `main`. Reported to the session as "everything works" —
+no box failed and no defect was raised.**
+
+Controller confirmation that the session under test really was the merged build, rather than a stale
+one: `GetTree` returned the `rowHeight` field, which exists only from Phase 3A; the journal showed
+`65 bindings grabbed` with the two IBus hotkeys cleared by the extension itself; and both monitors
+were known to the engine.
+
+This closes the one gate the automation could not: **the decorations had never been seen on a
+screen.** The native suite asserts the tree's rectangles and the work area, and the unit suite
+asserts the geometry the renderer computes against actor doubles — every late defect on the branch
+(invisible borders, click-swallowing tabs, one workspace's chrome painted over another's) lived
+precisely in the gap this walk covers.
+
+Limitations recorded above were not treated as failures and remain as documented: the border
+overlaps its client's outermost pixels rather than insetting it (spec §4.1, inset deferred to Phase
+4); `border toggle` is two-state; the monitor bar height is a 28px floor; the title row does not
+re-measure on a text-scaling change; and a tabbed container's `$mod+a` outline has its top edge
+covered by that container's tab row.
+
+Phase 3A is complete.
