@@ -1278,7 +1278,15 @@ SCHEMAS = ['org.gnome.desktop.wm.keybindings', 'org.gnome.shell.keybindings',
 EXTRA = [('org.gnome.mutter', 'dynamic-workspaces'),
          ('org.gnome.desktop.wm.preferences', 'num-workspaces'),
          ('org.gnome.desktop.wm.preferences', 'workspace-names'),
-         ('org.gnome.desktop.wm.preferences', 'mouse-button-modifier')]
+         ('org.gnome.desktop.wm.preferences', 'mouse-button-modifier'),
+         # Accelerators claimed outside GNOME's keybinding schemas. IBus cannot
+         # use GNOME's GrabAccelerator API -- shellDBus.js restricts it to three
+         # senders -- so it never competes for the grab; it acts on these settings
+         # independently. unicode-hotkey is a control: it is scanned and must
+         # survive, because the reference config binds nothing that collides.
+         ('org.freedesktop.ibus.panel.emoji', 'hotkey'),
+         ('org.freedesktop.ibus.panel.emoji', 'unicode-hotkey'),
+         ('org.freedesktop.ibus.general.hotkey', 'triggers')]
 source = Gio.SettingsSchemaSource.get_default()
 out = {}
 for schema_id in SCHEMAS:
@@ -1368,6 +1376,8 @@ EXPECTED_CLEARINGS = {
     'org.gnome.desktop.wm.keybindings minimize': ['<Super>h'],
     'org.gnome.desktop.wm.keybindings switch-input-source': ['<Super>space'],
     'org.gnome.settings-daemon.plugins.media-keys screensaver': ['<Super>l'],
+    'org.freedesktop.ibus.panel.emoji hotkey': ['<Super>semicolon'],
+    'org.freedesktop.ibus.general.hotkey triggers': ['<Super>space'],
 }
 
 
@@ -1390,6 +1400,9 @@ def settings_scenario():
     for key, accels in EXPECTED_CLEARINGS.items():
         assert key in removed and removed[key] == accels, (key, removed.get(key), accels)
     check('enabling only removes colliding accelerators, never adds any', added, {})
+    # The whole point of naming IBus keys instead of scanning its schemas.
+    check('a scanned IBus key that collides with nothing is left alone',
+          cleared['org.freedesktop.ibus.panel.emoji unicode-hotkey'], ['<Control><Shift>u'])
     check('static workspaces applied',
           cleared['org.gnome.desktop.wm.preferences num-workspaces'], 10)
     print('workspace/mouse preferences changed:', json.dumps(preferences), flush=True)

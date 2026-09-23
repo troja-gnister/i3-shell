@@ -187,3 +187,70 @@ describe('SettingsOverrides', () => {
     expect(JSON.parse(f.extension.get_string('overridden-settings'))[PREFS]).toHaveProperty('num-workspaces', 4);
   });
 });
+
+describe('accelerators claimed outside GNOME\'s own keybinding schemas', () => {
+  const EMOJI = 'org.freedesktop.ibus.panel.emoji';
+  const IBUS_HOTKEY = 'org.freedesktop.ibus.general.hotkey';
+  const IBUS_GENERAL = 'org.freedesktop.ibus.general';
+
+  // GNOME Shell's GrabAccelerator D-Bus API is restricted to org.gnome.Settings,
+  // org.gnome.SettingsDaemon.MediaKeys and org.freedesktop.impl.portal.desktop.gnome
+  // (shellDBus.js), so IBus never competes for the grab -- i3-shell wins that every
+  // time. The conflict is at the settings layer: ibus-extension-gtk3 reads these keys
+  // and acts on the same accelerator independently. Clearing them is the same remedy
+  // already applied to GNOME's own schemas.
+  const ibusPlan: OverridePlan = {
+    accels: ['<Super>semicolon', '<Super>space'],
+    workspaceCount: 0, workspaceNames: [], mouseButtonModifier: '<Alt>',
+  };
+
+  function ibusFixture() {
+    const extension = new FakeSettings(EXTENSION, {'overridden-settings': '{}'});
+    const emoji = new FakeSettings(EMOJI, {
+      hotkey: ['<Super>period', '<Super>semicolon'],
+      'unicode-hotkey': ['<Control><Shift>u'],
+      favorites: [],
+    });
+    const hotkey = new FakeSettings(IBUS_HOTKEY, {
+      triggers: ['<Super>space'],
+      // IBus spells its own legacy keys differently; they must be left alone.
+      trigger: ['Control+space', 'Zenkaku_Hankaku'],
+    });
+    // Not an accelerator key at all: a long list of layout names that must survive.
+    const general = new FakeSettings(IBUS_GENERAL, {
+      'xkb-latin-layouts': ['af', 'us', 'space'],
+      'preload-engines': [],
+    });
+    return {extension, emoji, hotkey, general};
+  }
+
+  it('clears an IBus hotkey that collides with a configured binding', () => {
+    const f = ibusFixture();
+    overrides(f.extension).apply(ibusPlan);
+    expect(f.emoji.values.hotkey).toEqual(['<Super>period']);
+    expect(f.hotkey.values.triggers).toEqual([]);
+  });
+
+  it('leaves IBus keys that are not accelerator lists untouched', () => {
+    const f = ibusFixture();
+    overrides(f.extension).apply(ibusPlan);
+    expect(f.general.values['xkb-latin-layouts']).toEqual(['af', 'us', 'space']);
+    expect(f.hotkey.values.trigger).toEqual(['Control+space', 'Zenkaku_Hankaku']);
+    expect(f.emoji.values['unicode-hotkey']).toEqual(['<Control><Shift>u']);
+    expect(f.emoji.values.favorites).toEqual([]);
+  });
+
+  it('restores the IBus hotkeys on disable', () => {
+    const f = ibusFixture();
+    const settings = overrides(f.extension);
+    settings.apply(ibusPlan);
+    settings.restoreAll();
+    expect(f.emoji.values.hotkey).toEqual(['<Super>period', '<Super>semicolon']);
+    expect(f.hotkey.values.triggers).toEqual(['<Super>space']);
+  });
+
+  it('is silent when IBus is not installed', () => {
+    const extension = new FakeSettings(EXTENSION, {'overridden-settings': '{}'});
+    expect(() => overrides(extension).apply(ibusPlan)).not.toThrow();
+  });
+});
