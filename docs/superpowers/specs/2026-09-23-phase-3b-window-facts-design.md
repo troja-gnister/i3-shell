@@ -74,12 +74,44 @@ A pure predicate in Layer 0:
 
 ```ts
 export function excludedFromTree(info: WindowInfo): boolean {
-  return info.minimized || info.sticky || info.skipTaskbar;
+  return info.minimized || info.sticky || (info.skipTaskbar && info.kind === 'tiled');
 }
 ```
 
-It replaces the bare `info.minimized` at `engine.ts:485` and the `!w.minimized` filter in the
-`tree.normalize(...)` live set at `engine.ts:391`. Both sites exist today; both consult a predicate
+**Amendment (post-implementation, native scenario A13):** the first draft of this section wrote the
+predicate flatly, as `info.minimized || info.sticky || info.skipTaskbar`, with no `kind` term. That
+was wrong, and the `kind` term is not a new rule — it restores one this phase silently dropped.
+
+Before this phase, `classifyWindow` read `skipTaskbar` itself, on the line that already assumed the
+window had survived every other reason to float:
+
+```ts
+if (f.type !== 'normal' || f.transient || f.attached || !f.resizable) return 'floating';
+return f.skipTaskbar || f.sticky ? null : 'tiled';
+```
+
+A window that floats for type, transience, attachment, or fixed size never reached that line, so
+`skipTaskbar` never applied to it. §3.1 moved `skipTaskbar` out of `WindowFacts` and into `WindowInfo`
+precisely so it could be read per-commit instead of cached — but the flat OR above applies it to
+*every* window, floating or not, because `WindowFacts`'s type/transient/attached distinction is gone
+from this predicate's inputs. Mutter reports `is_skip_taskbar()` true for a modal dialog (confirmed by
+scenario A13: `'A13 dialog'`, a plain transient with no `set_modal()`, passed; `'A13 modal'`, differing
+only in that call, failed) — a window that was always meant to float regardless. Under the flat OR it
+is excluded from the tree *and*, because `_syncWindow`'s else-branch (the only place that calls
+`tree.addFloating`) is skipped while excluded, from the floating list too: `assert window['id'] in
+workspace_snapshot()['floating']` failed with the modal absent from both.
+
+`info.kind` is exactly the type/transient/attached/fixed-size verdict, carried forward from
+classification into `WindowInfo` (§3.1 already relies on this: it is what `_floating()` reads). Gating
+`skipTaskbar` on `info.kind === 'tiled'` reproduces the old ordering — skip-taskbar only ever mattered
+for a window that would otherwise be a tiling candidate — without reintroducing `skipTaskbar` as a
+classification input, which §1 and §2 both rule out. `minimized` and `sticky` get no such gate: neither
+was ever behind that ordering (`sticky` mapped to `null` unconditionally in the pre-phase code above,
+and `minimized` is orthogonal to `kind` by construction), so gating them would be inventing new
+behaviour, not restoring old.
+
+The predicate replaces the bare `info.minimized` at `engine.ts:485` and the `!w.minimized` filter in
+the `tree.normalize(...)` live set at `engine.ts:391`. Both sites exist today; both consult a predicate
 instead of a field.
 
 Re-entry needs no new **engine** code. `_syncWindow`'s else-branch already re-inserts a window that

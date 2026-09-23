@@ -73,6 +73,18 @@ describe('excludedFromTree', () => {
     expect(excludedFromTree(info({minimized: false, sticky: true}))).toBe(true);
     expect(excludedFromTree(info({minimized: true, sticky: false}))).toBe(true);
   });
+
+  it('ignores skip-taskbar on a window that already floats, but excludes it on a tiled one', () => {
+    // Review Focus: pre-3B, classifyWindow() reached `skipTaskbar` only after
+    // ruling out every reason a window floats (type, transient, attached,
+    // fixed-size) -- a floating window never consulted it. §3.3 moved the
+    // fact flatly and broke that: Mutter reports is_skip_taskbar() true for a
+    // modal dialog (scenario A13), which used to float untouched and is now
+    // dropped from the tree *and* the floating list. `kind` restores the
+    // original narrowness.
+    expect(excludedFromTree(info({kind: 'floating', skipTaskbar: true}))).toBe(false);
+    expect(excludedFromTree(info({kind: 'tiled', skipTaskbar: true}))).toBe(true);
+  });
 });
 
 // The readings below are what Mutter reports through the `resizeable` property

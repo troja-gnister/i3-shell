@@ -14,9 +14,18 @@ export function classifyWindow(f: WindowFacts): WindowKind | null {
  * was, and `sticky`/`skipTaskbar` moved here from `WindowFacts` precisely
  * because caching them dropped a window permanently. Any one reason excludes;
  * the window rejoins only when every reason has cleared.
+ *
+ * `skipTaskbar` is gated on `kind === 'tiled'`, unlike the other two: before
+ * the fact move, `classifyWindow` only ever reached `f.skipTaskbar` after
+ * ruling out every other reason a window floats (type, transient, attached,
+ * fixed-size), so a floating window never consulted it. Reading it flatly
+ * here would re-widen it to floating windows too -- and Mutter genuinely
+ * reports `is_skip_taskbar()` true for a modal dialog, which must keep
+ * floating (and stay in the workspace's floating list), not be dropped. This
+ * restores that pre-existing narrowness; it is not a new rule.
  */
 export function excludedFromTree(info: WindowInfo): boolean {
-  return info.minimized || info.sticky || info.skipTaskbar;
+  return info.minimized || info.sticky || (info.skipTaskbar && info.kind === 'tiled');
 }
 
 /**

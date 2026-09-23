@@ -670,4 +670,25 @@ describe('exclusion from the tree', () => {
     f.change(2, {sticky: false}, 'membership'); f.flush();
     expect(f.applied.at(-1)!.has(2)).toBe(true);
   });
+
+  it('keeps a floating skip-taskbar window in the floating list, not excluded', () => {
+    // Review Focus: regression for scenario A13. A modal dialog floats (type
+    // modal-dialog, transient) and Mutter also reports it skip-taskbar; before
+    // this fix it would be dropped from the tree *and* never reach
+    // tree.addFloating, so it vanished from workspace_snapshot().floating too.
+    const f = fakeEngine(); f.engine.start();
+    f.add(1);
+    f.add(2, {kind: 'floating', skipTaskbar: true});
+    f.flush();
+    expect(f.engine.treeSnapshot().workspaces[0].floating).toEqual([2]);
+  });
+
+  it('excludes a tiled skip-taskbar window from the tree and the floating list', () => {
+    const f = fakeEngine(); f.engine.start();
+    f.add(1);
+    f.add(2, {skipTaskbar: true}); // kind defaults to 'tiled'
+    f.flush();
+    expect(f.engine.treeSnapshot().workspaces[0].floating).toEqual([]);
+    expect(f.applied.at(-1)!.has(2)).toBe(false);
+  });
 });
