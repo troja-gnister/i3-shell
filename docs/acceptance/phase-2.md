@@ -119,7 +119,7 @@ settings, runtime and Wayland socket, never the live session. It does not tick a
 | Scenario | Result |
 |---|---|
 | Retained Phase 1 checks (A1–A5, A7) | passed |
-| Phase 2 single-monitor (A8–A14, tabbed/stacked, geometry states, refusing client, kill/transfer, reload/restart) | 102 assertions passed |
+| Phase 2 single-monitor (A8–A14, tabbed/stacked, geometry states, refusing client, kill/transfer, reload/restart) | 103 assertions passed |
 | Two virtual outputs: migration, real output removal and reconnection | 15 assertions passed |
 | A6 settings: real originals cleared, restored, re-cleared on repeated enable | 12 assertions passed |
 | `org.i3shell.Control` owned by another client | 12 assertions passed |

@@ -11,7 +11,7 @@ fidelity.
 
 **State (2026-09-22):** Phase 1 and Phase 2A are merged into `main`; A1–A7 passed by user report on 2026-09-21. On `phase-2b`, all ten tasks of the approved integration plan are implemented; Tasks 1–9 are independently reviewed and Task 10 delivers the A8–A14 integration suite. **A8–A14 live acceptance is still the user's walk** — [docs/acceptance/phase-2.md](docs/acceptance/phase-2.md) is written and deliberately unchecked. The whole-branch review is outstanding. The [pause handoff](docs/handoff-2026-09-22.md) remains the record of the earlier checkpoint.
 
-Latest verification: **378/378 tests in 38 files**, both TypeScript programs, Layer 0, tree lint, and the full private nested suite — retained Phase 1 checks plus 141 Phase 2 assertions across single-monitor, two-monitor, settings-restoration and D-Bus-name-conflict scenarios. The suite found and fixed two production defects (see §5). `main` remains `b6fe8cc`, one documentation commit ahead of `origin/main` at `568855c`. Phase 2B has not been merged or pushed. Phases 3–4 remain unbuilt.
+Latest verification: **378/378 tests in 38 files**, both TypeScript programs, Layer 0, tree lint, and the full private nested suite — retained Phase 1 checks plus 142 Phase 2 assertions across single-monitor, two-monitor, settings-restoration and D-Bus-name-conflict scenarios. The suite found and fixed two production defects (see §5). `main` remains `b6fe8cc`, one documentation commit ahead of `origin/main` at `568855c`. Phase 2B has not been merged or pushed. Phases 3–4 remain unbuilt.
 
 ---
 
