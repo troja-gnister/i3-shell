@@ -2,7 +2,7 @@ import {beforeEach, describe, expect, it, vi} from 'vitest';
 import type {DecorationPlan} from '../../../src/runtime/decoration';
 import {DEFAULT_COLORS} from '../../../src/config/model';
 import type {Colors} from '../../../src/config/model';
-import type {WindowId} from '../../../src/tree/node';
+import type {NodeId, WindowId} from '../../../src/tree/node';
 import {log} from '../../../src/shell/log';
 // Type-only: `StyledActor` is the half of the fake hierarchy that carries `label`
 // and `useMarkup`. The classes themselves come in through the dynamic import below,
@@ -58,11 +58,21 @@ const runDeferred = (): void => { for (const fn of deferred.splice(0)) fn(); };
 const {Decorations} = await vi.importActual<{
   Decorations: new (
     colors: Colors,
-    focus: (window: WindowId) => void,
+    focus: (target: TabTarget) => void,
     resolve: (id: WindowId) => FakeMetaWindow | undefined,
     defer: (fn: () => void) => void,
   ) => {apply(plan: DecorationPlan): void; setColors(colors: Colors): void; destroy(): void};
 }>('../../../src/shell/decorations');
+
+/**
+ * What a tab click reports, mirroring the `TabTarget` src/shell/decorations.ts
+ * exports. Declared here rather than imported: tsconfig.test.json excludes
+ * `src/shell/**` from the test program (that code needs the gi typings this
+ * program does not load), and the module itself arrives through
+ * vi.importActual below. A drift between the two shows up as a type error on
+ * the Decorations constructor's declared shape.
+ */
+type TabTarget = {window: WindowId} | {node: NodeId};
 
 const R = (x: number, y: number, width: number, height: number) => ({x, y, width, height});
 const empty: DecorationPlan = {borders: [], frames: [], titleRows: []};
@@ -269,12 +279,12 @@ describe('Decorations', () => {
 
   it('focuses the tab that was clicked, without touching the tree', () => {
     resolvable.set(1, fakeWindow());
-    const focused: WindowId[] = [];
-    const d = new Decorations(DEFAULT_COLORS, w => focused.push(w), resolve, defer);
+    const focused: TabTarget[] = [];
+    const d = new Decorations(DEFAULT_COLORS, target => focused.push(target), resolve, defer);
     d.apply(row(R(0, 0, 400, 300), [{nodeId: 1, window: 1, title: 'One', selected: false}]));
     lastCreated('tab').emit('clicked');
     runDeferred();
-    expect(focused).toEqual([1]);
+    expect(focused).toEqual([{window: 1}]);
   });
 
   it('defers a tab click by one main-loop turn', () => {
@@ -283,21 +293,21 @@ describe('Decorations', () => {
     // button in the tab sweep. Running it inside St's `clicked` emission would
     // unwind the stack back into a disposed St.Button.
     resolvable.set(1, fakeWindow());
-    const focused: WindowId[] = [];
-    const d = new Decorations(DEFAULT_COLORS, w => focused.push(w), resolve, defer);
+    const focused: TabTarget[] = [];
+    const d = new Decorations(DEFAULT_COLORS, target => focused.push(target), resolve, defer);
     d.apply(row(R(0, 0, 400, 300), [{nodeId: 1, window: 1, title: 'One', selected: false}]));
     lastCreated('tab').emit('clicked');
     expect(focused).toEqual([]);         // nothing yet: the emission has not returned
     expect(deferred).toHaveLength(1);
     runDeferred();
-    expect(focused).toEqual([1]);
+    expect(focused).toEqual([{window: 1}]);
   });
 
   it('drops a deferred tab click when Decorations was destroyed in the meantime', () => {
     // disable() can land between the click and the idle that carries it.
     resolvable.set(1, fakeWindow());
-    const focused: WindowId[] = [];
-    const d = new Decorations(DEFAULT_COLORS, w => focused.push(w), resolve, defer);
+    const focused: TabTarget[] = [];
+    const d = new Decorations(DEFAULT_COLORS, target => focused.push(target), resolve, defer);
     d.apply(row(R(0, 0, 400, 300), [{nodeId: 1, window: 1, title: 'One', selected: false}]));
     lastCreated('tab').emit('clicked');
     d.destroy();
@@ -318,14 +328,36 @@ describe('Decorations', () => {
     expect(vi.mocked(log.error)).toHaveBeenCalledTimes(1);
   });
 
-  it('does not focus anything for a nested-container tab, whose window is null', () => {
-    // Review Focus: a tab's window is WindowId | null; a nested-container tab has null.
-    const focused: WindowId[] = [];
-    const d = new Decorations(DEFAULT_COLORS, w => focused.push(w), resolve, defer);
-    d.apply(row(R(0, 0, 400, 300), [{nodeId: 1, window: null, title: 'Nested', selected: false}]));
-    expect(() => lastCreated('tab').emit('clicked')).not.toThrow();
+  it('reports the node for a nested-container tab, whose window is null', () => {
+    // A tab's window is WindowId | null; a nested container's tab has null,
+    // because it titles a container and not one window -- its label is the
+    // container's focused descendant's title. The plan type was widened so
+    // that tab exists, so the click has to land somewhere: the nodeId is the
+    // only thing it can report, and Engine.focusNode() is what takes it.
+    const focused: TabTarget[] = [];
+    const d = new Decorations(DEFAULT_COLORS, target => focused.push(target), resolve, defer);
+    d.apply(row(R(0, 0, 400, 300), [{nodeId: 4, window: null, title: 'Nested', selected: false}]));
+    lastCreated('tab').emit('clicked');
     runDeferred();
-    expect(focused).toEqual([]);
+    expect(focused).toEqual([{node: 4}]);
+  });
+
+  it('reports the nodeId the tab was built with, not one a later plan moved', () => {
+    // The tab entry's `window` is rewritten on every apply; its nodeId is the
+    // map key and cannot change for that entry, so the click closure captures
+    // it once. A tab that reported the wrong node would focus a sibling.
+    const focused: TabTarget[] = [];
+    const d = new Decorations(DEFAULT_COLORS, target => focused.push(target), resolve, defer);
+    const tabs = [
+      {nodeId: 4, window: null, title: 'Nested', selected: false},
+      {nodeId: 5, window: null, title: 'Other', selected: true},
+    ];
+    d.apply(row(R(0, 0, 400, 300), tabs));
+    // Swap their order: same two entries, reused, now at the other index.
+    d.apply(row(R(0, 0, 400, 300), [tabs[1], tabs[0]]));
+    tabActors()[1].emit('clicked');     // the button built for nodeId 5
+    runDeferred();
+    expect(focused).toEqual([{node: 5}]);
   });
 
   it('destroys every actor on destroy(), and touches none afterwards', () => {

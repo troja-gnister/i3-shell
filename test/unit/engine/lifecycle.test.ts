@@ -1,6 +1,6 @@
 import {describe, it, expect} from 'vitest';
 import {readFileSync} from 'node:fs';
-import {fakeEngine, topology, windowInfo} from './fakeEngine';
+import {fakeEngine, topology, windowInfo, type EngineFixture} from './fakeEngine';
 import {parseCommands} from '../../../src/commands/parse';
 
 const referenceText = readFileSync(new URL('../fixtures/reference.i3config', import.meta.url), 'utf8');
@@ -502,6 +502,111 @@ describe('focusWindow', () => {
     f.flush();
     f.calls.length = 0;
     f.engine.focusWindow(3);
+    expect(f.calls).toEqual([]);
+  });
+});
+
+describe('focusNode', () => {
+  /**
+   * `A | (B over C)` inside a tabbed root: two tabs, the second of which
+   * titles a nested container rather than a window. That tab's `window` is
+   * null -- its nodeId is the only thing a click on it can report.
+   */
+  const nested = () => {
+    const f = fakeEngine();
+    f.engine.start();
+    f.engine.setRowHeight(20);
+    f.add(1);
+    f.add(2);
+    f.flush();
+    f.engine.run(parseCommands('layout tabbed').commands, 0);
+    f.flush();
+    f.engine.focusWindow(2);
+    f.flush();
+    f.engine.run(parseCommands('split v').commands, 0);
+    f.flush();
+    f.add(3);
+    f.flush();
+    return f;
+  };
+
+  /** The nodeId of the tab that titles a container rather than a window. */
+  const containerTab = (f: EngineFixture): number => {
+    const tab = f.plan!.titleRows[0].tabs.find(candidate => candidate.window === null);
+    expect(tab).toBeDefined();
+    return tab!.nodeId;
+  };
+
+  it(`focuses the container tab's focused leaf`, () => {
+    const f = nested();
+    const nodeId = containerTab(f);
+    f.engine.focusWindow(1);             // focus the other tab first
+    f.flush();
+    f.calls.length = 0;
+    f.engine.focusNode(nodeId);
+    f.flush();
+    // The container's focused descendant, not the first leaf under it and not
+    // the container itself: i3 titles a nested tab with that descendant, so a
+    // click on it has to land on the same window the tab is showing.
+    expect(f.calls).toContain('focus:3');
+    expect(f.plan!.titleRows[0].tabs.map(tab => [tab.window, tab.selected]))
+      .toEqual([[1, false], [null, true]]);
+  });
+
+  it('leaves the selection a leaf, so no container outline appears', () => {
+    // Selecting the container itself would activate the same window but also
+    // draw the $mod+a frame, which no click on a tab should produce.
+    const f = nested();
+    const nodeId = containerTab(f);
+    f.engine.focusWindow(1);
+    f.flush();
+    f.engine.focusNode(nodeId);
+    f.flush();
+    expect(f.plan!.frames).toEqual([]);
+  });
+
+  it('commits once for one click', () => {
+    const f = nested();
+    const nodeId = containerTab(f);
+    f.engine.focusWindow(1);
+    f.flush();
+    f.calls.length = 0;
+    f.engine.focusNode(nodeId);
+    // One commit for the selection plus the one carrying the native focus
+    // report back -- what a `focus` command costs. A second commit for the
+    // click itself would show up as a third 'decorations', and every publish
+    // re-pushes each window's rect.
+    expect(f.calls.filter(call => call === 'decorations')).toHaveLength(2);
+  });
+
+  it('ignores a node id that is not in the tree', () => {
+    // The click reaches the engine a main-loop turn late, so the container may
+    // have been flattened away by then.
+    const f = nested();
+    f.calls.length = 0;
+    f.engine.focusNode(999999);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('ignores a node on another workspace', () => {
+    // Same reason focusWindow refuses one: only the active workspace has
+    // chrome on screen, and activating the selection reads that workspace's
+    // selection.
+    const f = fakeEngine();
+    f.engine.start();
+    f.engine.setRowHeight(20);
+    f.ports.workspaces.activate(4, 0);
+    f.flush();
+    f.add(1, {workspace: 4});
+    f.add(2, {workspace: 4});
+    f.flush();
+    f.engine.run(parseCommands('layout tabbed').commands, 0);
+    f.flush();
+    const nodeId = f.plan!.titleRows[0].nodeId;
+    f.ports.workspaces.activate(0, 0);
+    f.flush();
+    f.calls.length = 0;
+    f.engine.focusNode(nodeId);
     expect(f.calls).toEqual([]);
   });
 });

@@ -124,8 +124,12 @@ export default class I3ShellExtension extends Extension {
     };
     const decorations = new Decorations(DEFAULT_COLORS,
       // A tab click is a UI affordance, not an i3 command, so it goes straight
-      // to the engine rather than through run().
-      window => { this._engine?.focusWindow(window); },
+      // to the engine rather than through run(). A tab titles either one
+      // window or a nested container, and the engine has a method for each.
+      target => {
+        if ('window' in target) this._engine?.focusWindow(target.window);
+        else this._engine?.focusNode(target.node);
+      },
       // WindowId is this extension's own counter, not Meta's: only the window
       // tracker can turn one back into a live window (see shell/decorations.ts).
       id => this._windows?.resolve(id),

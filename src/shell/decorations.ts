@@ -51,6 +51,14 @@ function bandOf(row: TitleRow): Band {
   return {height, tabHeight: Math.floor(height / rows)};
 }
 
+/**
+ * What a tab click reports. A tab titles either one window or a nested
+ * container -- the plan's `window` is null for the latter, and the renderer
+ * makes no other distinction between them -- so the click reports which of the
+ * two was clicked and lets the engine decide what focusing it means.
+ */
+export type TabTarget = {window: WindowId} | {node: NodeId};
+
 interface BorderEntry {
   actor: St.Widget;
 }
@@ -92,7 +100,7 @@ export class Decorations {
 
   constructor(
     colors: Colors,
-    private readonly _focus: (window: WindowId) => void,
+    private readonly _focus: (target: TabTarget) => void,
     /**
      * WindowId is synthetic -- a counter WindowTracker assigns, unrelated to
      * Mutter's own Meta.Window.get_id() -- so the only way back to a live
@@ -308,6 +316,10 @@ export class Decorations {
           style_class: 'i3-shell-tab', reactive: true, can_focus: false, track_hover: true,
         });
         const created: TabEntry = {button, window: tab.window};
+        // Captured once, unlike `created.window`, which a later plan rewrites:
+        // a tab's nodeId is the key it is stored under and cannot change for
+        // this entry.
+        const nodeId = tab.nodeId;
         // The renderer never mutates the tree -- clicking a tab only reports
         // the intent to the focus callback the engine gave us, one main-loop
         // turn later (see _defer). Both halves go through guard() so an
@@ -317,7 +329,10 @@ export class Decorations {
         const report = guard('tab clicked', () => {
           // disable() can land between the click and the idle carrying it.
           if (this._destroyed) return;
-          if (created.window !== null) this._focus(created.window);
+          // A nested container's tab titles no window of its own; its node is
+          // what the click reports, and the engine descends from it to the
+          // leaf the tab's title came from.
+          this._focus(created.window !== null ? {window: created.window} : {node: nodeId});
         });
         button.connect('clicked', guard('clicked', () => this._defer(report)));
         entry.box.insert_child_at_index(button, index);

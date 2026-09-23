@@ -1,5 +1,5 @@
 import {Tree} from './tree/tree';
-import {descendFocused, leaves, walk, type Con, type Rect, type SplitCon, type WindowId} from './tree/node';
+import {descendFocused, leaves, walk, type Con, type NodeId, type Rect, type SplitCon, type WindowId} from './tree/node';
 import {layoutWithRects, stackingOrder} from './tree/layout';
 import {RectReconciler} from './runtime/reconcile';
 import {serializeTree, type TreeSnapshot, type WindowSnapshot} from './runtime/snapshot';
@@ -290,6 +290,43 @@ export class Engine {
       // 0 = no native event timestamp: a deferred click no longer carries one,
       // and the windows adapter substitutes the current server time so
       // focus-stealing prevention cannot drop the activation.
+      this._activateSelection(0);
+      return true;
+    });
+  }
+
+  /**
+   * Focuses one container by node id -- what a click on the tab of a *nested*
+   * container means. Such a tab titles no window of its own (its plan entry's
+   * `window` is null; it shows the container's focused descendant's title),
+   * so its nodeId is the only thing the click can report.
+   *
+   * Like focusWindow() this is the shell asking the engine, not a port and not
+   * an i3 command, and it lands on the same place i3 does: the container's
+   * focused leaf. Selecting the *container* would activate the same window but
+   * would also make the selection a SplitCon, drawing the `$mod+a` outline
+   * around it -- which no tab click should produce.
+   *
+   * The node is refused unless it is on the active workspace, for the reason
+   * focusWindow() gives: only that workspace has chrome on screen, and
+   * _activateSelection() reads the active workspace's selection.
+   */
+  focusNode(nodeId: NodeId): void {
+    this.commit(() => {
+      const tree = this._tree;
+      if (!tree) return false;
+      // Searching only the active workspace's roots is what enforces the
+      // refusal: a node anywhere else is simply never found.
+      const workspace = tree.workspaces.get(tree.activeWorkspace);
+      let target: Con | null = null;
+      for (const root of workspace?.monitors.values() ?? [])
+        for (const con of walk(root)) if (con.id === nodeId) target = con;
+      // The click reaches here a main-loop turn after it happened (the
+      // renderer defers it), so the container may have been flattened away.
+      const leaf = target ? descendFocused(target) : null;
+      if (!leaf) return false;
+      tree.select(leaf);
+      // 0 = no native event timestamp, as in focusWindow().
       this._activateSelection(0);
       return true;
     });
