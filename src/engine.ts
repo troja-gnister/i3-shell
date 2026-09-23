@@ -1,8 +1,9 @@
 import {Tree} from './tree/tree';
-import {descendFocused, leaves, walk, type Con, type Rect, type WindowId} from './tree/node';
+import {descendFocused, leaves, walk, type Con, type Rect, type SplitCon, type WindowId} from './tree/node';
 import {layoutWithRects, stackingOrder} from './tree/layout';
 import {RectReconciler} from './runtime/reconcile';
 import {serializeTree, type TreeSnapshot, type WindowSnapshot} from './runtime/snapshot';
+import {decorationPlan, type DecorationPlan} from './runtime/decoration';
 import type {WindowsPort, GeometryPort, DeferredPort, PillState, Topology, WindowInfo, WindowEvent} from './runtime/model';
 import {parseCommands} from './commands/parse';
 import type {Command, WorkspaceTarget} from './commands/model';
@@ -57,6 +58,12 @@ export interface EnginePorts {
     current(): Accent | null;
     subscribe(callback: () => void): void;
   };
+  /**
+   * Receives a fresh plan on every commit, including the commit that empties
+   * it (a window removed, a workspace switched away from) — the renderer
+   * never has to infer teardown on its own.
+   */
+  decorations: {apply(plan: DecorationPlan): void};
   exec(command: string): void;
   notify(title: string, body: string): void;
   log: {info(message: string): void; warn(message: string): void};
@@ -103,6 +110,8 @@ export class Engine {
   private _monitorInvalidation = false;
   private readonly _reconciler = new RectReconciler();
   private _containerRects = new Map<Con, Rect>();
+  private _rowHeight = 0;
+  private readonly _borderOverrides = new Map<WindowId, number>();
   private readonly _floatingRects = new Map<WindowId, Rect>();
   private readonly _frameReads = new Map<WindowId, {token: number; generation: number | undefined}>();
   private readonly _listeners = new Set<() => void>();
@@ -160,7 +169,7 @@ export class Engine {
     if (!this._ready || !this._tree || !this._topology)
       return {version: 1, revision: this._revision, ready: false,
         activeWorkspace: this._ports.workspaces.activeIndex, workspaces: []};
-    return serializeTree(this._tree, this._topology, this._containerRects, this._windows, this._revision);
+    return serializeTree(this._tree, this._topology, this._containerRects, this._windows, this._revision, this._rowHeight);
   }
 
   windowsSnapshot(): WindowSnapshot[] {
@@ -226,6 +235,19 @@ export class Engine {
     this.commit(() => { this._monitorInvalidation = true; });
   }
 
+  /** The shell measures the title-row height once fonts are known and reports it here; not a port, since it is the shell asking the engine, not the other way round. */
+  setRowHeight(height: number): void {
+    if (this._rowHeight === height) return;
+    this._rowHeight = height;
+    this.commit();
+  }
+
+  /** Records a per-window border-width override; `border` command handling calls this per targeted leaf. */
+  setBorder(window: WindowId, width: number): void {
+    this._borderOverrides.set(window, width);
+    this.commit();
+  }
+
   relayout(): void {
     this.commit(() => {
       for (const id of this._windows.keys()) this._observe(id, this._reconciler.generation(id));
@@ -254,6 +276,8 @@ export class Engine {
     this._ready = !!topology && topology.monitors.length > 0 &&
       Array.from({length: this._workspaceCount}, (_, i) => i).every(index =>
         topology.monitors.every(m => topology.workAreas.get(index)?.has(m.id)));
+    const decoRoots: Array<{root: SplitCon; active: boolean}> = [];
+    let decoFocused: Con | null = null;
     if (this._ready && topology) {
       const isNew = !this._tree;
       this._topology = topology;
@@ -285,14 +309,17 @@ export class Engine {
       this._containerRects = new Map();
       for (const ws of tree.workspaces.values()) {
         for (const [monitor, root] of ws.monitors) {
-          const layout = layoutWithRects(root, topology.workAreas.get(ws.index)!.get(monitor)!);
+          const layout = layoutWithRects(root, topology.workAreas.get(ws.index)!.get(monitor)!, this._rowHeight);
           for (const [con, rect] of layout.containers) this._containerRects.set(con, rect);
           for (const [id, rect] of layout.windows) {
             const info = this._ports.windows.get(id);
             if (info && !info.fullscreen && !info.minimized && !this._unmaximizing.has(id)) expected.set(id, rect);
           }
+          decoRoots.push({root, active: ws.index === tree.activeWorkspace});
         }
       }
+      const selection = tree.selection();
+      decoFocused = selection?.kind === 'tiled' ? selection.con : null;
       if (this._monitorInvalidation) {
         for (const id of this._windows.keys()) this._forced.add(id);
         this._monitorInvalidation = false;
@@ -320,6 +347,16 @@ export class Engine {
       occupied: [...this._windows.values()].some(w => w.workspace === index),
     }));
     this._ports.indicator.setPills(this._copyPills());
+    if (this._disposed) return;
+    this._ports.decorations.apply(decorationPlan({
+      roots: decoRoots,
+      rects: this._containerRects,
+      windows: this._windows,
+      focused: decoFocused,
+      rowHeight: this._rowHeight,
+      borderWidth: this._config.defaultBorder.width,
+      borderOverrides: this._borderOverrides,
+    }));
     if (this._disposed) return;
     this._revision++;
     for (const callback of [...this._listeners]) {
@@ -398,6 +435,7 @@ export class Engine {
     this._unmaximizeAttempts.delete(id);
     this._forced.delete(id);
     this._floatingRects.delete(id);
+    this._borderOverrides.delete(id);
     this._reconciler.forget(id);
     const read = this._frameReads.get(id);
     if (read) this._ports.deferred.cancel(read.token);
@@ -877,8 +915,19 @@ export class Engine {
         if (split) ports.log.warn('floating applies only to individual windows');
         return changed ? `floating ${command.action}` : `floating ${command.action}: no change`;
       }
-      case 'border':
-        return 'border: not implemented until Phase 3';
+      case 'border': {
+        const selection = this._tree?.selection();
+        const targets = selection?.kind === 'tiled' ? [...leaves(selection.con)] : [];
+        if (targets.length === 0) return `border ${command.style}: no tiled container`;
+        for (const target of targets) {
+          const width = command.style === 'toggle'
+            ? (this._borderOverrides.get(target.window) ?? this._config.defaultBorder.width) > 0
+              ? 0 : this._config.defaultBorder.width
+            : command.style === 'none' ? 0 : command.width;
+          this.setBorder(target.window, width);
+        }
+        return `border ${command.style}`;
+      }
       case 'mode':
         return this._enterMode(command.name) ? `mode ${command.name}` : `mode "${command.name}" is not defined`;
       case 'reload':

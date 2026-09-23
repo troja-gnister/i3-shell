@@ -1,6 +1,7 @@
 import {describe, it, expect} from 'vitest';
 import {readFileSync} from 'node:fs';
 import {fakeEngine, topology, windowInfo} from './fakeEngine';
+import {parseCommands} from '../../../src/commands/parse';
 
 const referenceText = readFileSync(new URL('../fixtures/reference.i3config', import.meta.url), 'utf8');
 
@@ -89,7 +90,9 @@ describe('engine lifecycle', () => {
     f.change(1, {minimized: false}, 'minimized'); f.flush();
     expect(f.engine.treeSnapshot().workspaces[0].floating).toEqual([1]);
     expect(f.engine.windowsSnapshot()[0].state).toBe('floating');
-    f.focus(1); f.calls.length = 0; f.focus(1); f.flush(); expect(f.calls).toEqual([]);
+    // A duplicate focus report still runs a commit — which still republishes
+    // the (unchanged) decoration plan — but does nothing else observable.
+    f.focus(1); f.calls.length = 0; f.focus(1); f.flush(); expect(f.calls).toEqual(['decorations']);
   });
   it('enforces effective count for zero, moves before shrinking, and defers growing geometry', () => {
     const f = fakeEngine(); f.engine.start(); expect(f.engine.config.workspaceCount).toBe(0);
@@ -344,5 +347,31 @@ describe('accent colours', () => {
     f.engine.start();
     f.setAccent({background: '#e62d42', text: '#ffffff'});
     expect(f.pushedColors!.focused.background).toBe('#13BEAA');
+  });
+});
+
+describe('decorations', () => {
+  it('pushes a plan on every commit, including the one that empties it', () => {
+    const f = fakeEngine();
+    f.engine.start();
+    f.add(1);
+    f.flush();
+    expect(f.plan!.borders.map(b => b.window)).toEqual([1]);
+    f.remove(1);
+    f.flush();
+    expect(f.plan!.borders).toEqual([]);
+  });
+
+  it('lays out with the row height the shell measured', () => {
+    const f = fakeEngine();
+    f.engine.start();
+    f.engine.setRowHeight(20);
+    f.add(1);
+    f.flush();
+    f.engine.run(parseCommands('layout tabbed').commands, 0);
+    f.flush();
+    // The tabbed root reserved one row, so the window starts 20px lower.
+    const applied = f.applied.at(-1)!;
+    expect(applied.get(1)!.y).toBe(50);   // work area y 30 + 20
   });
 });
