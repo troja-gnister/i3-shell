@@ -97,6 +97,15 @@ export class SettingsOverrides implements SettingsPort {
       this._restoreSaved(WM_PREFS, 'workspace-names');
     }
 
+    const mutter = this._settings(MUTTER);
+    if (mutter) {
+      // A window on a secondary output is on_all_workspaces while this is true, and
+      // i3-shell keeps such windows out of the tiling tree -- so the external display
+      // could never tile. This key is owned unconditionally, independent of whether any
+      // workspaces are named, and its original is snapshotted and restored on disable.
+      this._applyValue(MUTTER, mutter, 'workspaces-only-on-primary', false);
+    }
+
     const prefs = this._settings(WM_PREFS);
     if (prefs)
       this._applyValue(WM_PREFS, prefs, 'mouse-button-modifier', plan.mouseButtonModifier);

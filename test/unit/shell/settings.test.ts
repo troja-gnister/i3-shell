@@ -30,7 +30,9 @@ function fixture() {
   const prefs = new FakeSettings(PREFS, {
     'num-workspaces': 4, 'workspace-names': ['Original'], 'mouse-button-modifier': '<Super>',
   });
-  const mutter = new FakeSettings(MUTTER, {'dynamic-workspaces': true});
+  const mutter = new FakeSettings(MUTTER, {
+    'dynamic-workspaces': true, 'workspaces-only-on-primary': true,
+  });
   return {extension, keys, media, prefs, mutter};
 }
 
@@ -49,7 +51,9 @@ describe('SettingsOverrides', () => {
       'switch-to-application-1': ['<Alt>F1'], 'toggle-overview': ['<Super>s'],
     });
     expect(f.media.values).toEqual({'volume-up-static': ''});
-    expect(f.mutter.values).toEqual({'dynamic-workspaces': false});
+    expect(f.mutter.values).toEqual({
+      'dynamic-workspaces': false, 'workspaces-only-on-primary': false,
+    });
     expect(f.prefs.values).toEqual({
       'num-workspaces': 3, 'workspace-names': ['1', '2', '3:web'], 'mouse-button-modifier': '<Alt>',
     });
@@ -68,7 +72,9 @@ describe('SettingsOverrides', () => {
       'switch-to-application-1': ['<Super>1', '<Alt>F1'], 'toggle-overview': ['<Super>s'],
     });
     expect(f.media.values).toEqual({'volume-up-static': 'XF86AudioRaiseVolume'});
-    expect(f.mutter.values).toEqual({'dynamic-workspaces': true});
+    expect(f.mutter.values).toEqual({
+      'dynamic-workspaces': true, 'workspaces-only-on-primary': true,
+    });
     expect(f.prefs.values).toEqual({
       'num-workspaces': 4, 'workspace-names': ['Original'], 'mouse-button-modifier': '<Super>',
     });
@@ -185,6 +191,30 @@ describe('SettingsOverrides', () => {
     expect(f.prefs.get_int('num-workspaces')).toBe(3);
     expect(f.prefs.get_user_value('num-workspaces')?.deep_unpack()).toBe(3);
     expect(JSON.parse(f.extension.get_string('overridden-settings'))[PREFS]).toHaveProperty('num-workspaces', 4);
+  });
+
+  it('clears workspaces-only-on-primary so a secondary output can tile', () => {
+    const f = fixture();
+    overrides(f.extension).apply(plan);
+    expect(f.mutter.values['workspaces-only-on-primary']).toBe(false);
+  });
+
+  it('restores workspaces-only-on-primary on disable', () => {
+    const f = fixture();
+    const settings = overrides(f.extension);
+    settings.apply(plan);
+    settings.restoreAll();
+    expect(f.mutter.values['workspaces-only-on-primary']).toBe(true);
+  });
+
+  it('keeps the original persisted when the restore has not run yet', () => {
+    // Review Focus: if the shell dies before disable(), the user's GNOME setting
+    // must not be silently left changed with no record of what it was.
+    const f = fixture();
+    overrides(f.extension).apply(plan);
+    const snapshot = JSON.parse(
+      writes.filter(w => w.schema === EXTENSION).at(-1)!.value as string);
+    expect(snapshot[MUTTER]['workspaces-only-on-primary']).toBe(true);
   });
 });
 
