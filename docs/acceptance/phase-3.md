@@ -68,7 +68,10 @@ below are the ones in `examples/i3-shell.config`: `$mod+a` focus parent, `$mod+w
 - [ ] Move focus between the two tiles: the colours swap immediately, and nothing is left behind
       on the window that lost focus.
 - [ ] Make a window fullscreen (`$mod+f`): it has no border at all while fullscreen, and gets one
-      back when you leave fullscreen.
+      back when you leave fullscreen. While it is fullscreen, nothing else on that monitor is drawn
+      either — no borders on the tiles behind it, no tab rows (see the limitations below).
+- [ ] With a second monitor attached and no fullscreen window on it: making a window fullscreen on
+      the first monitor leaves the second monitor's borders, rows and bar completely untouched.
 
 ## A16 — `$mod+a` visibly outlines the selected container
 - [ ] Arrange `A | (B over C)` (`$mod+v` before opening the third window), focus `C`, press
@@ -169,9 +172,13 @@ below are the ones in `examples/i3-shell.config`: `$mod+a` focus parent, `$mod+w
   that can undo i3-shell's hide. On the lock screen the shield covers them anyway, which is what
   actually keeps them off the screen — if you ever see a bar *through* the shield, that is a
   defect and belongs in your report.
-- **Tabs on a container that is also fullscreen are not drawn**, and neither is the fullscreen
-  window's border. Fullscreen geometry belongs to Mutter (main spec §19) and chrome over it would
-  contradict that.
+- **A monitor showing a fullscreen window shows no i3-shell chrome at all** while it is
+  fullscreen — no borders on the other tiles, no container outline, no title rows, even for
+  containers nowhere near the fullscreen window. Fullscreen geometry belongs to Mutter (main spec
+  §19) and a fullscreen window owns its whole monitor, so anything drawn there would be drawn over
+  it. Everything returns when you leave fullscreen. Another monitor, with no fullscreen window on
+  it, keeps all of its chrome — **that one is worth checking**, because losing it there would be a
+  real defect.
 
 ## Automated evidence (not acceptance)
 

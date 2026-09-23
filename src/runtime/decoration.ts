@@ -26,6 +26,35 @@ export interface DecorationInput {
   borderOverrides: ReadonlyMap<WindowId, number>;
 }
 
+/**
+ * True when any leaf under `con` is fullscreen.
+ *
+ * Suppression is decided per monitor root, not per container: a fullscreen
+ * window owns its whole monitor (main spec 19 leaves its geometry to Mutter),
+ * so every decoration on that monitor would be drawn over it -- not only the
+ * title row of the container that happens to hold it.
+ *
+ * That "over it" is literal, and it is why this is a root-level rule. Borders
+ * are stacked explicitly, immediately above their own window actor. Frames and
+ * title rows are not stacked at all: src/shell/decorations.ts adds them to
+ * `global.window_group` and lets them land wherever that puts them, which is
+ * on top of every window actor, fullscreen ones included. So a tab bar on a
+ * container nowhere near the fullscreen window would still paint across it.
+ * **If anyone gives frames and rows explicit stacking, revisit this** -- the
+ * suppression is currently what keeps their lack of it from being visible.
+ */
+function hasFullscreenLeaf(con: Con, windows: DecorationInput['windows']): boolean {
+  if (con.kind === 'leaf') return windows.get(con.window)?.fullscreen === true;
+  return con.children.some(child => hasFullscreenLeaf(child, windows));
+}
+
+/** The top of `con`'s tree: the monitor root it was reached from. */
+function rootOf(con: Con): Con {
+  let current: Con = con;
+  while (current.parent) current = current.parent;
+  return current;
+}
+
 /** True when `ancestor` is a strict ancestor of `node` (walking `.parent`). */
 function isAncestor(ancestor: Con, node: Con): boolean {
   let current: Con | null = node.parent;
@@ -61,7 +90,7 @@ export function decorationPlan(input: DecorationInput): DecorationPlan {
     if (con.kind === 'leaf') {
       if (!rect) return;
       const info = windows.get(con.window);
-      if (!info || info.fullscreen || info.minimized) return;
+      if (!info || info.minimized) return;
 
       const width = borderOverrides.get(con.window) ?? borderWidth;
       borders.push({window: con.window, rect, state: borderState(con, active), width});
@@ -69,22 +98,6 @@ export function decorationPlan(input: DecorationInput): DecorationPlan {
     }
 
     if (rect && (con.layout === 'tabbed' || con.layout === 'stacked')) {
-      // Spec 3.2: a fullscreen leaf costs its *container* the whole title row,
-      // not just its own tab. A fullscreen window owns the monitor, so a row
-      // that survived with one tab fewer would simply be drawn on top of it --
-      // the chrome-over-fullscreen this spec and main spec 19 both forbid.
-      //
-      // It also keeps the engine and the renderer in step: layoutWithRects
-      // reserves one row per *child* of a stacked container, while the
-      // renderer divides that band by the number of *tabs* it was handed. A
-      // row with a tab missing would under-fill a band already reserved.
-      const fullscreen = con.children.some(
-        child => child.kind === 'leaf' && windows.get(child.window)?.fullscreen);
-      if (fullscreen) {
-        for (const child of con.children) visit(child, active);
-        return;
-      }
-
       const tabs: DecorationPlan['titleRows'][number]['tabs'] = [];
       for (const child of con.children) {
         const selected = child === con.focusedChild;
@@ -107,11 +120,17 @@ export function decorationPlan(input: DecorationInput): DecorationPlan {
     for (const child of con.children) visit(child, active);
   }
 
+  /** A monitor whose root holds a fullscreen leaf gets nothing drawn on it. */
+  const owned = new Set<Con>();
   for (const {root, active} of roots) {
+    if (hasFullscreenLeaf(root, windows)) {
+      owned.add(root);
+      continue;
+    }
     visit(root, active);
   }
 
-  if (focused && focused.kind === 'split') {
+  if (focused && focused.kind === 'split' && !owned.has(rootOf(focused))) {
     const rect = rects.get(focused);
     if (rect) frames.push({nodeId: focused.id, rect});
   }

@@ -100,9 +100,18 @@ State assignment, matching i3:
 `frames` contains at most one entry: the rect of the focused container when the selection is a
 `SplitCon` rather than a leaf. This is what makes `$mod+a` visible.
 
-A leaf that is fullscreen contributes no border, and its container contributes no title row: the
-main spec §19 leaves a fullscreen window's geometry to Mutter, and chrome drawn over it would
-contradict that.
+**A monitor root holding a fullscreen leaf anywhere beneath it contributes no decorations at all**
+— no borders, no frame, no title rows, including for containers nowhere near the fullscreen window.
+The main spec §19 leaves a fullscreen window's geometry to Mutter, and chrome drawn over it would
+contradict that; a fullscreen window owns the whole monitor, so the rule is per root and not per
+container.
+
+Per container is not enough, and the difference is visible: `frames` and `titleRows` are added to
+`global.window_group` with no stacking control (§4.1 stacks only borders), which puts them above
+every window actor, a fullscreen one included. Suppressing only the row of the container that holds
+the fullscreen leaf leaves a *sibling* container's tab bar, and the focused-container frame, painted
+straight across the fullscreen client. Should frames and rows ever get explicit stacking, this rule
+is worth revisiting — today it is what keeps their lack of it invisible.
 
 ### 3.3 Where the plan is produced
 
