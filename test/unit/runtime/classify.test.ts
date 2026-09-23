@@ -1,13 +1,11 @@
 import {describe, expect, it} from 'vitest';
-import {classifyWindow, isResizable, type SizeLimits} from '../../../src/runtime/classify';
-import type {WindowFacts} from '../../../src/runtime/model';
+import {classifyWindow, excludedFromTree, isResizable, type SizeLimits} from '../../../src/runtime/classify';
+import type {WindowFacts, WindowInfo} from '../../../src/runtime/model';
 
 const normal: WindowFacts = {
   type: 'normal',
-  skipTaskbar: false,
   transient: false,
   attached: false,
-  sticky: false,
   resizable: true,
 };
 
@@ -23,7 +21,6 @@ describe('classifyWindow', () => {
     ['transient normal', {transient: true}],
     ['attached normal', {attached: true}],
     ['fixed-size normal', {resizable: false}],
-    ['hidden transient normal', {skipTaskbar: true, transient: true}],
   ] satisfies Array<[string, Partial<WindowFacts>]>)('classifies %s as floating', (_name, change) => {
     expect(classifyWindow({...normal, ...change})).toBe('floating');
   });
@@ -34,13 +31,46 @@ describe('classifyWindow', () => {
   it('ignores a normalised ignored type even when it is transient', () => {
     expect(classifyWindow({...normal, type: 'ignored', transient: true})).toBeNull();
   });
+});
 
-  it.each([
-    ['skip-taskbar', {skipTaskbar: true}],
-    ['sticky', {sticky: true}],
-    ['sticky and skip-taskbar', {sticky: true, skipTaskbar: true}],
-  ] satisfies Array<[string, Partial<WindowFacts>]>)('ignores an otherwise ordinary %s window', (_name, change) => {
-    expect(classifyWindow({...normal, ...change})).toBeNull();
+describe('classifyWindow after the fact move', () => {
+  it('tiles a window that is on all workspaces, instead of refusing it', () => {
+    // `sticky` used to map to null, which made the tracker dispose the watch
+    // and drop the window forever. It is not a classification input any more.
+    expect(classifyWindow({...normal})).toBe('tiled');
+  });
+
+  it('returns null only for a window type that is not ours', () => {
+    expect(classifyWindow({...normal, type: 'ignored'})).toBeNull();
+    expect(classifyWindow({...normal, type: 'dialog'})).toBe('floating');
+    expect(classifyWindow({...normal, type: 'utility'})).toBe('floating');
+  });
+});
+
+describe('excludedFromTree', () => {
+  const info = (patch: Partial<WindowInfo>): WindowInfo => ({
+    id: 1, kind: 'tiled', workspace: 0, monitor: 1,
+    rect: {x: 0, y: 0, width: 10, height: 10}, title: 'w', wmClass: null,
+    minimized: false, fullscreen: false, maximizedH: false, maximizedV: false,
+    sticky: false, skipTaskbar: false, ...patch,
+  });
+
+  it('keeps an ordinary window in the tree', () => {
+    expect(excludedFromTree(info({}))).toBe(false);
+  });
+
+  it('excludes a minimized, a sticky and a skip-taskbar window', () => {
+    expect(excludedFromTree(info({minimized: true}))).toBe(true);
+    expect(excludedFromTree(info({sticky: true}))).toBe(true);
+    expect(excludedFromTree(info({skipTaskbar: true}))).toBe(true);
+  });
+
+  it('stays excluded while any one reason remains', () => {
+    // Review Focus: a window both minimized and sticky rejoins only when BOTH
+    // clear. Task 3 pins the engine half; this pins the predicate.
+    expect(excludedFromTree(info({minimized: true, sticky: true}))).toBe(true);
+    expect(excludedFromTree(info({minimized: false, sticky: true}))).toBe(true);
+    expect(excludedFromTree(info({minimized: true, sticky: false}))).toBe(true);
   });
 });
 
