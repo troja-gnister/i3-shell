@@ -3,21 +3,30 @@ import type {DecorationPlan} from '../../../src/runtime/decoration';
 import {DEFAULT_COLORS} from '../../../src/config/model';
 import type {Colors} from '../../../src/config/model';
 import type {WindowId} from '../../../src/tree/node';
+import {log} from '../../../src/shell/log';
+// Type-only: `StyledActor` is the half of the fake hierarchy that carries `label`
+// and `useMarkup`. The classes themselves come in through the dynamic import below,
+// so they resolve through the same mocked module `gi://St` does; this import
+// contributes no runtime code.
+import type {StyledActor} from './fakes/actors';
 
 vi.mock('gi://St', async () => ({default: (await import('./fakes/actors')).fakeSt}));
+// guard() (src/shell/util/signals.ts) logs through this when a tab's focus callback throws.
 vi.mock('../../../src/shell/log', () => ({log: {info: vi.fn(), warn: vi.fn(), error: vi.fn()}}));
 
-const {FakeActor, criticals, resetFakeActors, lastCreated, liveActors, disposedAccesses} =
+const {FakeActor, criticals, resetFakeActors, lastCreated, liveActors, disposedAccesses, created} =
   await import('./fakes/actors');
+
+type Actor = InstanceType<typeof FakeActor>;
 
 const windowGroup = new FakeActor('window_group');
 
-(globalThis as unknown as {global: {window_group: FakeActor}}).global = {
+(globalThis as unknown as {global: {window_group: Actor}}).global = {
   window_group: windowGroup,
 };
 
 interface FakeMetaWindow {
-  get_compositor_private(): FakeActor | null;
+  get_compositor_private(): Actor | null;
 }
 
 // resolvable is what the resolve callback (Decorations' 3rd constructor arg) can find;
@@ -35,15 +44,23 @@ function resolve(id: WindowId): FakeMetaWindow | undefined {
   return resolvable.get(id);
 }
 
-function fakeWindow(actor: FakeActor | null = new FakeActor('meta-window-actor')): FakeMetaWindow {
+function fakeWindow(actor: Actor | null = new FakeActor('meta-window-actor')): FakeMetaWindow {
   return {get_compositor_private: () => actor};
 }
+
+// The 4th constructor arg. In production this is the extension's deferred port (a
+// GLib idle); here it queues, so a test can decide when the next main-loop turn
+// happens and assert what has and has not run yet.
+const deferred: Array<() => void> = [];
+const defer = (fn: () => void): void => { deferred.push(fn); };
+const runDeferred = (): void => { for (const fn of deferred.splice(0)) fn(); };
 
 const {Decorations} = await vi.importActual<{
   Decorations: new (
     colors: Colors,
     focus: (window: WindowId) => void,
     resolve: (id: WindowId) => FakeMetaWindow | undefined,
+    defer: (fn: () => void) => void,
   ) => {apply(plan: DecorationPlan): void; setColors(colors: Colors): void; destroy(): void};
 }>('../../../src/shell/decorations');
 
@@ -54,17 +71,23 @@ const border = (window: WindowId, rect = R(0, 0, 100, 100)): DecorationPlan =>
 const row = (rect: ReturnType<typeof R>, tabs: DecorationPlan['titleRows'][number]['tabs']): DecorationPlan =>
   ({borders: [], frames: [], titleRows: [{nodeId: 7, rect, rowHeight: 20, layout: 'tabbed', tabs}]});
 
+/** Every tab button built so far, in creation order. */
+const tabActors = (): StyledActor[] =>
+  created.filter(actor => actor.props.style_class === 'i3-shell-tab') as StyledActor[];
+
 beforeEach(() => {
   resolvable.clear();
   resolveCalls.length = 0;
+  deferred.length = 0;
   resetFakeActors();
   windowGroup.children.length = 0;
+  vi.mocked(log.error).mockClear();
 });
 
 describe('Decorations', () => {
   it('reuses a border actor when only its rectangle changed', () => {
     resolvable.set(1, fakeWindow());
-    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve);
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
     d.apply(border(1, R(0, 0, 100, 100)));
     const first = lastCreated('border');
     d.apply(border(1, R(50, 0, 100, 100)));
@@ -75,7 +98,7 @@ describe('Decorations', () => {
 
   it('destroys actors the plan no longer contains', () => {
     resolvable.set(1, fakeWindow());
-    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve);
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
     d.apply(border(1));
     const actor = lastCreated('border');
     d.apply(empty);
@@ -86,7 +109,7 @@ describe('Decorations', () => {
   it('keys title rows by nodeId, not by rectangle', () => {
     resolvable.set(1, fakeWindow());
     const tabs = [{nodeId: 1, window: 1 as WindowId, title: 'One', selected: true}];
-    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve);
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
     d.apply(row(R(0, 0, 400, 300), tabs));
     const first = lastCreated('row');
     d.apply(row(R(0, 0, 200, 300), tabs));
@@ -100,7 +123,7 @@ describe('Decorations', () => {
     // Review Focus: the plan names a WindowId; by render time the window may
     // be gone (resolve() misses) or its compositor actor may not exist yet
     // (get_compositor_private() returns null) -- either way, skip silently.
-    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve);
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
     expect(() => d.apply(border(99))).not.toThrow();
     expect(disposedAccesses()).toEqual([]);
     expect(liveActors().filter(actor => actor.props.style_class === 'i3-shell-border')).toEqual([]);
@@ -113,7 +136,7 @@ describe('Decorations', () => {
     // scanning global.get_window_actors() by Meta id) must fail loudly here,
     // not just render nothing silently in production.
     resolvable.set(42, fakeWindow());
-    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve);
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
     d.apply(border(42));
     expect(resolveCalls).toEqual([42]);
   });
@@ -122,18 +145,45 @@ describe('Decorations', () => {
     // get_compositor_private() returns null until Mutter has an actor for the
     // window; @girs types it non-nullable (see src/shell/windows.ts's cast).
     resolvable.set(1, fakeWindow(null));
-    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve);
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
     expect(() => d.apply(border(1))).not.toThrow();
     expect(disposedAccesses()).toEqual([]);
     expect(liveActors().filter(actor => actor.props.style_class === 'i3-shell-border')).toEqual([]);
   });
 
+  it('stacks each border immediately below its own window actor in window_group', () => {
+    // Brief requirement: "a border is lowered to sit immediately below its
+    // window actor via set_child_below_sibling". Two windows, so the assertion
+    // distinguishes "below its own window" from "somewhere near the bottom".
+    const first = new FakeActor('meta-window-actor');
+    const second = new FakeActor('meta-window-actor');
+    windowGroup.add_child(first);          // where Mutter keeps the real window actors
+    windowGroup.add_child(second);
+    resolvable.set(1, fakeWindow(first));
+    resolvable.set(2, fakeWindow(second));
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    d.apply({
+      borders: [
+        {window: 1, rect: R(0, 0, 100, 100), state: 'focused', width: 2},
+        {window: 2, rect: R(0, 0, 100, 100), state: 'unfocused', width: 2},
+      ],
+      frames: [], titleRows: [],
+    });
+    const borders = created.filter(actor => actor.props.style_class === 'i3-shell-border');
+    expect(borders).toHaveLength(2);
+    expect(windowGroup.children).toHaveLength(4);
+    expect(windowGroup.children[0]).toBe(borders[0]);
+    expect(windowGroup.children[1]).toBe(first);
+    expect(windowGroup.children[2]).toBe(borders[1]);
+    expect(windowGroup.children[3]).toBe(second);
+  });
+
   it('does not interpret markup in a tab title', () => {
     // Review Focus: titles come from arbitrary applications.
     resolvable.set(1, fakeWindow());
-    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve);
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
     d.apply(row(R(0, 0, 400, 300), [{nodeId: 1, window: 1, title: '<b>x</b>', selected: true}]));
-    const tab = lastCreated('tab');
+    const tab = tabActors()[0];
     expect(tab.label).toBe('<b>x</b>');
     expect(tab.useMarkup).toBe(false);
   });
@@ -141,24 +191,67 @@ describe('Decorations', () => {
   it('focuses the tab that was clicked, without touching the tree', () => {
     resolvable.set(1, fakeWindow());
     const focused: WindowId[] = [];
-    const d = new Decorations(DEFAULT_COLORS, w => focused.push(w), resolve);
+    const d = new Decorations(DEFAULT_COLORS, w => focused.push(w), resolve, defer);
     d.apply(row(R(0, 0, 400, 300), [{nodeId: 1, window: 1, title: 'One', selected: false}]));
     lastCreated('tab').emit('clicked');
+    runDeferred();
     expect(focused).toEqual([1]);
+  });
+
+  it('defers a tab click by one main-loop turn', () => {
+    // Review Focus: _focus drives an engine focus command, which commits
+    // synchronously and calls apply() -- and that apply() can destroy this very
+    // button in the tab sweep. Running it inside St's `clicked` emission would
+    // unwind the stack back into a disposed St.Button.
+    resolvable.set(1, fakeWindow());
+    const focused: WindowId[] = [];
+    const d = new Decorations(DEFAULT_COLORS, w => focused.push(w), resolve, defer);
+    d.apply(row(R(0, 0, 400, 300), [{nodeId: 1, window: 1, title: 'One', selected: false}]));
+    lastCreated('tab').emit('clicked');
+    expect(focused).toEqual([]);         // nothing yet: the emission has not returned
+    expect(deferred).toHaveLength(1);
+    runDeferred();
+    expect(focused).toEqual([1]);
+  });
+
+  it('drops a deferred tab click when Decorations was destroyed in the meantime', () => {
+    // disable() can land between the click and the idle that carries it.
+    resolvable.set(1, fakeWindow());
+    const focused: WindowId[] = [];
+    const d = new Decorations(DEFAULT_COLORS, w => focused.push(w), resolve, defer);
+    d.apply(row(R(0, 0, 400, 300), [{nodeId: 1, window: 1, title: 'One', selected: false}]));
+    lastCreated('tab').emit('clicked');
+    d.destroy();
+    runDeferred();
+    expect(focused).toEqual([]);
+    expect(criticals).toEqual([]);
+  });
+
+  it('logs rather than throws when the focus callback fails', () => {
+    // guard() (src/shell/util/signals.ts) keeps an exception out of the Shell's
+    // signal handler and out of the main loop, exactly as indicator.ts does for
+    // its pill click.
+    resolvable.set(1, fakeWindow());
+    const d = new Decorations(DEFAULT_COLORS, () => { throw new Error('boom'); }, resolve, defer);
+    d.apply(row(R(0, 0, 400, 300), [{nodeId: 1, window: 1, title: 'One', selected: false}]));
+    expect(() => lastCreated('tab').emit('clicked')).not.toThrow();
+    expect(() => runDeferred()).not.toThrow();
+    expect(vi.mocked(log.error)).toHaveBeenCalledTimes(1);
   });
 
   it('does not focus anything for a nested-container tab, whose window is null', () => {
     // Review Focus: a tab's window is WindowId | null; a nested-container tab has null.
     const focused: WindowId[] = [];
-    const d = new Decorations(DEFAULT_COLORS, w => focused.push(w), resolve);
+    const d = new Decorations(DEFAULT_COLORS, w => focused.push(w), resolve, defer);
     d.apply(row(R(0, 0, 400, 300), [{nodeId: 1, window: null, title: 'Nested', selected: false}]));
     expect(() => lastCreated('tab').emit('clicked')).not.toThrow();
+    runDeferred();
     expect(focused).toEqual([]);
   });
 
   it('destroys every actor on destroy(), and touches none afterwards', () => {
     resolvable.set(1, fakeWindow());
-    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve);
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
     d.apply({...border(1), frames: [{nodeId: 3, rect: R(0, 0, 400, 300)}]});
     d.destroy();
     d.destroy();                       // idempotent, as disable() is
@@ -166,12 +259,114 @@ describe('Decorations', () => {
     expect(liveActors()).toEqual([]);
   });
 
+  it('destroys a title row through the box -> button cascade on destroy()', () => {
+    // The destroy() comment leans on Clutter tearing the subtree down with the
+    // parent; the plan in the test above has no rows, so nothing exercised it.
+    resolvable.set(1, fakeWindow());
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    d.apply(row(R(0, 0, 400, 300), [
+      {nodeId: 1, window: 1, title: 'One', selected: true},
+      {nodeId: 2, window: null, title: 'Nested', selected: false},
+    ]));
+    const box = lastCreated('row');
+    const buttons = tabActors();
+    expect(buttons).toHaveLength(2);
+    d.destroy();
+    d.destroy();
+    expect(box.destroyCount).toBe(1);
+    expect(buttons.map(button => button.destroyCount)).toEqual([1, 1]);
+    expect(liveActors()).toEqual([]);
+    expect(criticals).toEqual([]);
+  });
+
+  it('destroys a row the plan no longer contains, with its tab buttons', () => {
+    // Only row *persistence* was covered; the _rows sweep itself was not.
+    resolvable.set(1, fakeWindow());
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    const tabs = [{nodeId: 1, window: 1 as WindowId, title: 'One', selected: true}];
+    d.apply(row(R(0, 0, 400, 300), tabs));
+    const box = lastCreated('row');
+    const [button] = tabActors();
+    d.apply(empty);
+    expect(box.destroyCount).toBe(1);
+    expect(button.destroyed).toBe(true);
+    expect(criticals).toEqual([]);
+    // Really gone, not merely destroyed: the next plan must build a new row
+    // rather than write through a map entry that outlived its actor.
+    d.apply(row(R(0, 0, 400, 300), tabs));
+    expect(lastCreated('row')).not.toBe(box);
+    expect(criticals).toEqual([]);
+  });
+
+  it('destroys a tab the plan dropped from a row that survives', () => {
+    resolvable.set(1, fakeWindow());
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    const two = [
+      {nodeId: 1, window: 1 as WindowId, title: 'One', selected: true},
+      {nodeId: 2, window: null, title: 'Two', selected: false},
+    ];
+    d.apply(row(R(0, 0, 400, 300), two));
+    const box = lastCreated('row');
+    const [first, second] = tabActors();
+    d.apply(row(R(0, 0, 400, 300), [two[0]]));
+    expect(second.destroyCount).toBe(1);
+    expect(first.destroyed).toBe(false);
+    expect(box.destroyed).toBe(false);
+    expect(criticals).toEqual([]);
+    // The dropped tab comes back as a new button, not through a stale entry.
+    d.apply(row(R(0, 0, 400, 300), two));
+    expect(tabActors()).toHaveLength(3);
+    expect(criticals).toEqual([]);
+  });
+
+  it('rebuilds a border whose actor was destroyed behind its back, without writing to it', () => {
+    resolvable.set(1, fakeWindow());
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    d.apply(border(1));
+    const actor = lastCreated('border');
+    // Anything outside this class can dispose the actor -- GNOME does exactly
+    // that to window_group's children at shutdown, before disable() runs.
+    actor.destroy();
+    // Positive control, and the only one in the whole shell suite: every other
+    // `criticals` assertion here is `toEqual([])`, so a recorder that silently
+    // stopped recording would leave all of them green. Prove it still records
+    // before the assertion below leans on it.
+    actor.set_position(1, 1);
+    expect(criticals).toEqual(['St.Widget.set_position after dispose']);
+    criticals.length = 0;
+
+    d.apply(border(1, R(5, 5, 50, 50)));
+    expect(criticals).toEqual([]);
+    const rebuilt = lastCreated('border');
+    expect(rebuilt).not.toBe(actor);
+    expect(rebuilt.geometry).toEqual(R(5, 5, 50, 50));
+  });
+
+  it('does not destroy an actor twice after it was destroyed behind its back', () => {
+    resolvable.set(1, fakeWindow());
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    d.apply({
+      borders: [{window: 1, rect: R(0, 0, 100, 100), state: 'focused', width: 2}],
+      frames: [{nodeId: 3, rect: R(0, 0, 400, 300)}],
+      titleRows: [{
+        nodeId: 7, rect: R(0, 0, 400, 300), rowHeight: 20, layout: 'tabbed',
+        tabs: [{nodeId: 1, window: 1, title: 'One', selected: true}],
+      }],
+    });
+    const actors = [lastCreated('border'), lastCreated('frame'), lastCreated('row')];
+    for (const actor of actors) actor.destroy();
+    criticals.length = 0;
+    d.apply(empty);                    // the sweep must not reach any disposed actor
+    expect(actors.map(actor => actor.destroyCount)).toEqual([1, 1, 1]);
+    expect(criticals).toEqual([]);
+  });
+
   it('is idempotent across two back-to-back applies of the identical plan', () => {
     // Review Focus: a nested re-entrant commit (e.g. moving a window to
     // another workspace) can call apply() twice in a row with the same plan,
     // now routed entirely through the resolver instead of global lookups.
     resolvable.set(1, fakeWindow());
-    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve);
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
     const plan = border(1, R(10, 20, 100, 100));
     d.apply(plan);
     const first = lastCreated('border');
@@ -185,7 +380,7 @@ describe('Decorations', () => {
   });
 
   it('does nothing and does not throw when a fresh instance applies an empty plan', () => {
-    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve);
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
     expect(() => d.apply(empty)).not.toThrow();
     expect(liveActors()).toEqual([]);
     expect(disposedAccesses()).toEqual([]);
@@ -193,7 +388,7 @@ describe('Decorations', () => {
 
   it('styles a border from the colour matching its state', () => {
     resolvable.set(1, fakeWindow());
-    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve);
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
     d.apply({borders: [{window: 1, rect: R(0, 0, 10, 10), state: 'urgent', width: 3}], frames: [], titleRows: []});
     const actor = lastCreated('border');
     expect(actor.props.style).toBe(`border: 3px solid ${DEFAULT_COLORS.urgent.border};`);
@@ -201,7 +396,7 @@ describe('Decorations', () => {
 
   it('restyles an existing border when the colours change, without a fresh plan', () => {
     resolvable.set(1, fakeWindow());
-    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve);
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
     d.apply(border(1));
     const custom: Colors = {
       ...DEFAULT_COLORS,
@@ -213,15 +408,19 @@ describe('Decorations', () => {
     expect(disposedAccesses()).toEqual([]);
   });
 
-  it('still creates a border with a plan width of zero', () => {
+  it('renders a zero-width border rather than dropping it', () => {
+    // A plan width of 0 is a real i3 setting (`new_window none`); the renderer
+    // still owns an actor for the window, styled at 0px.
     resolvable.set(1, fakeWindow());
-    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve);
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
     d.apply({borders: [{window: 1, rect: R(0, 0, 10, 10), state: 'focused', width: 0}], frames: [], titleRows: []});
-    expect(() => lastCreated('border')).not.toThrow();
+    const actor = lastCreated('border');
+    expect(actor.props.style).toBe(`border: 0px solid ${DEFAULT_COLORS.focused.border};`);
+    expect(actor.geometry).toEqual(R(0, 0, 10, 10));
   });
 
   it('creates and removes a frame around the focused container, keyed by nodeId', () => {
-    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve);
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
     d.apply({borders: [], frames: [{nodeId: 3, rect: R(0, 0, 400, 300)}], titleRows: []});
     const frame = lastCreated('frame');
     expect(frame.destroyed).toBe(false);

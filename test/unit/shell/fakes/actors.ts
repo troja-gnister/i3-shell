@@ -89,6 +89,10 @@ export class FakeActor {
   /** Moves `child` to sit immediately below `sibling` (or to the bottom when `sibling` is null). */
   set_child_below_sibling(child: FakeActor, sibling: FakeActor | null): void {
     this.touch('set_child_below_sibling');
+    // Real Clutter has to inspect the sibling to reorder around it, so a
+    // disposed sibling -- a foreign actor this class does not own -- is
+    // exactly the kind of access `criticals` exists to catch.
+    sibling?.touch('set_child_below_sibling');
     const current = this.children.indexOf(child);
     if (current >= 0) this.children.splice(current, 1);
     const at = sibling ? this.children.indexOf(sibling) : -1;
@@ -113,7 +117,7 @@ export class FakeActor {
   }
 }
 
-class StyledActor extends FakeActor {
+export class StyledActor extends FakeActor {
   private _label = '';
   private _text = '';
   private _opacity = 255;

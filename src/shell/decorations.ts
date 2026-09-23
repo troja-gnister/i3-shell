@@ -3,6 +3,7 @@ import St from 'gi://St';
 import type {ColorSet, Colors} from '../config/model';
 import type {BorderState, DecorationPlan} from '../runtime/decoration';
 import type {NodeId, WindowId} from '../tree/node';
+import {guard} from './util/signals';
 
 type TitleRow = DecorationPlan['titleRows'][number];
 type Tab = TitleRow['tabs'][number];
@@ -64,6 +65,15 @@ export class Decorations {
      * global.get_window_actors(): nothing ties a Meta id to a WindowId.
      */
     private readonly _resolve: (id: WindowId) => Meta.Window | undefined,
+    /**
+     * Runs a callback on the next main-loop turn (the extension's deferred
+     * port). A tab click must not reach the engine inside St's own `clicked`
+     * emission: _focus drives a focus command, which commits synchronously,
+     * which calls apply() -- and that apply() can destroy the very button
+     * whose handler is still on the stack, leaving St to finish emitting on a
+     * disposed actor. Deferring means the emission has already returned.
+     */
+    private readonly _defer: (fn: () => void) => void,
   ) {
     this._colors = colors;
   }
@@ -85,14 +95,36 @@ export class Decorations {
   destroy(): void {
     if (this._destroyed) return;
     this._destroyed = true;
-    for (const entry of this._borders.values()) entry.actor.destroy();
-    this._borders.clear();
-    for (const actor of this._frames.values()) actor.destroy();
-    this._frames.clear();
+    // Each destroy() below runs the actor's own 'destroy' handler, which
+    // removes it from its map -- so iterate snapshots, not the live maps.
+    for (const entry of [...this._borders.values()]) entry.actor.destroy();
+    for (const actor of [...this._frames.values()]) actor.destroy();
     // Destroying the row's box tears down its tab buttons with it.
-    for (const entry of this._rows.values()) entry.box.destroy();
+    for (const entry of [...this._rows.values()]) entry.box.destroy();
+    // The handlers have emptied all three already; clear() is the belt to
+    // their braces, in case an actor is disposed without emitting 'destroy'.
+    this._borders.clear();
+    this._frames.clear();
     this._rows.clear();
     this._lastPlan = {borders: [], frames: [], titleRows: []};
+  }
+
+  /**
+   * Makes `actor` drop its own entry from `map` when it is destroyed, so every
+   * teardown path -- an apply() sweep, destroy(), or GNOME disposing
+   * window_group's children at shutdown, before disable() runs -- converges on
+   * the same clean one. Without this, an actor destroyed behind this class's
+   * back leaves a dangling entry: the next apply() writes position, size and
+   * style straight into a disposed GObject (one GJS critical each) and the
+   * sweep after it destroys the actor a second time. src/shell/indicator.ts
+   * defends against the identical hazard with its own 'destroy' connection.
+   * The identity check makes a late handler harmless: it never evicts the
+   * replacement actor a later apply() put under the same key.
+   */
+  private _forgetOnDestroy<K, V>(actor: St.Widget, map: Map<K, V>, key: K, value: V): void {
+    actor.connect('destroy', guard('decoration destroy', () => {
+      if (map.get(key) === value) map.delete(key);
+    }));
   }
 
   /** The window's live compositor actor, or undefined if it cannot be resolved or has none yet. */
@@ -124,6 +156,7 @@ export class Decorations {
         global.window_group.add_child(actor);
         entry = {actor};
         this._borders.set(border.window, entry);
+        this._forgetOnDestroy(actor, this._borders, border.window, entry);
       }
       entry.actor.set_position(border.rect.x, border.rect.y);
       entry.actor.set_size(border.rect.width, border.rect.height);
@@ -133,8 +166,7 @@ export class Decorations {
     }
     for (const [window, entry] of [...this._borders]) {
       if (seen.has(window)) continue;
-      entry.actor.destroy();
-      this._borders.delete(window);
+      entry.actor.destroy();            // its 'destroy' handler drops the entry
     }
   }
 
@@ -147,6 +179,7 @@ export class Decorations {
         actor = new St.Widget({style_class: 'i3-shell-frame', reactive: false});
         global.window_group.add_child(actor);
         this._frames.set(frame.nodeId, actor);
+        this._forgetOnDestroy(actor, this._frames, frame.nodeId, actor);
       }
       actor.set_position(frame.rect.x, frame.rect.y);
       actor.set_size(frame.rect.width, frame.rect.height);
@@ -154,8 +187,7 @@ export class Decorations {
     }
     for (const [nodeId, actor] of [...this._frames]) {
       if (seen.has(nodeId)) continue;
-      actor.destroy();
-      this._frames.delete(nodeId);
+      actor.destroy();                  // its 'destroy' handler drops the entry
     }
   }
 
@@ -169,6 +201,7 @@ export class Decorations {
         global.window_group.add_child(box);
         entry = {box, tabs: new Map()};
         this._rows.set(row.nodeId, entry);
+        this._forgetOnDestroy(box, this._rows, row.nodeId, entry);
       }
       entry.box.set_position(row.rect.x, row.rect.y);
       entry.box.set_size(row.rect.width, row.rect.height);
@@ -176,8 +209,7 @@ export class Decorations {
     }
     for (const [nodeId, entry] of [...this._rows]) {
       if (seen.has(nodeId)) continue;
-      entry.box.destroy();
-      this._rows.delete(nodeId);
+      entry.box.destroy();              // cascades to its tab buttons; handlers drop the entries
     }
   }
 
@@ -192,12 +224,20 @@ export class Decorations {
         });
         const created: TabEntry = {button, window: tab.window};
         // The renderer never mutates the tree -- clicking a tab only reports
-        // the intent to the focus callback the engine gave us.
-        button.connect('clicked', () => {
+        // the intent to the focus callback the engine gave us, one main-loop
+        // turn later (see _defer). Both halves go through guard() so an
+        // exception is logged rather than escaping into a Shell signal handler
+        // or, for the deferred half, into the main loop -- the same treatment
+        // indicator.ts gives its pill click.
+        const report = guard('tab clicked', () => {
+          // disable() can land between the click and the idle carrying it.
+          if (this._destroyed) return;
           if (created.window !== null) this._focus(created.window);
         });
+        button.connect('clicked', guard('clicked', () => this._defer(report)));
         entry.box.insert_child_at_index(button, index);
         entry.tabs.set(tab.nodeId, created);
+        this._forgetOnDestroy(button, entry.tabs, tab.nodeId, created);
         tabEntry = created;
       } else {
         entry.box.set_child_at_index(tabEntry.button, index);
@@ -211,8 +251,7 @@ export class Decorations {
     });
     for (const [nodeId, tabEntry] of [...entry.tabs]) {
       if (seen.has(nodeId)) continue;
-      tabEntry.button.destroy();
-      entry.tabs.delete(nodeId);
+      tabEntry.button.destroy();        // its 'destroy' handler drops the entry
     }
   }
 }
