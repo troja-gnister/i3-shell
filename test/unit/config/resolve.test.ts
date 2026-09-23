@@ -53,6 +53,19 @@ describe('resolve', () => {
     expect(r.diagnostics.map(d => [d.severity, d.line])).toEqual([['warning', 1], ['warning', 2]]);
   });
 
+  it('records which client.* keys the config actually set', () => {
+    // The resolved Colors are always fully populated with i3's defaults, so
+    // they cannot answer "did the user ask for this colour?". Chrome that
+    // falls back to the desktop accent needs that question answered.
+    const c = loadConfigText('client.urgent #EC69A0 #DB3279 #FFFFFF').config!;
+    expect([...c.specifiedColors]).toEqual(['urgent']);
+  });
+
+  it('records no specified colours when the config sets none', () => {
+    const c = loadConfigText('bindsym Mod4+q kill').config!;
+    expect([...c.specifiedColors]).toEqual([]);
+  });
+
   it('fills missing colour fields like i3 (indicator from default, child_border from background)', () => {
     const c = loadConfigText('client.urgent #EC69A0 #DB3279 #FFFFFF').config!;
     expect(c.colors.urgent).toEqual({border: '#EC69A0', background: '#DB3279', text: '#FFFFFF', indicator: '#900000', childBorder: '#DB3279'});

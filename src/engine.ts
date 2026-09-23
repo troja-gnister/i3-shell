@@ -7,6 +7,7 @@ import type {WindowsPort, GeometryPort, DeferredPort, PillState, Topology, Windo
 import {parseCommands} from './commands/parse';
 import type {Command, WorkspaceTarget} from './commands/model';
 import type {Binding, Colors, Config, Diagnostic} from './config/model';
+import {effectiveColors, type Accent} from './config/colors';
 
 /**
  * How many commits a window may still report itself maximized before the engine
@@ -47,6 +48,14 @@ export interface EnginePorts {
     setColors(colors: Colors): void;
     setPills(pills: PillState[]): void;
     setVisible(visible: boolean): void;
+  };
+  /**
+   * The desktop accent, and a way to hear about changes to it. Chrome the
+   * config did not colour follows it; see effectiveColors().
+   */
+  accent: {
+    current(): Accent | null;
+    subscribe(callback: () => void): void;
   };
   exec(command: string): void;
   notify(title: string, body: string): void;
@@ -123,7 +132,17 @@ export class Engine {
     if (!loaded.config) throw new Error('loadConfig("initial") must always provide a config');
     this._locked = locked;
     this._started = true;
+    this._ports.accent.subscribe(() => {
+      // Only the pushed colours change; the tree and every rectangle are
+      // untouched, so this deliberately does not run a commit.
+      if (!this._disposed && this._started) this._pushColors();
+    });
     this._applyLoaded(loaded);
+  }
+
+  private _pushColors(): void {
+    this._ports.indicator.setColors(
+      effectiveColors(this._config.colors, this._config.specifiedColors, this._ports.accent.current()));
   }
 
   stop(): void {
@@ -612,7 +631,7 @@ export class Engine {
       }
       this._ports.indicator.setMode(null);
       if (this._disposed) return;
-      this._ports.indicator.setColors(this._config.colors);
+      this._pushColors();
       if (this._disposed) return;
       this._ports.indicator.setVisible(!this._locked);
       if (this._disposed) return;

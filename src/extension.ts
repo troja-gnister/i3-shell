@@ -10,6 +10,7 @@ import type {LoadedConfig} from './engine';
 import {ConfigLoader} from './shell/configLoader';
 import {DBusControl, DebugObject} from './shell/control';
 import {spawnShell} from './shell/exec';
+import {ShellAccent} from './shell/accent';
 import {Indicator} from './shell/indicator';
 import {KeyBinder} from './shell/keys';
 import {log} from './shell/log';
@@ -26,6 +27,7 @@ export default class I3ShellExtension extends Extension {
   private _engine: Engine | null = null;
   private _keys: KeyBinder | null = null;
   private _indicator: Indicator | null = null;
+  private _accent: ShellAccent | null = null;
   private _dbus: DBusControl | null = null;
   private _windows: ManagedWindows | null = null;
   private _geometry: Geometry | null = null;
@@ -68,6 +70,9 @@ export default class I3ShellExtension extends Extension {
       direction => runNow({type: 'workspace', target: {kind: direction}}));
     this._indicator = indicator;
 
+    const accent = new ShellAccent();
+    this._accent = accent;
+
     const keys = new KeyBinder(tracker, (binding, timestamp) => this._engine?.onBinding(binding, timestamp));
     this._keys = keys;
 
@@ -94,6 +99,7 @@ export default class I3ShellExtension extends Extension {
         apply: (config, workspaceCount) => { overrides.apply(planOverrides({...config, workspaceCount})); },
         restoreAll: () => overrides.restoreAll(),
       },
+      accent,
       exec: spawnShell,
       notify,
       log,
@@ -133,6 +139,8 @@ export default class I3ShellExtension extends Extension {
     this._keys = null;
     this._indicator?.destroy();
     this._indicator = null;
+    this._accent?.destroy();
+    this._accent = null;
     this._tracker?.disconnectAll();
     this._tracker = null;
   }

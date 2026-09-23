@@ -1,6 +1,7 @@
 import {describe, it, expect} from 'vitest';
 import {readFileSync} from 'node:fs';
 import {loadConfigText} from '../../../src/config';
+import {DEFAULT_COLORS} from '../../../src/config/model';
 
 const text = readFileSync(new URL('../fixtures/reference.i3config', import.meta.url), 'utf8');
 
@@ -40,7 +41,13 @@ describe("reference config (the user's real ~/.config/i3/config)", () => {
     expect(c.workspaceCount).toBe(10);
     expect(c.workspaceNames.get(1)).toBe('1:I');
     expect(c.workspaceNames.get(10)).toBe('10:X');
-    expect(c.colors.focused).toEqual({border: '#13BEAA', background: '#13BEAA', text: '#FFFFFF', indicator: '#13BEAA', childBorder: '#13BEAA'});
+    // The reference config deliberately leaves client.focused unset so focused
+    // chrome follows the GNOME accent; see effectiveColors(). Everything the
+    // config does set still lands, and urgent stays a warning colour rather
+    // than the user's favourite one.
+    expect(c.specifiedColors.has('focused')).toBe(false);
+    expect(c.colors.focused).toEqual(DEFAULT_COLORS.focused);
+    expect([...c.specifiedColors].sort()).toEqual(['focusedInactive', 'unfocused', 'urgent']);
     expect(c.colors.urgent.background).toBe('#DB3279');
     expect(c.defaultBorder).toEqual({style: 'pixel', width: 2});
     expect(c.defaultFloatingBorder).toEqual({style: 'pixel', width: 2});
