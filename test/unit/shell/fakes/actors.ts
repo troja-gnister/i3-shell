@@ -19,6 +19,7 @@ export function resetActors(): void {
   layout.chrome.length = 0;
   layout.untracked.length = 0;
   layout.removed.length = 0;
+  uiGroup.children.splice(0);
 }
 
 type Handler = (...args: unknown[]) => unknown;
@@ -312,7 +313,16 @@ export function trackedChrome(): FakeActor[] {
   return layout.chrome.map(entry => entry.actor).filter(actor => !layout.removed.includes(actor));
 }
 
+/**
+ * The stage container the shell parents chrome into. St resolves a widget's
+ * theme node only for a widget that is in a stage, so anything that measures a
+ * throwaway actor (src/shell/rowHeight.ts) has to put it here first; this
+ * double exists so a test can see whether it did.
+ */
+export const uiGroup = new FakeActor('uiGroup');
+
 export const fakeMain = {
+  uiGroup,
   panel: {
     addToStatusArea(_name: string, button: FakeActor): void { panel.button = button; },
     statusArea: {activities},
