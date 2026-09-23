@@ -375,3 +375,66 @@ describe('decorations', () => {
     expect(applied.get(1)!.y).toBe(50);   // work area y 30 + 20
   });
 });
+
+describe('focusWindow', () => {
+  /** Two windows in a tabbed container -- the shape whose title row is clickable. */
+  const tabbed = () => {
+    const f = fakeEngine();
+    f.engine.start();
+    f.add(1);
+    f.add(2);
+    f.flush();
+    f.engine.run(parseCommands('layout tabbed').commands, 0);
+    f.flush();
+    return f;
+  };
+
+  it('selects the clicked leaf and activates its window', () => {
+    const f = tabbed();
+    f.calls.length = 0;
+    f.engine.focusWindow(1);
+    f.flush();
+    expect(f.calls).toContain('focus:1');
+    // The plan the renderer gets back marks the clicked tab, not the old one.
+    const tabs = f.plan!.titleRows[0].tabs;
+    expect(tabs.map(tab => [tab.window, tab.selected])).toEqual([[1, true], [2, false]]);
+  });
+
+  it('commits once for one click', () => {
+    const f = tabbed();
+    f.calls.length = 0;
+    f.engine.focusWindow(1);
+    // One activation, the tabbed container's restack with the clicked window
+    // on top, and one publish for the selection -- then the publish that
+    // carries the native focus report back, exactly what a `focus` command
+    // costs. A second commit for the click itself would show up as a third
+    // 'decorations', and every publish re-pushes each window's rect.
+    expect(f.calls).toEqual(['focus:1', 'raise:2', 'raise:1', 'decorations', 'decorations']);
+  });
+
+  it('ignores a window that is not in the tree', () => {
+    // A tab click reaches the engine one main-loop turn late (Decorations
+    // defers it, so the click's own `clicked` emission has returned before
+    // apply() can destroy the button), so the window can be gone by then.
+    const f = tabbed();
+    f.remove(2);
+    f.flush();
+    f.calls.length = 0;
+    f.engine.focusWindow(2);
+    f.engine.focusWindow(99);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('ignores a window on another workspace', () => {
+    // Only the active workspace has chrome on screen, and activating the
+    // selection reads the active workspace's selection -- so accepting one
+    // from elsewhere would move the focus to whatever that workspace happened
+    // to have selected.
+    const f = tabbed();
+    f.add(3, {workspace: 4});
+    f.flush();
+    f.calls.length = 0;
+    f.engine.focusWindow(3);
+    expect(f.calls).toEqual([]);
+  });
+});

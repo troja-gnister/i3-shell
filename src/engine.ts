@@ -251,6 +251,34 @@ export class Engine {
     this.commit();
   }
 
+  /**
+   * Focuses one window by id -- what a click on its tab means. Like
+   * setRowHeight() this is the shell asking the engine, not a port and not an
+   * i3 command: i3 has no "focus that window" syntax, so widening the `focus`
+   * command's target would invent one and drag it through the parser, the
+   * config and the D-Bus surface for a click.
+   *
+   * The id is refused unless it is on the active workspace: only that
+   * workspace has chrome on screen, and _activateSelection() reads the active
+   * workspace's selection, so accepting one from elsewhere would focus
+   * whatever that workspace had selected instead.
+   */
+  focusWindow(id: WindowId): void {
+    this.commit(() => {
+      const tree = this._tree;
+      const location = tree?.location(id);
+      // The click reaches here a main-loop turn after it happened (the
+      // renderer defers it), so the window may have closed in between.
+      if (!tree || !location || location.workspace !== tree.activeWorkspace) return false;
+      this._selectWindow(id);
+      // 0 = no native event timestamp: a deferred click no longer carries one,
+      // and the windows adapter substitutes the current server time so
+      // focus-stealing prevention cannot drop the activation.
+      this._activateSelection(0);
+      return true;
+    });
+  }
+
   relayout(): void {
     this.commit(() => {
       for (const id of this._windows.keys()) this._observe(id, this._reconciler.generation(id));
