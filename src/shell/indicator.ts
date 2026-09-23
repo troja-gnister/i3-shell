@@ -5,6 +5,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import type {PillState} from '../runtime/model';
 import type {Colors} from '../config/model';
 import {SmoothScroll} from '../util/smoothScroll';
+import {samePills} from './util/pills';
 import {guard} from './util/signals';
 
 export interface IndicatorPort {
@@ -12,12 +13,6 @@ export interface IndicatorPort {
   setColors(colors: Colors): void;
   setPills(pills: PillState[]): void;
   setVisible(visible: boolean): void;
-}
-
-function samePills(current: readonly PillState[], next: readonly PillState[]): boolean {
-  return current.length === next.length && current.every((pill, index) =>
-    pill.name === next[index].name && pill.active === next[index].active &&
-    pill.occupied === next[index].occupied);
 }
 
 /** One pill per workspace in the left panel box, plus a binding-mode label (i3bar look). */
@@ -107,9 +102,6 @@ export class Indicator implements IndicatorPort {
   }
 
   setWorkspaces(states: PillState[]): void {
-    // The engine publishes pills on every commit and most are identical;
-    // restyling ten St.Buttons that did not change is pure cost on the
-    // compositor thread.
     if (samePills(this._states, states)) return;
     this._states = states;
     if (this._destroyed) return;

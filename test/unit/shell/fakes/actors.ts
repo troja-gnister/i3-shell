@@ -14,16 +14,24 @@ export function resetActors(): void {
   panel.button = null;
   panel.activitiesVisible = true;
   activities.container.destroyed = false;
+  layout.monitors = [];
+  layout.primaryIndex = 0;
+  layout.chrome.length = 0;
+  layout.untracked.length = 0;
+  layout.removed.length = 0;
 }
 
 type Handler = (...args: unknown[]) => unknown;
 
 export class FakeActor {
   destroyed = false;
+  /** Clutter's own `visible`, as hide()/show() leave it. */
+  visible = true;
   /** How many times destroy() was invoked, whether or not it was already disposed. */
   destroyCount = 0;
   readonly children: FakeActor[] = [];
   readonly handlers = new Map<number, {signal: string; callback: Handler}>();
+  private _parent: FakeActor | null = null;
   private _next = 1;
   private _x = 0;
   private _y = 0;
@@ -70,11 +78,13 @@ export class FakeActor {
 
   add_child(child: FakeActor): void {
     this.touch('add_child');
+    child._parent = this;
     this.children.push(child);
   }
 
   insert_child_at_index(child: FakeActor, index: number): void {
     this.touch('insert_child_at_index');
+    child._parent = this;
     this.children.splice(index, 0, child);
   }
 
@@ -104,16 +114,23 @@ export class FakeActor {
     this.props.style = style;
   }
 
-  hide(): void { this.touch('hide'); }
-  show(): void { this.touch('show'); }
+  hide(): void { this.touch('hide'); this.visible = false; }
+  show(): void { this.touch('show'); this.visible = true; }
 
   destroy(): void {
     this.destroyCount++;
     if (this.touch('destroy')) return;
     this.destroyed = true;
     this.emit('destroy');
-    // Clutter tears the subtree down with the parent.
-    for (const child of this.children) child.destroy();
+    // Clutter tears the subtree down with the parent; each child unparents
+    // itself as it goes, so iterate a snapshot rather than the live array.
+    for (const child of [...this.children]) child.destroy();
+    // ...and a destroyed actor leaves its parent, so the parent's child list
+    // never keeps handing out an actor that is gone.
+    const parent = this._parent;
+    this._parent = null;
+    const at = parent ? parent.children.indexOf(this) : -1;
+    if (parent && at >= 0) parent.children.splice(at, 1);
   }
 }
 
@@ -219,9 +236,55 @@ export const panel = {
   activities,
 };
 
+/** One entry of Main.layoutManager.monitors: the fields chrome placement reads. */
+export interface FakeMonitor {
+  index: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * The Main.layoutManager double. A test owns `monitors` and `primaryIndex` and
+ * reads back every chrome call in order; resetActors() empties all five, so a
+ * suite that wants monitors must say so itself.
+ */
+export const layout = {
+  monitors: [] as FakeMonitor[],
+  primaryIndex: 0,
+  chrome: [] as Array<{actor: FakeActor; params: Record<string, unknown>}>,
+  untracked: [] as FakeActor[],
+  removed: [] as FakeActor[],
+};
+
+/** Every actor handed to addChrome and not yet handed to removeChrome. */
+export function trackedChrome(): FakeActor[] {
+  return layout.chrome.map(entry => entry.actor).filter(actor => !layout.removed.includes(actor));
+}
+
 export const fakeMain = {
   panel: {
     addToStatusArea(_name: string, button: FakeActor): void { panel.button = button; },
     statusArea: {activities},
+  },
+  layoutManager: {
+    get monitors(): FakeMonitor[] { return layout.monitors; },
+    get primaryIndex(): number { return layout.primaryIndex; },
+    // All three reach into the actor for real -- addChrome reparents it into
+    // uiGroup, untrackChrome disconnects the signals it stored, removeChrome
+    // unparents it -- so each one is an access a disposed actor must not see.
+    addChrome(actor: FakeActor, params: Record<string, unknown> = {}): void {
+      actor.touch('addChrome');
+      layout.chrome.push({actor, params});
+    },
+    untrackChrome(actor: FakeActor): void {
+      actor.touch('untrackChrome');
+      layout.untracked.push(actor);
+    },
+    removeChrome(actor: FakeActor): void {
+      actor.touch('removeChrome');
+      layout.removed.push(actor);
+    },
   },
 };
