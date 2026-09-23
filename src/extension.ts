@@ -23,7 +23,7 @@ import {notify} from './shell/notify';
 import {measureRowHeight} from './shell/rowHeight';
 import {SessionWatcher} from './shell/session';
 import {SettingsOverrides} from './shell/settings';
-import {guard, SignalTracker} from './shell/util/signals';
+import {ClosingGate, guard, SignalTracker} from './shell/util/signals';
 import {ManagedWindows} from './shell/windows';
 import {Geometry} from './shell/geometry';
 import {Workspaces} from './shell/workspaces';
@@ -56,6 +56,15 @@ export default class I3ShellExtension extends Extension {
     const tracker = new SignalTracker();
     this._tracker = tracker;
 
+    // GNOME tears its own windows and actors down underneath the extension
+    // once the display reports closing, but the compositor signals below
+    // keep firing regardless -- a full commit at that point can call
+    // geometry on a window being destroyed or write to chrome the shell is
+    // disposing. Every handler wired through `closing.unlessClosing` below
+    // shares this one flag instead of guarding itself.
+    const closing = new ClosingGate();
+    tracker.connect(global.display, 'closing', () => closing.close());
+
     const settings: Gio.Settings = this.getSettings();
     const overrides = new SettingsOverrides(settings);
     const loader = new ConfigLoader(settings);
@@ -65,10 +74,11 @@ export default class I3ShellExtension extends Extension {
     // resolves each window's monitor through geometry.monitorId(index), which is
     // empty until a topology has been read at least once.
     geometry.topology();
-    const windows = new ManagedWindows(guard('window event', event => this._engine?.onWindowEvent(event)),
+    const windows = new ManagedWindows(
+      guard('window event', closing.unlessClosing(event => { this._engine?.onWindowEvent(event); })),
       index => geometry.monitorId(index));
     this._windows = windows;
-    const workspaces = new Workspaces(tracker, () => this._engine?.onWorkspacesChanged());
+    const workspaces = new Workspaces(tracker, closing.unlessClosing(() => this._engine?.onWorkspacesChanged()));
 
     const runNow = (command: Command): void => {
       this._engine?.run([command], global.get_current_time());
@@ -144,27 +154,27 @@ export default class I3ShellExtension extends Extension {
     this._engine = engine;
 
     const session = new SessionWatcher(tracker,
-      () => { engine.onLocked(); },
-      () => { engine.onUnlocked(); indicator.hideActivities(); });
+      closing.unlessClosing(() => { engine.onLocked(); }),
+      closing.unlessClosing(() => { engine.onUnlocked(); indicator.hideActivities(); }));
 
     // The bars first: each one reserves a strut, so rebuilding them for the
     // new monitor set is what makes the work areas the engine then lays out
     // against correct -- and a bar left on a monitor that has gone away would
     // keep shrinking a work area that no longer exists.
-    tracker.connect(Main.layoutManager, 'monitors-changed', () => {
+    tracker.connect(Main.layoutManager, 'monitors-changed', closing.unlessClosing(() => {
       bars.monitorsChanged();
       engine.onMonitorsChanged();
-    });
+    }));
     // Every title row's height, and every bar's, comes from the theme, so a
     // font change resizes both. MonitorBars re-measures whenever it renders,
     // and a rebuild is its public way to be told to: font changes are rare and
     // a bar carries no state a rebuild could lose.
     const stSettings = St.Settings.get();
-    tracker.connect(stSettings, 'notify::font-name', () => {
+    tracker.connect(stSettings, 'notify::font-name', closing.unlessClosing(() => {
       engine.setRowHeight(measureRowHeight());
       bars.monitorsChanged();
-    });
-    tracker.connect(global.display, 'workareas-changed', () => engine.relayout());
+    }));
+    tracker.connect(global.display, 'workareas-changed', closing.unlessClosing(() => engine.relayout()));
     // Windows before the engine: start() enumerates the existing windows and
     // arms their first-frame watches, so engine.start() adopts them in its first
     // commit instead of one late arrival at a time.
