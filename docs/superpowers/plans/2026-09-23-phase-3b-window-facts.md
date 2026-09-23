@@ -38,7 +38,7 @@ Five conditions the spec implies that no happy path would exercise. Each has its
 **Files:**
 - Modify: `src/runtime/model.ts` (`WindowFacts`, `WindowInfo`, `WindowEvent`)
 - Modify: `src/runtime/classify.ts:3-8`
-- Test: `test/unit/runtime/classify.test.ts`
+- Test: `test/unit/runtime/classify.test.ts`, `test/unit/shell/windowTracker.test.ts`
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
@@ -93,10 +93,27 @@ describe('excludedFromTree', () => {
 
 The existing `normal`/`classify` helpers are already in that file — read it and reuse them; remove `sticky` and `skipTaskbar` from the fixtures they build, since those fields leave `WindowFacts`.
 
+Then add the assertion that *is* the defect, to `test/unit/shell/windowTracker.test.ts`. Read that
+file and build it against the doubles it already uses:
+
+```typescript
+it('allocates an id and keeps the watch for a window that is on all workspaces', () => {
+  // THE defect, as an assertion. `_makeReady` used to call `pending.disposeWatch()`
+  // and return when classifyWindow said null, so the window was dropped forever and
+  // the reverse transition could never be observed. The tracker itself does not
+  // change in this phase -- it stops dropping because the fact left classification.
+  const f = tracker();
+  const window = f.create({onAllWorkspaces: true});
+  f.firstFrame(window);
+  expect(f.events).toEqual([{type: 'added', id: 1}]);
+  expect(f.watchDisposed(window)).toBe(false);
+});
+```
+
 - [ ] **Step 2: Run the tests and watch them fail**
 
-Run: `npx vitest run test/unit/runtime/classify.test.ts`
-Expected: the sticky test FAILS with `expected null to be 'tiled'`; the `excludedFromTree` block FAILS to import. Also expect `npm run typecheck` to report errors in `src/shell/windows.ts` and `src/engine.ts` — those are Tasks 2 and 3; note them and do not fix them here.
+Run: `npx vitest run test/unit/runtime/classify.test.ts test/unit/shell/windowTracker.test.ts`
+Expected: the sticky test FAILS with `expected null to be 'tiled'`; the `excludedFromTree` block FAILS to import; and the tracker test FAILS with `expected [] to deeply equal [{type: 'added', id: 1}]`, which is the permanent drop reproduced. Also expect `npm run typecheck` to report errors in `src/shell/windows.ts` and `src/engine.ts` — those are Tasks 2 and 3; note them and do not fix them here.
 
 - [ ] **Step 3: Implement**
 
@@ -135,7 +152,7 @@ Expected: PASS and `layer0 check ok`. `npm test` will still fail in the shell an
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/runtime/model.ts src/runtime/classify.ts test/unit/runtime/classify.test.ts
+git add src/runtime/model.ts src/runtime/classify.ts test/unit/runtime/classify.test.ts test/unit/shell/windowTracker.test.ts
 git commit -m "feat: make sticky and skip-taskbar per-commit facts"
 ```
 
