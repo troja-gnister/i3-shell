@@ -315,6 +315,17 @@ describe('engine command dispatch', () => {
     expect(f.plan!.borders.every(b => b.width === 0)).toBe(true);
   });
 
+  it('applies a border command against a container selection in exactly one commit', () => {
+    const f = fakeEngine(); f.engine.start(); f.add(1); f.add(2); f.flush();
+    f.engine.run([{type: 'focus', target: 'parent'}], 1); // selects the shared root, a 2-leaf container
+    f.calls.length = 0;
+    const before = f.engine.treeSnapshot().revision;
+    f.engine.run([{type: 'border', style: 'pixel', width: 5}], 2);
+    expect(f.calls.filter(c => c === 'decorations')).toHaveLength(1);
+    expect(f.engine.treeSnapshot().revision).toBe(before + 1);
+    expect(f.plan!.borders.every(b => b.width === 5)).toBe(true);
+  });
+
   it('treats "normal" the same as "pixel" (there are no title bars to draw)', () => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
     f.engine.run([{type: 'border', style: 'normal', width: 7}], 1);

@@ -120,7 +120,7 @@ describe('Engine', () => {
     const e = f.engine;
     e.start();
     // 'decorations' trails every commit, so the notification is second-to-last.
-    expect(f.calls.at(-2)).toBe('notify:i3-shell|using the built-in fallback config');
+    expect(f.calls.slice(-2)).toEqual(['notify:i3-shell|using the built-in fallback config', 'decorations']);
   });
 
   it('stop() releases grabs and restores GNOME settings', () => {

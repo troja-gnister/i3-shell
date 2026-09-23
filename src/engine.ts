@@ -919,13 +919,19 @@ export class Engine {
         const selection = this._tree?.selection();
         const targets = selection?.kind === 'tiled' ? [...leaves(selection.con)] : [];
         if (targets.length === 0) return `border ${command.style}: no tiled container`;
+        // Every targeted leaf must land in the same commit: writing the map
+        // directly and committing once keeps a container selection's border
+        // change, its layout/decoration recompute and its revision bump
+        // atomic, instead of N separate top-level commits (N-1 of them
+        // publishing an inconsistent, half-updated plan).
         for (const target of targets) {
           const width = command.style === 'toggle'
             ? (this._borderOverrides.get(target.window) ?? this._config.defaultBorder.width) > 0
               ? 0 : this._config.defaultBorder.width
             : command.style === 'none' ? 0 : command.width;
-          this.setBorder(target.window, width);
+          this._borderOverrides.set(target.window, width);
         }
+        this.commit();
         return `border ${command.style}`;
       }
       case 'mode':
