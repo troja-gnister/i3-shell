@@ -34,7 +34,7 @@ const windows = new Map();
 const actions = new Set(['present', 'maximize', 'unmaximize', 'minimize', 'unminimize', 'fullscreen', 'unfullscreen']);
 const service = {
     Create(name, kind, parent) {
-        if (windows.has(name) || !['normal', 'dialog', 'modal', 'fixed'].includes(kind) ||
+        if (windows.has(name) || !['normal', 'dialog', 'modal', 'fixed', 'maximized', 'fullscreen'].includes(kind) ||
             (parent !== '' && !windows.has(parent)))
             return false;
         const window = new Gtk.ApplicationWindow({
@@ -45,6 +45,13 @@ const service = {
         window.set_child(entry);
         if (parent !== '') window.set_transient_for(windows.get(parent).window);
         if (kind === 'modal') window.set_modal(true);
+        // Maximize or fullscreen before the first present(): GTK folds the
+        // request into the initial toplevel state, so the window is *mapped* in
+        // that state and the shell classifies it while it is in it. The same
+        // Action() after the fact is a different case, already covered by the
+        // geometry states.
+        if (kind === 'maximized') window.maximize();
+        if (kind === 'fullscreen') window.fullscreen();
         windows.set(name, {window, entry});
         window.connect('close-request', () => {
             windows.delete(name);

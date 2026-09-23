@@ -26,15 +26,36 @@ stop_process() {
   fi
   wait "$pid" 2>/dev/null || true
 }
+# Exactly one upstream Mutter assertion is excluded, by exact text. The suite
+# deliberately maps a window fullscreen (phase2-checks.py
+# scenario_fullscreen_at_map) and mutter 50.5 raises such a window before it is
+# in the stack: xdg_toplevel.set_fullscreen -> meta_window_make_fullscreen ->
+# meta_window_make_fullscreen_internal -> meta_window_raise -> meta_stack_raise,
+# while meta_window_wayland_is_stackable() is still false because the surface
+# has no buffer yet. That is before any first frame, so before this extension
+# has made a single call against the window. It is characterised rather than
+# ignored: the scenario asserts the complementary prediction, that a fullscreen
+# window mapped alone does not produce it. Its presence is always reported.
+# Delete this filter when mutter fixes it; the scenario still passes without it.
+UPSTREAM_STACK_ASSERTION="meta_window_set_stack_position_no_sync: assertion 'window->stack_position >= 0' failed"
+unexpected_criticals() {
+  [[ -f "$1" ]] || return 0
+  # grep -E, not rg: a missing ripgrep exits 127, the condition reads false and
+  # the gate would pass silently. Both patterns are plain ERE.
+  grep -E '(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' "$1" |
+    grep -vF "$UPSTREAM_STACK_ASSERTION" || true
+}
+
 cleanup() {
   local status=$?
   trap - EXIT
   # Reap the GTK client before the compositor and private bus go away.
   stop_process "$FIXTURE_PID" fixture
   stop_process "$SHELL_PID" gnome-shell
-  # grep -E, not rg: a missing ripgrep exits 127, the condition reads false and
-  # the gate would pass silently. Both patterns are plain ERE.
-  if [[ -f "$LOG" ]] && grep -Eq '(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' "$LOG"; then
+  if [[ -f "$LOG" ]] && grep -qF "$UPSTREAM_STACK_ASSERTION" "$LOG"; then
+    echo 'note: known upstream mutter fullscreen-at-map assertion present and allowed (see inside.sh)' >&2
+  fi
+  if [[ -n "$(unexpected_criticals "$LOG")" ]]; then
     echo 'native criticals found in shell.log' >&2
     status=1
   fi

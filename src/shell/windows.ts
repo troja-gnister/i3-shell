@@ -1,5 +1,6 @@
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
+import {isResizable} from '../runtime/classify';
 import type {WindowEvent, WindowFacts, WindowInfo} from '../runtime/model';
 import type {MonitorId} from '../tree/node';
 import {existingWindows} from './windowEnumeration';
@@ -97,13 +98,23 @@ function nativeExistingWindows(): readonly Meta.Window[] {
 }
 
 function windowFacts(window: Meta.Window): WindowFacts {
+  // Not allows_resize(): that also answers "right now", and is false while the
+  // window is merely maximized or fullscreen. isResizable() rebuilds Mutter's
+  // intrinsic half from the raw readings; see src/runtime/classify.ts.
+  const [minKnown, minWidth, minHeight] = window.get_min_size();
+  const [maxKnown, maxWidth, maxHeight] = window.get_max_size();
   return {
     type: windowType(window.get_window_type()),
     skipTaskbar: window.is_skip_taskbar(),
     transient: window.get_transient_for() !== null,
     attached: window.is_attached_dialog(),
     sticky: window.is_on_all_workspaces(),
-    resizable: window.allows_resize(),
+    resizable: isResizable({
+      resizeable: window.resizeable,   // Mutter spells the property this way.
+      fullscreen: window.is_fullscreen(),
+      minKnown, minWidth, minHeight,
+      maxKnown, maxWidth, maxHeight,
+    }),
   };
 }
 

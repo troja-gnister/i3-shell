@@ -92,9 +92,72 @@ Reviewed, judged not worth changing now, and deliberately left alone:
   clean fix for Phase 3: `Meta.Display::closing` exists in the installed typelib, so the extension
   can stop servicing compositor signals at that point instead of guarding each consumer.
 
+## Deferred by the maximized-classification fix (2026-09-23)
+
+**Window classification is computed once, at the first frame, and cached for the window's lifetime**
+(`windowTracker.ts` `_makeReady`). That cache is the root cause of the 2026-09-23 outage, which the
+fix on `fix-maximized-classification` addressed only by making the *resizable* fact intrinsic
+(spec §8.2). Three of the six `WindowFacts` remain mutable at runtime and are still read once:
+
+| Fact | Changes when | Consequence today |
+|---|---|---|
+| `sticky` | Routinely. Under GNOME's default `workspaces-only-on-primary`, every window on a secondary output is `on_all_workspaces`, so moving a window between monitors flips it | **Worst case.** `classifyWindow` maps `sticky` to `null`, so `_makeReady` disposes the watch and never allocates an id: the window is dropped **permanently**, and the reverse transition cannot be observed because no subscription is left |
+| `skipTaskbar` | `notify::skip-taskbar`; also forced for children of a skip-taskbar window | stays untracked, or stays tracked when it should not be |
+| `transient` / `attached` | `set_transient_for()` after map; `attached` also follows the `attach-modal-dialogs` GSetting, which the user can flip at any time | tiled window that should float, and the reverse |
+
+`type` can change too (X11 `_NET_WM_WINDOW_TYPE`; on Wayland, going modal promotes to MODAL_DIALOG),
+but rarely enough to accept for v1.
+
+**Phase 3 — stop caching mutable facts rather than invalidate a cache.** The engine already re-reads
+`WindowInfo` on every `_syncWindow` and reacts to `minimized` and `fullscreen` per commit. `sticky`
+and `skipTaskbar` are the same kind of fact: move them out of `WindowFacts` (read once) into
+`WindowInfo` (read every commit) and let the engine decide per commit whether the window belongs in
+the tree. That keeps the tracker dumb, keeps "only the engine mutates the tree", and removes the
+cache-invalidation problem instead of solving it. The `tiled ⇄ floating` transition itself is the
+cheap half — the engine already owns it for `floating enable/disable` (`_manualFloating`). It needs
+a precedence rule written into spec §7.10 first: an explicit user `floating enable` must win, or a
+monitor move would silently undo the user's choice.
+
+**Phase 4 — `null ⇄ tracked` promotion, with multi-monitor.** Promoting a window the tracker
+decided to ignore is the expensive half and genuinely new: the tracker would have to keep watching
+windows it ignored and allocate ids lazily, i.e. a new **"known but untracked"** lifecycle state
+with its own teardown and leak surface. It belongs with multi-monitor because `sticky` is really a
+proxy for "on a secondary output under `workspaces-only-on-primary`" — the case where a window is
+dropped permanently today — and §8.2's "not on all workspaces" rule deserves re-examination there
+rather than being mechanically preserved.
+
+Not a release blocker for the 2026-09-23 fix: with the predicate corrected, the transition that
+actually bit the user cannot recur, because the window is now classified correctly whatever state
+it maps in.
+
+## Upstream defects observed (not ours to fix)
+
+**Mutter 50.5 raises a window before it is in the stack when a client maps fullscreen.**
+Found 2026-09-23 by the new `scenario_fullscreen_at_map`, which is the first fixture in the suite
+to map a window fullscreen. Mechanism, from the installed mutter's own sources:
+`xdg_toplevel.set_fullscreen` (`meta-wayland-xdg-shell.c:518`) → `meta_window_make_fullscreen` →
+`meta_window_make_fullscreen_internal` (`window.c:3656`) → `meta_window_raise` (`window.c:3669`) →
+`meta_stack_raise` (`stack.c:267`), while the surface still has no buffer, so
+`meta_window_wayland_is_stackable()` (`meta-window-wayland.c:978`) is false and `stack_position` is
+still `-1`; `meta_stack_raise` then calls `meta_window_set_stack_position_no_sync`, whose
+`g_return_if_fail (window->stack_position >= 0)` (`stack.c:943`) fires. It only appears when another
+window on the same workspace is already stacked, because otherwise `meta_stack_raise` early-returns.
+`meta_window_maximize` has no `meta_window_raise`, which is why a window mapped *maximized* is clean.
+
+Not this extension: the assertion fires while the window has no buffer, hence before its first frame,
+and the extension makes no compositor call against a window before that — it only connects signals
+and reads. It also reaches the user's real desktop: any application that opens fullscreen with
+another window already on the workspace logs this, with or without i3-shell.
+
+The nested harness filters this one line by exact text in `test/integration/inside.sh` and always
+reports its presence; `scenario_fullscreen_at_map` asserts the complementary prediction (mapped
+alone, it does not appear) so the filter cannot quietly hide a different fault. **Delete the filter
+when Mutter fixes this**; the scenario passes either way. Worth reporting upstream.
+
 ## Deferred to Phase 4
 
 - `for_window` criteria regex stops at the first `]` (a literal `]` inside a quoted value); user-defined GNOME shortcuts (`media-keys` `custom-keybindings` relocatable schema) are not enumerated by the override scan.
+- Window-classification `null ⇄ tracked` promotion — see "Deferred by the maximized-classification fix" above.
 
 ## Security note (final review)
 
