@@ -411,6 +411,36 @@ describe('decorations', () => {
     const applied = f.applied.at(-1)!;
     expect(applied.get(1)!.y).toBe(50);   // work area y 30 + 20
   });
+
+  it('draws nothing for a workspace that is not the active one', () => {
+    // Every workspace is laid out on every commit -- inactive ones are
+    // pre-tiled -- but only the active one is on screen. Mutter hides an
+    // inactive workspace's windows; the renderer's actors are plain children
+    // of window_group with no tie to window visibility, so a plan naming an
+    // inactive workspace paints its borders, frame and tab bar straight over
+    // the active workspace, where the tabs also swallow clicks.
+    const f = fakeEngine();
+    f.engine.start();
+    f.engine.setRowHeight(20);
+    f.add(1);                                   // workspace 0, the active one
+    f.flush();
+    f.ports.workspaces.activate(4, 0);
+    f.flush();
+    f.add(2, {workspace: 4});
+    f.add(3, {workspace: 4});
+    f.flush();
+    f.engine.run(parseCommands('layout tabbed').commands, 0);
+    f.flush();
+    // While workspace 4 is the active one its chrome is exactly what is drawn.
+    expect(f.plan!.titleRows).toHaveLength(1);
+    expect(f.plan!.borders.map(b => b.window).sort()).toEqual([2, 3]);
+
+    f.ports.workspaces.activate(0, 0);
+    f.flush();
+    expect(f.plan!.borders.map(b => b.window)).toEqual([1]);
+    expect(f.plan!.titleRows).toEqual([]);
+    expect(f.plan!.frames).toEqual([]);
+  });
 });
 
 describe('focusWindow', () => {

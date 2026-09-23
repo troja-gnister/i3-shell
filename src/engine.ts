@@ -362,7 +362,21 @@ export class Engine {
             const info = this._ports.windows.get(id);
             if (info && !info.fullscreen && !info.minimized && !this._unmaximizing.has(id)) expected.set(id, rect);
           }
-          decoRoots.push({root, active: ws.index === tree.activeWorkspace});
+          // Only the active workspace's roots are drawn. The layout above still
+          // runs for every workspace -- inactive ones stay pre-tiled, which is
+          // what makes a switch instant -- but their chrome must not be planned:
+          // src/shell/decorations.ts parents its actors to window_group with no
+          // tie to window visibility, so while Mutter hides an inactive
+          // workspace's windows its borders, frame and tab bar would stay
+          // painted over the active workspace, where the reactive tabs would
+          // also swallow the clicks in their band.
+          //
+          // `active` is therefore true for every root the engine pushes.
+          // decorationPlan() keeps the flag because it is a pure function of
+          // its input and the spec's state table is written in terms of it
+          // (an inactive workspace's focused leaf is `focused_inactive`); the
+          // engine simply never asks it to draw one.
+          if (ws.index === tree.activeWorkspace) decoRoots.push({root, active: true});
         }
       }
       const selection = tree.selection();
