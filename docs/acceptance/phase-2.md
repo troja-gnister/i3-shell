@@ -3,7 +3,7 @@
 **Product revision:** `42adda2` on `main` (Phase 2B merged 2026-09-23; the maximized/fullscreen classification fix merged the same day). Before this fix any window that opened maximized was classified floating for its whole lifetime, so on a desktop whose terminal opens maximized no tiling check below could have passed.
 **Build under test:** release `make install` (no `org.i3shell.Debug` interface or methods).
 **Environment:** GNOME Shell 50.5 / Mutter 18, Wayland, Fedora Silverblue 44.
-**Date prepared:** 2026-09-22. **Result: not yet walked — every A8–A14 box below is the user's to tick.**
+**Date prepared:** 2026-09-22. **Result: walked and PASSED by the user on 2026-09-23** (GNOME Shell 50.5, Wayland, product revision `2c0900d`). See "The user's report" at the end.
 
 Nothing in this repository ticks these boxes. The automated suite below is separate evidence and
 is listed only so the walk can concentrate on what automation cannot reach.
@@ -145,5 +145,32 @@ engine's own target.
 
 ## The user's report
 
-Record the outcome here after the walk: date, `gnome-shell --version`, which boxes passed, and any
-failure with the journal lines around it. Phase 2 is not complete until this section is filled in.
+**Walked 2026-09-23 by the user. GNOME Shell 50.5, Wayland, Fedora Silverblue 44. Product
+revision `2c0900d`. Every A8–A14 box passed, reported to the session as "all work".**
+
+Three items were investigated during the walk and none was a Phase 2 defect:
+
+1. **`$mod+semicolon` opened the emoji picker.** Real conflict, but **the standing diagnosis was
+   wrong**: the carried-forward note said IBus grabs these accelerators *before* i3-shell can. The
+   live journal says `65 bindings grabbed` with no failures and no retries, so i3-shell **does**
+   hold the grab and IBus still intercepts the key by some other path. The mechanism is not yet
+   established and the in-extension fix must be built on the real one, not on the old story.
+2. **`$mod+space` "did nothing".** The same IBus conflict with an invisible symptom: IBus had it
+   bound to *switch input source*, and this machine has exactly one source, `[('xkb', 'us')]`, so
+   the switch was already a no-op. Note also that `focus mode_toggle` correctly does nothing when
+   no floating window exists, so this box requires one to be open.
+3. **No tiling on the second display.** Not a defect — `org.gnome.mutter
+   workspaces-only-on-primary` was still `true`, so Mutter marked those windows sticky and
+   i3-shell does not track sticky windows (spec §8.2). The engine did know both outputs
+   (`monitors: [1, 2]`). Tiling worked once the key was set to `false`, as documented above.
+
+**Both key conflicts were resolved by hand on this machine, not in `src/`**, and will return on any
+fresh install until the override scan covers the IBus schemas:
+
+```sh
+gsettings set org.freedesktop.ibus.panel.emoji hotkey "['<Super>period']"   # was + <Super>semicolon
+gsettings set org.freedesktop.ibus.general.hotkey triggers "@as []"         # was ['<Super>space']
+gsettings set org.gnome.mutter workspaces-only-on-primary false
+```
+
+Phase 2 is complete.
