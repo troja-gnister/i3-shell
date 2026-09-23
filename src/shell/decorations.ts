@@ -37,11 +37,6 @@ function colorSetFor(colors: Colors, state: BorderState): ColorSet {
   }
 }
 
-/** The live Meta.WindowActor for a WindowId, or undefined once the compositor has torn it down. */
-function findWindowActor(id: WindowId): Meta.WindowActor | undefined {
-  return global.get_window_actors().find(actor => actor.meta_window?.get_id() === id);
-}
-
 /**
  * Renders the DecorationPlan the engine computes on every commit: a border
  * per window, a frame around the focused container, and tab/stack title
@@ -58,7 +53,18 @@ export class Decorations {
   private readonly _frames = new Map<NodeId, St.Widget>();
   private readonly _rows = new Map<NodeId, RowEntry>();
 
-  constructor(colors: Colors, private readonly _focus: (window: WindowId) => void) {
+  constructor(
+    colors: Colors,
+    private readonly _focus: (window: WindowId) => void,
+    /**
+     * WindowId is synthetic -- a counter WindowTracker assigns, unrelated to
+     * Mutter's own Meta.Window.get_id() -- so the only way back to a live
+     * window is the same resolver GeometryBackend already takes
+     * (geometryBackend.ts). Do not try to find a window's actor by scanning
+     * global.get_window_actors(): nothing ties a Meta id to a WindowId.
+     */
+    private readonly _resolve: (id: WindowId) => Meta.Window | undefined,
+  ) {
     this._colors = colors;
   }
 
@@ -89,16 +95,27 @@ export class Decorations {
     this._lastPlan = {borders: [], frames: [], titleRows: []};
   }
 
+  /** The window's live compositor actor, or undefined if it cannot be resolved or has none yet. */
+  private _findWindowActor(id: WindowId): Meta.WindowActor | undefined {
+    const window = this._resolve(id);
+    if (!window) return undefined;
+    // @girs types this non-nullable, but Mutter returns null before the actor
+    // exists; see the identical cast in src/shell/windows.ts.
+    const actor = window.get_compositor_private<Meta.WindowActor>() as Meta.WindowActor | null;
+    return actor ?? undefined;
+  }
+
   private _applyBorders(borders: DecorationPlan['borders']): void {
     const seen = new Set<WindowId>();
     for (const border of borders) {
       seen.add(border.window);
       // A window named in the plan may have no actor left by the time we
-      // render (it can close between commit and render); skip it silently
-      // rather than writing to something that no longer exists. Any border
-      // already on screen for it is left alone this pass -- the plan will
-      // simply stop naming the window once the tracker forgets it too.
-      const windowActor = findWindowActor(border.window);
+      // render (it can close between commit and render, or its compositor
+      // actor may not exist yet); skip it silently rather than writing to
+      // something that no longer exists. Any border already on screen for it
+      // is left alone this pass -- the plan will simply stop naming the
+      // window once the tracker forgets it too.
+      const windowActor = this._findWindowActor(border.window);
       if (!windowActor) continue;
 
       let entry = this._borders.get(border.window);
