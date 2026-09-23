@@ -75,6 +75,7 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill') {
     },
     decorations: {
       apply: plan => { f.plan = plan; calls.push('decorations'); },
+      setColors: colors => { f.decorationColors = colors; calls.push('decorations.colors'); },
     },
     now: () => 123456789,
     exec: command => { calls.push(`exec:${command}`); },
@@ -85,7 +86,8 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill') {
   const engine = new Engine(ports);
   const f = {
     engine, ports, calls, applied, windows, load,
-    pills: [] as PillState[], pushedColors: null as Colors | null, visible: true, refuseGeometry: false, emitFrames: true, activationFails: false,
+    pills: [] as PillState[], pushedColors: null as Colors | null, decorationColors: null as Colors | null,
+    visible: true, refuseGeometry: false, emitFrames: true, activationFails: false,
     onApply: null as ((id: WindowId) => void) | null,
     plan: null as DecorationPlan | null,
     add(id: WindowId, patch: Partial<WindowInfo> = {}) { windows.set(id, windowInfo(id, patch)); engine.onWindowEvent({type: 'added', id}); },

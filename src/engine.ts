@@ -61,9 +61,11 @@ export interface EnginePorts {
   /**
    * Receives a fresh plan on every commit, including the commit that empties
    * it (a window removed, a workspace switched away from) — the renderer
-   * never has to infer teardown on its own.
+   * never has to infer teardown on its own. `setColors` mirrors the
+   * indicator's: the same effectiveColors() result _pushColors() computes
+   * goes to both, so a border and the workspace pill never disagree.
    */
-  decorations: {apply(plan: DecorationPlan): void};
+  decorations: {apply(plan: DecorationPlan): void; setColors(colors: Colors): void};
   exec(command: string): void;
   notify(title: string, body: string): void;
   log: {info(message: string): void; warn(message: string): void};
@@ -150,8 +152,9 @@ export class Engine {
   }
 
   private _pushColors(): void {
-    this._ports.indicator.setColors(
-      effectiveColors(this._config.colors, this._config.specifiedColors, this._ports.accent.current()));
+    const colors = effectiveColors(this._config.colors, this._config.specifiedColors, this._ports.accent.current());
+    this._ports.indicator.setColors(colors);
+    this._ports.decorations.setColors(colors);
   }
 
   stop(): void {

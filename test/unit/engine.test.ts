@@ -14,7 +14,7 @@ describe('Engine', () => {
     const e = f.engine;
     e.start();
     // 'decorations' trails every commit — see the `decorations` describe block in lifecycle.test.ts.
-    expect(f.calls).toEqual(['settings.apply', 'grab:65', 'mode:null', 'colors', 'decorations']);
+    expect(f.calls).toEqual(['settings.apply', 'grab:65', 'mode:null', 'colors', 'decorations.colors', 'decorations']);
     expect(e.mode).toBe('default');
     expect(e.state()).toMatchObject({mode: 'default', activeWorkspace: 0, workspaceCount: 10, grabbed: 65, configSource: 'file', errors: 0, warnings: 0});
   });
@@ -107,7 +107,7 @@ describe('Engine', () => {
     expect(e.run([{type: 'reload'}], 1)).toBe('reloaded');
     expect(f.calls).toEqual([
       'warn:config warning line 2: exec is not supported by i3-shell yet; line skipped',
-      'settings.apply', 'grab:1', 'mode:null', 'colors',
+      'settings.apply', 'grab:1', 'mode:null', 'colors', 'decorations.colors',
       'notify:i3-shell|1 config warning(s) — see the shell log',
       'decorations',
     ]);
