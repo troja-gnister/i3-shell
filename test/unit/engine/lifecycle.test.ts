@@ -610,3 +610,64 @@ describe('focusNode', () => {
     expect(f.calls).toEqual([]);
   });
 });
+
+describe('exclusion from the tree', () => {
+  it('removes a window from the tiling when it becomes sticky', () => {
+    const f = fakeEngine(); f.engine.start();
+    f.add(1); f.add(2); f.flush();
+    f.change(2, {sticky: true}, 'membership'); f.flush();
+    expect(f.applied.at(-1)!.has(2)).toBe(false);
+    expect(f.applied.at(-1)!.get(1)).toEqual({x: 0, y: 30, width: 1000, height: 700});
+  });
+
+  it('returns it beside the focused window when sticky clears', () => {
+    const f = fakeEngine(); f.engine.start();
+    f.add(1); f.add(2); f.flush();
+    f.change(2, {sticky: true}, 'membership'); f.flush();
+    f.change(2, {sticky: false}, 'membership'); f.flush();
+    const rects = f.applied.at(-1)!;
+    expect(rects.get(1)!.width).toBe(500);
+    expect(rects.get(2)!.width).toBe(500);
+  });
+
+  it('excludes a skip-taskbar window the same way', () => {
+    const f = fakeEngine(); f.engine.start();
+    f.add(1); f.add(2); f.flush();
+    f.change(2, {skipTaskbar: true}, 'membership'); f.flush();
+    expect(f.applied.at(-1)!.has(2)).toBe(false);
+  });
+
+  it('rejoins only when every reason has cleared', () => {
+    // Review Focus: minimized AND sticky together.
+    const f = fakeEngine(); f.engine.start();
+    f.add(1); f.add(2); f.flush();
+    f.change(2, {sticky: true, minimized: true}, 'membership'); f.flush();
+    f.change(2, {sticky: false, minimized: true}, 'membership'); f.flush();
+    expect(f.applied.at(-1)!.has(2)).toBe(false);
+    f.change(2, {sticky: false, minimized: false}, 'membership'); f.flush();
+    expect(f.applied.at(-1)!.has(2)).toBe(true);
+  });
+
+  it('does not leave the selection dangling when the selected window leaves', () => {
+    // Review Focus: removing the selected window must move the selection, not
+    // leave it pointing at a con that no longer exists.
+    const f = fakeEngine(); f.engine.start();
+    f.add(1); f.add(2); f.flush();
+    f.focus(2); f.flush();
+    f.change(2, {sticky: true}, 'membership'); f.flush();
+    expect(f.engine.state().mode).toBe('default');
+    expect(() => f.engine.run(parseCommands('focus left').commands, 0)).not.toThrow();
+    expect(f.applied.at(-1)!.has(2)).toBe(false);
+  });
+
+  it('admits a window that is already sticky at its first frame', () => {
+    // Review Focus: the fix is about a transition, but a window mapped straight
+    // onto a secondary output is sticky before it is ever classified. It must be
+    // tracked and excluded, never dropped.
+    const f = fakeEngine(); f.engine.start();
+    f.add(1); f.add(2, {sticky: true}); f.flush();
+    expect(f.applied.at(-1)!.has(2)).toBe(false);
+    f.change(2, {sticky: false}, 'membership'); f.flush();
+    expect(f.applied.at(-1)!.has(2)).toBe(true);
+  });
+});

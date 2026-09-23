@@ -5,6 +5,7 @@ import {RectReconciler} from './runtime/reconcile';
 import {serializeTree, type TreeSnapshot, type WindowSnapshot} from './runtime/snapshot';
 import {decorationPlan, type DecorationPlan} from './runtime/decoration';
 import type {WindowsPort, GeometryPort, DeferredPort, PillState, Topology, WindowInfo, WindowEvent} from './runtime/model';
+import {excludedFromTree} from './runtime/classify';
 import {parseCommands} from './commands/parse';
 import type {Command, WorkspaceTarget} from './commands/model';
 import type {Binding, Colors, Config, Diagnostic} from './config/model';
@@ -388,7 +389,7 @@ export class Engine {
         }
         this._acceptFocus(this._ports.windows.focused());
       }
-      tree.normalize(new Set(live.filter(w => !w.minimized).map(w => w.id)));
+      tree.normalize(new Set(live.filter(w => !excludedFromTree(w)).map(w => w.id)));
       const expected = new Map<WindowId, Rect>();
       this._containerRects = new Map();
       for (const ws of tree.workspaces.values()) {
@@ -476,13 +477,16 @@ export class Engine {
     const old = this._windows.get(id);
     this._windows.set(id, {...info, rect: {...info.rect}});
     if (old?.fullscreen && !info.fullscreen) this._forced.add(id);
-    if (old?.minimized && !info.minimized) this._forced.add(id);
+    if (old && excludedFromTree(old) && !excludedFromTree(info)) this._forced.add(id);
     const expected = this._expectedWorkspace.get(id);
     if (workspaceEvent) this._expectedWorkspace.delete(id);
     const tree = this._tree;
     if (!tree) return;
     const location = tree.location(id);
-    if (info.minimized) {
+    if (excludedFromTree(info)) {
+      // _minimized now holds "the floating state this window had when it left
+      // the tree, for any reason" (minimized, sticky, or skip-taskbar), not
+      // just minimize; the name predates that and is left alone here.
       this._minimized.set(id, this._minimized.get(id) ?? this._floating(info));
       tree.remove(id);
     } else {
