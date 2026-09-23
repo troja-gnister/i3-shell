@@ -11,7 +11,8 @@ function R(x: number, y: number, width: number, height: number): Rect {
 function info(id: number, patch: Partial<WindowInfo> = {}): WindowInfo {
   return {id, workspace: 0, monitor: 1, kind: 'tiled',
     rect: {x: 0, y: 0, width: 10, height: 10}, title: `Window ${id}`, wmClass: 'fixture',
-    minimized: false, fullscreen: false, maximizedH: false, maximizedV: false, ...patch};
+    minimized: false, fullscreen: false, maximizedH: false, maximizedV: false,
+    sticky: false, skipTaskbar: false, ...patch};
 }
 
 describe('decorationPlan', () => {

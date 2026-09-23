@@ -34,12 +34,13 @@ describe('classifyWindow', () => {
 });
 
 describe('classifyWindow after the fact move', () => {
-  it('tiles a window that is on all workspaces, instead of refusing it', () => {
-    // `sticky` used to map to null, which made the tracker dispose the watch
-    // and drop the window forever. It is not a classification input any more.
-    expect(classifyWindow({...normal})).toBe('tiled');
-  });
-
+  // `sticky` used to map to null here, which made the tracker dispose the
+  // watch and drop the window forever; it is not a classification input any
+  // more, so this is the only reason left. The actual "does a sticky window
+  // now stay tracked" story can no longer be told at this signature -- the
+  // field it would vary left WindowFacts -- and lives instead in the
+  // tracker's narrowed-contract test, in Task 3's engine tests (WindowInfo
+  // keeps `sticky`), and in Task 5's native scenario.
   it('returns null only for a window type that is not ours', () => {
     expect(classifyWindow({...normal, type: 'ignored'})).toBeNull();
     expect(classifyWindow({...normal, type: 'dialog'})).toBe('floating');

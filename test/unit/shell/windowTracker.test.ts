@@ -75,6 +75,8 @@ function fakeWindowBackend() {
       fullscreen: false,
       maximizedH: false,
       maximizedV: false,
+      sticky: false,
+      skipTaskbar: false,
     });
     order.push(window);
     for (const callback of [...createdCallbacks]) callback(window);
@@ -292,6 +294,7 @@ describe('WindowTracker', () => {
   it.each([
     ['normal', normal],
     ['dialog', {...normal, type: 'dialog'}],
+    ['modal dialog', {...normal, type: 'modal-dialog'}],
     ['utility', {...normal, type: 'utility'}],
   ] satisfies Array<[string, WindowFacts]>)('allocates an id and keeps the watch for an admitted %s window', (_name, facts) => {
     const f = fakeWindowBackend();
