@@ -172,23 +172,38 @@ export default class I3ShellExtension extends Extension {
       closing.unlessClosing(() => { engine.onLocked(); }),
       closing.unlessClosing(() => { engine.onUnlocked(); indicator.hideActivities(); }));
 
+    // Both handlers below run the same three steps in the same order --
+    // re-measure the bars, re-measure the title row, then relayout -- because
+    // both signals change the same two measurements and teaching two orders
+    // for one job is how one of them ends up missing a step.
+    //
     // The bars first: each one reserves a strut, so rebuilding them for the
     // new monitor set is what makes the work areas the engine then lays out
     // against correct -- and a bar left on a monitor that has gone away would
-    // keep shrinking a work area that no longer exists.
-    tracker.connect(Main.layoutManager, 'monitors-changed', closing.unlessClosing(() => {
+    // keep shrinking a work area that no longer exists. MonitorBars
+    // re-measures whenever it renders, and a rebuild is its public way to be
+    // told to: these signals are rare and a bar carries no state a rebuild
+    // could lose.
+    //
+    // Then the title row. St scales every CSS pixel by the shell's scale
+    // factor, and docking or undocking a display can change it, so a monitor
+    // change re-measures the row for exactly the reason a font change does: a
+    // stale row height either under-reports the band and clips the tabs, or
+    // over-reports it and leaves a gap above the client. setRowHeight() is a
+    // no-op when the number has not moved, so the common case costs nothing.
+    const remeasure = (): void => {
       bars.monitorsChanged();
+      engine.setRowHeight(measureRowHeight());
+    };
+    tracker.connect(Main.layoutManager, 'monitors-changed', closing.unlessClosing(() => {
+      remeasure();
       engine.onMonitorsChanged();
     }));
-    // Every title row's height, and every bar's, comes from the theme, so a
-    // font change resizes both. MonitorBars re-measures whenever it renders,
-    // and a rebuild is its public way to be told to: font changes are rare and
-    // a bar carries no state a rebuild could lose.
+    // A font change resizes a bar and a title row alike; nothing else about
+    // the monitors moved, so there is no relayout to force beyond the one
+    // setRowHeight() itself commits when the height actually changed.
     const stSettings = St.Settings.get();
-    tracker.connect(stSettings, 'notify::font-name', closing.unlessClosing(() => {
-      engine.setRowHeight(measureRowHeight());
-      bars.monitorsChanged();
-    }));
+    tracker.connect(stSettings, 'notify::font-name', closing.unlessClosing(remeasure));
     tracker.connect(global.display, 'workareas-changed', closing.unlessClosing(() => engine.relayout()));
     // Windows before the engine: start() enumerates the existing windows and
     // arms their first-frame watches, so engine.start() adopts them in its first
