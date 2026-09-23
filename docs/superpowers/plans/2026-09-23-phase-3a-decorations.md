@@ -188,6 +188,19 @@ export interface DecorationInput {
 
 `roots` is one entry per monitor root that currently has rectangles, with `active` true for the roots of the active workspace. `focused` is the engine's current tiled selection.
 
+`borderWidth` is the fallback from `default_border pixel N`. `borderOverrides` carries what the
+`border` command set for individual windows, which acceptance A19 requires and which nothing in the
+codebase stores today, so Task 3 must add it:
+
+```typescript
+  borderWidth: number;
+  borderOverrides: ReadonlyMap<WindowId, number>;
+```
+
+A window absent from `borderOverrides` uses `borderWidth`. `border none` is stored as `0`, and a
+zero-width border still produces a plan entry with `width: 0` rather than no entry, so the renderer
+keeps one actor per window and the state colour still tracks focus.
+
 - [ ] **Step 1: Write the failing tests**
 
 Create `test/unit/runtime/decoration.test.ts`:
@@ -272,13 +285,28 @@ describe('decorationPlan', () => {
     expect(plan.titleRows).toEqual([]);
   });
 
+  it('prefers a per-window border override to the configured default', () => {
+    // Acceptance A19: the `border` command changes one window's width.
+    const root = split('splith', [leaf(1), leaf(2)]);
+    const plan = decorationPlan({
+      roots: [{root, active: true}],
+      rects: new Map<Con, Rect>([[root, R(0, 0, 400, 300)],
+        [root.children[0], R(0, 0, 200, 300)], [root.children[1], R(200, 0, 200, 300)]]),
+      windows: new Map([[1, info(1)], [2, info(2)]]),
+      focused: null, rowHeight: 20, borderWidth: 2,
+      borderOverrides: new Map([[1, 0]]),
+    });
+    expect(plan.borders.find(x => x.window === 1)!.width).toBe(0);
+    expect(plan.borders.find(x => x.window === 2)!.width).toBe(2);
+  });
+
   it('carries the configured border width on every border', () => {
     const root = split('splith', [leaf(1)]);
     const plan = decorationPlan({
       roots: [{root, active: true}],
       rects: new Map<Con, Rect>([[root, R(0, 0, 400, 300)], [root.children[0], R(0, 0, 400, 300)]]),
       windows: new Map([[1, info(1)]]),
-      focused: null, rowHeight: 20, borderWidth: 5,
+      focused: null, rowHeight: 20, borderWidth: 5, borderOverrides: new Map(),
     });
     expect(plan.borders[0].width).toBe(5);
   });
@@ -324,7 +352,7 @@ git commit -m "feat: compute a pure decoration plan from the tree"
 
 **Interfaces:**
 - Consumes: `decorationPlan`, `DecorationPlan` from Task 2; `layoutWithRects(con, rect, rowHeight)` from Task 1.
-- Produces: `EnginePorts.decorations: {apply(plan: DecorationPlan): void; setRowHeight(height: number): void}` and `Engine.setRowHeight(height: number): void`. `NodeSnapshot` for a split gains `rowHeight: number` (0 for split layouts).
+- Produces: `EnginePorts.decorations: {apply(plan: DecorationPlan): void}` and, separately, the public methods `Engine.setRowHeight(height: number): void` and `Engine.setBorder(window: WindowId, width: number): void`. `rowHeight` is deliberately **not** a port method: the shell measures it and calls the engine directly, the way it already calls `onMonitorsChanged()`. A port the shell invokes on itself would be a port in name only. `NodeSnapshot` for a split gains `rowHeight: number` (0 for split layouts).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -333,7 +361,6 @@ Extend the fake in `test/unit/engine/fakeEngine.ts` exactly as the `accent` port
 ```typescript
     decorations: {
       apply: plan => { f.plan = plan; calls.push('decorations'); },
-      setRowHeight: height => { calls.push(`rowHeight:${height}`); },
     },
 ```
 
@@ -376,7 +403,7 @@ Expected: FAIL — `f.plan` is null because nothing pushes a plan, and the secon
 
 - [ ] **Step 3: Implement**
 
-In `src/engine.ts`: add the port to `EnginePorts`; store `private _rowHeight = 0;` and add `setRowHeight(height: number): void` which records the value and requests a commit if it changed. Pass `this._rowHeight` as the third argument to `layoutWithRects`. After the reconciler plan is applied, build the input from the workspaces already walked and call `this._ports.decorations.apply(decorationPlan(...))`. `borderWidth` comes from `this._config.defaultBorder.width`.
+In `src/engine.ts`: add the port to `EnginePorts`; store `private _rowHeight = 0;` and add `setRowHeight(height: number): void` which records the value and requests a commit if it changed. Pass `this._rowHeight` as the third argument to `layoutWithRects`. After the reconciler plan is applied, build the input from the workspaces already walked and call `this._ports.decorations.apply(decorationPlan(...))`. `borderWidth` comes from `this._config.defaultBorder.width`, and `borderOverrides` from a new `private _borderOverrides = new Map<WindowId, number>()` that `setBorder` writes and the `border` command handler calls; a window's entry is dropped when the window is removed.
 
 In `src/runtime/snapshot.ts`, add `rowHeight` to the split branch: `current.layout === 'tabbed' ? rowHeight : current.layout === 'stacked' ? rowHeight * children.length : 0`, threaded in as a new parameter to `serializeTree`.
 
@@ -406,27 +433,116 @@ git commit -m "feat: push a decoration plan from commit and expose row height"
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `test/unit/shell/decorations.test.ts`, mocking `gi://St`, `gi://Clutter` and `resource:///org/gnome/shell/ui/main.js` the way `test/unit/shell/indicator.test.ts` already does, and using the recording doubles in `test/unit/shell/fakes/actors.ts`. Cover:
+Create `test/unit/shell/decorations.test.ts`. Mock `gi://St` and `gi://Clutter` and
+`resource:///org/gnome/shell/ui/main.js` the way `test/unit/shell/indicator.test.ts` already does,
+and build actors from the recording doubles in `test/unit/shell/fakes/actors.ts`, which log access
+to a destroyed actor instead of throwing.
 
 ```typescript
-it('reuses a border actor when only its rectangle changed', () => { /* same window id, new rect -> same actor instance, new geometry */ });
-it('destroys actors the plan no longer contains', () => { /* window removed -> its actor destroyed exactly once */ });
-it('keys title rows by nodeId, not by rectangle', () => {
-  // Review Focus adjacent: resizing a container must not churn actors.
-  // Same nodeId with a different rect -> the same actor, moved.
+import {beforeEach, describe, expect, it, vi} from 'vitest';
+import type {DecorationPlan} from '../../../src/runtime/decoration';
+import {DEFAULT_COLORS} from '../../../src/config/model';
+
+// windowActors is what global.get_window_actors() returns; a window missing from
+// it stands for one destroyed between commit and render.
+const windowActors = new Map<number, FakeActor>();
+vi.mock('gi://St', () => ({default: stFakes}));
+vi.mock('gi://Clutter', () => ({default: clutterFakes}));
+
+const {Decorations} = await vi.importActual<{
+  Decorations: new (colors: typeof DEFAULT_COLORS, focus: (w: number) => void) => {
+    apply(plan: DecorationPlan): void;
+    destroy(): void;
+  };
+}>('../../../src/shell/decorations');
+
+const R = (x: number, y: number, width: number, height: number) => ({x, y, width, height});
+const empty: DecorationPlan = {borders: [], frames: [], titleRows: []};
+const border = (window: number, rect = R(0, 0, 100, 100)) =>
+  ({borders: [{window, rect, state: 'focused' as const, width: 2}], frames: [], titleRows: []});
+
+beforeEach(() => { windowActors.clear(); resetFakeActors(); });
+
+describe('Decorations', () => {
+  it('reuses a border actor when only its rectangle changed', () => {
+    windowActors.set(1, new FakeActor());
+    const d = new Decorations(DEFAULT_COLORS, () => {});
+    d.apply(border(1, R(0, 0, 100, 100)));
+    const first = lastCreated('border');
+    d.apply(border(1, R(50, 0, 100, 100)));
+    expect(lastCreated('border')).toBe(first);
+    expect(first.destroyed).toBe(false);
+    expect(first.geometry).toEqual(R(50, 0, 100, 100));
+  });
+
+  it('destroys actors the plan no longer contains', () => {
+    windowActors.set(1, new FakeActor());
+    const d = new Decorations(DEFAULT_COLORS, () => {});
+    d.apply(border(1));
+    const actor = lastCreated('border');
+    d.apply(empty);
+    expect(actor.destroyCount).toBe(1);
+  });
+
+  it('keys title rows by nodeId, not by rectangle', () => {
+    windowActors.set(1, new FakeActor());
+    const row = (rect: ReturnType<typeof R>) => ({
+      borders: [], frames: [],
+      titleRows: [{nodeId: 7, rect, rowHeight: 20, layout: 'tabbed' as const,
+        tabs: [{window: 1, title: 'One', selected: true}]}],
+    });
+    const d = new Decorations(DEFAULT_COLORS, () => {});
+    d.apply(row(R(0, 0, 400, 300)));
+    const first = lastCreated('row');
+    d.apply(row(R(0, 0, 200, 300)));
+    // A rectangle key would have destroyed and rebuilt an actor that only moved.
+    expect(lastCreated('row')).toBe(first);
+    expect(first.destroyCount).toBe(0);
+  });
+
+  it('skips a window whose actor has gone away between plan and render', () => {
+    // Review Focus: the plan names a WindowId; the window may be gone by now.
+    const d = new Decorations(DEFAULT_COLORS, () => {});
+    expect(() => d.apply(border(99))).not.toThrow();
+    expect(disposedAccesses()).toEqual([]);
+  });
+
+  it('does not interpret markup in a tab title', () => {
+    // Review Focus: titles come from arbitrary applications.
+    windowActors.set(1, new FakeActor());
+    const d = new Decorations(DEFAULT_COLORS, () => {});
+    d.apply({borders: [], frames: [], titleRows: [{nodeId: 7, rect: R(0, 0, 400, 300),
+      rowHeight: 20, layout: 'tabbed', tabs: [{window: 1, title: '<b>x</b>', selected: true}]}]});
+    const label = lastCreated('tab');
+    expect(label.text).toBe('<b>x</b>');
+    expect(label.useMarkup).toBe(false);
+  });
+
+  it('focuses the tab that was clicked, without touching the tree', () => {
+    windowActors.set(1, new FakeActor());
+    const focused: number[] = [];
+    const d = new Decorations(DEFAULT_COLORS, w => focused.push(w));
+    d.apply({borders: [], frames: [], titleRows: [{nodeId: 7, rect: R(0, 0, 400, 300),
+      rowHeight: 20, layout: 'tabbed', tabs: [{window: 1, title: 'One', selected: false}]}]});
+    lastCreated('tab').emit('clicked');
+    expect(focused).toEqual([1]);
+  });
+
+  it('destroys every actor on destroy(), and touches none afterwards', () => {
+    windowActors.set(1, new FakeActor());
+    const d = new Decorations(DEFAULT_COLORS, () => {});
+    d.apply({...border(1), frames: [{nodeId: 3, rect: R(0, 0, 400, 300)}]});
+    d.destroy();
+    d.destroy();                       // idempotent, as disable() is
+    expect(disposedAccesses()).toEqual([]);
+    expect(liveActors()).toEqual([]);
+  });
 });
-it('skips a window whose actor has gone away between plan and render', () => {
-  // Review Focus: a window destroyed after commit computed the plan.
-  // The renderer must not write to a disposed actor; the fakes record such access.
-});
-it('does not interpret markup in a tab title', () => {
-  // Review Focus: titles come from arbitrary applications.
-  // Assert the label received the literal text, with use_markup never enabled.
-});
-it('destroys every actor on destroy()', () => { /* borders, frames and rows all gone; fakes report no post-destroy access */ });
 ```
 
-Write each body out in full against the fakes; do not leave the comments as the test.
+`lastCreated(kind)`, `liveActors()`, `disposedAccesses()` and `resetFakeActors()` are helpers to add
+beside the existing doubles in `test/unit/shell/fakes/actors.ts`; follow the naming already there
+rather than inventing a parallel scheme.
 
 - [ ] **Step 2: Run the tests and watch them fail**
 
@@ -459,22 +575,117 @@ git commit -m "feat: render the decoration plan"
 
 **Interfaces:**
 - Consumes: `PillState` from `src/runtime/model`; `Colors`.
-- Produces: `class MonitorBars { constructor(onPill: (index: number) => void); setPills(pills: PillState[]): void; setMode(name: string | null): void; setColors(colors: Colors): void; setVisible(visible: boolean): void; destroy(): void; }`
+- Produces: `class MonitorBars { constructor(onPill: (index: number) => void); setPills(pills: PillState[]): void; setMode(name: string | null): void; setColors(colors: Colors): void; setVisible(visible: boolean): void; monitorsChanged(): void; destroy(): void; }`
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `test/unit/shell/bars.test.ts` with a fake `Main.layoutManager` exposing `monitors`, `primaryIndex`, `addChrome`, `untrackChrome` and `removeChrome`. Cover:
+Create `test/unit/shell/bars.test.ts` with a fake `Main.layoutManager` exposing `monitors`,
+`primaryIndex`, `addChrome`, `untrackChrome` and `removeChrome`, recording every call.
 
 ```typescript
-it('creates one bar per non-primary monitor and none for the primary', () => { /* 2 monitors, primary 0 -> exactly 1 bar */ });
-it('reserves strut space along the monitor edge', () => { /* addChrome called with affectsStruts: true */ });
-it('mirrors the same pills onto every bar', () => { /* setPills -> each bar shows the same names and the same active index */ });
-it('removes a bar and releases its strut when its monitor goes away', () => {
-  // Review Focus: a stale strut would shrink the work area of a monitor that no longer exists.
-  // monitors changes from 2 to 1 -> untrackChrome then destroy, exactly once.
+import {beforeEach, describe, expect, it, vi} from 'vitest';
+import type {PillState} from '../../../src/runtime/model';
+import {DEFAULT_COLORS} from '../../../src/config/model';
+
+const chrome: Array<{actor: FakeActor; params: {affectsStruts?: boolean}}> = [];
+const untracked: FakeActor[] = [];
+let monitors = [
+  {index: 0, x: 0, y: 0, width: 1728, height: 1048},
+  {index: 1, x: 1728, y: 0, width: 1920, height: 1080},
+];
+let primaryIndex = 0;
+
+vi.mock('resource:///org/gnome/shell/ui/main.js', () => ({
+  layoutManager: {
+    get monitors() { return monitors; },
+    get primaryIndex() { return primaryIndex; },
+    addChrome: (actor: FakeActor, params = {}) => { chrome.push({actor, params}); },
+    untrackChrome: (actor: FakeActor) => { untracked.push(actor); },
+    removeChrome: (actor: FakeActor) => { untracked.push(actor); },
+  },
+}));
+
+const {MonitorBars} = await vi.importActual<{
+  MonitorBars: new (onPill: (index: number) => void) => {
+    setPills(pills: PillState[]): void;
+    setMode(name: string | null): void;
+    setColors(colors: typeof DEFAULT_COLORS): void;
+    setVisible(visible: boolean): void;
+    monitorsChanged(): void;
+    destroy(): void;
+  };
+}>('../../../src/shell/bars');
+
+const pills: PillState[] = [
+  {name: '1:I', active: true, occupied: true},
+  {name: '2:II', active: false, occupied: false},
+];
+
+beforeEach(() => {
+  chrome.length = 0; untracked.length = 0; resetFakeActors();
+  monitors = [{index: 0, x: 0, y: 0, width: 1728, height: 1048},
+              {index: 1, x: 1728, y: 0, width: 1920, height: 1080}];
+  primaryIndex = 0;
 });
-it('destroys every bar on destroy()', () => { /* no post-destroy actor access recorded */ });
+
+describe('MonitorBars', () => {
+  it('creates one bar per non-primary monitor and none for the primary', () => {
+    new MonitorBars(() => {});
+    expect(chrome).toHaveLength(1);
+    expect(chrome[0].actor.geometry.x).toBe(1728);
+  });
+
+  it('reserves strut space along the monitor edge', () => {
+    new MonitorBars(() => {});
+    expect(chrome[0].params.affectsStruts).toBe(true);
+    expect(chrome[0].actor.geometry.y).toBe(0);
+    expect(chrome[0].actor.geometry.width).toBe(1920);
+  });
+
+  it('mirrors the same pills onto every bar', () => {
+    const bars = new MonitorBars(() => {});
+    bars.setPills(pills);
+    expect(labelsOf(chrome[0].actor)).toEqual(['1:I', '2:II']);
+    expect(activeIndexOf(chrome[0].actor)).toBe(0);
+  });
+
+  it('switches the shared workspace when a mirrored pill is clicked', () => {
+    const switched: number[] = [];
+    const bars = new MonitorBars(i => switched.push(i));
+    bars.setPills(pills);
+    pillsOf(chrome[0].actor)[1].emit('clicked');
+    expect(switched).toEqual([1]);
+  });
+
+  it('removes a bar and releases its strut when its monitor goes away', () => {
+    // Review Focus: a stale strut would shrink the work area of a monitor
+    // that no longer exists.
+    const bars = new MonitorBars(() => {});
+    const actor = chrome[0].actor;
+    monitors = [monitors[0]];
+    bars.monitorsChanged();
+    expect(untracked).toContain(actor);
+    expect(actor.destroyCount).toBe(1);
+  });
+
+  it('hides every bar when the session has no windows', () => {
+    const bars = new MonitorBars(() => {});
+    bars.setVisible(false);
+    expect(chrome[0].actor.visible).toBe(false);
+  });
+
+  it('destroys every bar on destroy(), and touches none afterwards', () => {
+    const bars = new MonitorBars(() => {});
+    bars.destroy();
+    bars.destroy();
+    expect(disposedAccesses()).toEqual([]);
+    expect(liveActors()).toEqual([]);
+  });
+});
 ```
+
+`labelsOf`, `activeIndexOf` and `pillsOf` read the fake actor tree; add them beside the helpers
+Task 4 introduced rather than duplicating them.
 
 - [ ] **Step 2: Run the tests and watch them fail**
 
@@ -512,13 +723,57 @@ git commit -m "feat: mirrored workspace bar on every non-primary monitor"
 
 - [ ] **Step 1: Write the failing tests**
 
+Create `test/unit/shell/rowHeight.test.ts`, mocking `gi://St` so the label's preferred height and
+its constructor are controllable:
+
 ```typescript
-it('returns the themed actor\'s preferred height', () => { /* fake actor reports 26 -> 26 */ });
-it('falls back to 24 when the theme reports zero', () => {
-  // Review Focus: a zero measurement would silently restore the pre-3A layout.
-  expect(measureRowHeight()).toBe(FALLBACK_ROW_HEIGHT);
+import {beforeEach, describe, expect, it, vi} from 'vitest';
+
+let preferred: [number, number] = [0, 26];
+let constructorThrows = false;
+
+vi.mock('gi://St', () => ({
+  default: {
+    Label: class {
+      constructor() { if (constructorThrows) throw new Error('no theme'); }
+      get_preferred_height() { return preferred; }
+      destroy() {}
+    },
+  },
+}));
+
+const {measureRowHeight, FALLBACK_ROW_HEIGHT} = await vi.importActual<{
+  measureRowHeight(): number;
+  FALLBACK_ROW_HEIGHT: number;
+}>('../../../src/shell/rowHeight');
+
+beforeEach(() => { preferred = [0, 26]; constructorThrows = false; });
+
+describe('measureRowHeight', () => {
+  it('returns the themed actor\'s preferred height', () => {
+    expect(measureRowHeight()).toBe(26);
+  });
+
+  it('falls back when the theme reports zero', () => {
+    // Review Focus: a zero measurement would silently restore the pre-3A
+    // layout, with tab bars invisible and children back at the full rect.
+    preferred = [0, 0];
+    expect(measureRowHeight()).toBe(FALLBACK_ROW_HEIGHT);
+    expect(FALLBACK_ROW_HEIGHT).toBe(24);
+  });
+
+  it('falls back on a negative or non-finite measurement', () => {
+    preferred = [0, -5];
+    expect(measureRowHeight()).toBe(FALLBACK_ROW_HEIGHT);
+    preferred = [0, Number.NaN];
+    expect(measureRowHeight()).toBe(FALLBACK_ROW_HEIGHT);
+  });
+
+  it('falls back when measuring throws, without rethrowing', () => {
+    constructorThrows = true;
+    expect(measureRowHeight()).toBe(FALLBACK_ROW_HEIGHT);
+  });
 });
-it('falls back to 24 when measuring throws', () => { /* actor constructor throws -> 24, no rethrow */ });
 ```
 
 - [ ] **Step 2: Run the tests and watch them fail**
@@ -530,7 +785,7 @@ Expected: FAIL with `Cannot find module '../../../src/shell/rowHeight'`.
 
 `measureRowHeight()` builds one throwaway themed `St.Label` with the tab style class, reads `get_preferred_height(-1)[1]`, destroys it, and returns the value or `FALLBACK_ROW_HEIGHT` when it is `0`, negative, non-finite, or the call throws.
 
-In `src/extension.ts`: construct `Decorations` and `MonitorBars`, pass `decorations: {apply: plan => decorations.apply(plan), setRowHeight: h => engine.setRowHeight(h)}` into `EnginePorts`, call `engine.setRowHeight(measureRowHeight())` after `engine.start()`, re-measure on `St.Settings` `notify::font-name`, and destroy both in `disable()` beside the existing `_indicator` teardown.
+In `src/extension.ts`: construct `Decorations` and `MonitorBars`, pass `decorations: {apply: plan => decorations.apply(plan)}` into `EnginePorts`, call `engine.setRowHeight(measureRowHeight())` after `engine.start()`, re-measure on `St.Settings` `notify::font-name`, and destroy both in `disable()` beside the existing `_indicator` teardown.
 
 - [ ] **Step 4: Run the tests and verify they pass**
 
