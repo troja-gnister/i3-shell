@@ -77,10 +77,12 @@ A new pure module, `src/runtime/decoration.ts`:
 export type BorderState = 'focused' | 'focused_inactive' | 'unfocused' | 'urgent';
 
 export interface DecorationPlan {
-  borders: Array<{window: WindowId; rect: Rect; state: BorderState}>;
-  frames: Array<{rect: Rect}>;
+  borders: Array<{window: WindowId; rect: Rect; state: BorderState; width: number}>;
+  frames: Array<{nodeId: NodeId; rect: Rect}>;
   titleRows: Array<{
+    nodeId: NodeId;
     rect: Rect;
+    rowHeight: number;
     layout: 'tabbed' | 'stacked';
     tabs: Array<{window: WindowId; title: string; selected: boolean}>;
   }>;
@@ -104,8 +106,18 @@ contradict that.
 
 ### 3.3 Where the plan is produced
 
-`commit()` computes it alongside the rectangles it already computes and hands it to the indicator
-port's sibling, a new `decorations` port. Nothing outside `commit()` may produce or mutate a plan.
+`commit()` computes the plan alongside the rectangles it already computes and pushes it through a
+new `EnginePorts` member:
+
+```ts
+decorations: {
+  apply(plan: DecorationPlan): void;
+  setRowHeight(height: number): void;   // shell -> engine, see 4.2
+};
+```
+
+Nothing outside `commit()` may produce or mutate a plan. `apply` is called on every commit, including
+the commit that empties it, so the renderer never has to infer teardown.
 
 ## 4. Shell
 
@@ -113,9 +125,10 @@ port's sibling, a new `decorations` port. Nothing outside `commit()` may produce
 
 A renderer with no decisions in it. On each plan:
 
-- Diff against existing actors by key (`window` id for borders, container rect identity for frames
-  and rows); reuse on match, restyle and re-geometry on change, destroy what the plan no longer
-  contains.
+- Diff against existing actors by **stable key**: `window` for borders, `nodeId` for frames and
+  title rows. Keying on a rectangle would be wrong -- every resize would destroy and rebuild actors
+  that only moved -- and `nodeId` already survives a `tree_flatten` that preserves the container.
+  Reuse on match, restyle and re-geometry on change, destroy what the plan no longer contains.
 - Border actors are `St.Widget` in `global.window_group`, kept immediately below their window actor
   so raising a window raises its border with it.
 - Colours come from `effectiveColors()` (main spec §16.1), so borders follow the GNOME accent when
@@ -129,9 +142,9 @@ A renderer with no decisions in it. On each plan:
 
 The shell constructs one themed title actor at startup and takes its preferred height. The value is
 passed to the engine and re-measured when `St.Settings` reports a font or theme change, which
-triggers a relayout by the same route a monitor change does. A failure to measure falls back to a
-documented constant rather than zero, so a theme problem degrades to slightly wrong spacing instead
-of overlapping windows.
+triggers a relayout by the same route a monitor change does. A failure to measure falls back to **24 logical pixels** rather
+than zero, so a theme problem degrades to slightly wrong spacing instead of windows overlapping
+their own title rows. Zero is never accepted as a measurement.
 
 ### 4.3 `src/shell/bars.ts`
 
@@ -180,8 +193,11 @@ existing actor doubles that *record* disposed-actor access rather than throwing.
 Phase 2B shutdown defect was found and the same gate must cover the new actors.
 
 **Integration, in the nested shell:**
-- A tabbed container's children sit below the title row by exactly the measured height.
-- A stacked container reserves one row per child.
+- A tabbed container's children sit below the title row by exactly the height the engine used.
+  `GetTree` gains the container's `rowHeight` so the assertion compares against the engine's own
+  number rather than re-deriving it from the theme, which the harness cannot see.
+- A stacked container reserves one row per child: children's `y` differs from the container's `y` by
+  `rowHeight x childCount`.
 - A second virtual monitor's work area shrinks by the bar height, and tiles on it respect it.
 - No native criticals across enable, disable and shutdown with decorations present.
 
