@@ -37,11 +37,17 @@
 }
 
 .i3-shell-row {
-  /* The row box is given its container's whole rectangle, not just the band
-     the tabs occupy, so it must not paint either -- what is visible in a row
-     is the tabs in it. */
+  /* The box is the reserved band and nothing more: decorations.ts sizes it to
+     one row for a tabbed container and one row per child for a stacked one,
+     and gives every tab in it an explicit size that spans that band. So it
+     paints nothing itself -- integer division can leave a sliver of the band
+     uncovered, and a sliver of the client showing through is better than a
+     strip of whatever a bare St box looks like in the session's theme.
+
+     No `spacing` either. The tab sizes already add up to the band exactly, so
+     a gap between them would push the last tab past the box's allocation and
+     Clutter would answer by shrinking every tab to fit. */
   background-color: transparent;
-  spacing: 1px;
 }
 
 .i3-shell-tab {

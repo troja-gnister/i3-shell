@@ -130,8 +130,18 @@ A renderer with no decisions in it. On each plan:
   title rows. Keying on a rectangle would be wrong -- every resize would destroy and rebuild actors
   that only moved -- and `nodeId` already survives a `tree_flatten` that preserves the container.
   Reuse on match, restyle and re-geometry on change, destroy what the plan no longer contains.
-- Border actors are `St.Widget` in `global.window_group`, kept immediately below their window actor
-  so raising a window raises its border with it.
+- Border actors are `St.Widget` in `global.window_group`, kept immediately **above** their window
+  actor so raising a window raises its border with it. Above, not below: a border is given the
+  leaf's rect, which is the very rect the window is moved to, so an actor below an opaque window
+  paints nothing anyone can see. The actor is a ring -- an outline with a transparent centre, which
+  `stylesheet.css` guarantees by keeping `.i3-shell-border` backgroundless -- and it is
+  `reactive: false`, without which an actor covering the client would swallow the input it covers.
+
+  **The trade-off, taken deliberately.** The ring overlaps the client's outermost `width` pixels.
+  i3 does not: it shrinks the client instead. Insetting the client here means subtracting the
+  border width inside `layoutWithRects`, which is Layer 0 arithmetic and rewrites every rectangle
+  assertion in both suites, so it is a **Phase 4 option** and not a Phase 3A one. Until then a
+  border is drawn over the edge of its window rather than beside it.
 - Colours come from `effectiveColors()` (main spec §16.1), so borders follow the GNOME accent when
   the config leaves `client.focused` unset, and a config that sets it still wins.
 - Width comes from the plan, never from the renderer's own reading of config. The engine resolves it

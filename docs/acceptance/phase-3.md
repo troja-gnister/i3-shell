@@ -166,16 +166,20 @@ below are the ones in `examples/i3-shell.config`: `$mod+a` focus parent, `$mod+w
 
 ## Automated evidence (not acceptance)
 
-Run with `bash test/integration/run.sh` in a private nested GNOME Shell — separate bus, settings,
-runtime and Wayland socket, never the live session. It ticks nothing above.
+Run with `bash test/integration/run.sh` on 2026-09-23 in a private nested GNOME Shell — separate
+bus, settings, runtime and Wayland socket, never the live session. **228 assertions, exit 0, no
+native criticals.** It ticks nothing above.
 
 | Scenario | What it pins | Result |
 |---|---|---|
-| Retained Phase 1 and Phase 2 checks (A1–A14) | unchanged tiling, sessions, settings, name conflict | *(fill in from the run)* |
-| `scenario_tabbed_stacked` | a tabbed/stacked container's children share the parent rect **minus the title row** | *(fill in from the run)* |
-| `scenario_decorations` | one row for tabbed and one row per child for stacked, as real GTK frames; `$mod+e` restores the rectangles byte for byte | *(fill in from the run)* |
-| Two virtual outputs | the secondary work area is shorter than its monitor by the bar's strut, and tiles there start below the bar | *(fill in from the run)* |
-| Native-critical gate | no GJS/Mutter `CRITICAL` across enable, disable and shutdown with decorations present | *(fill in from the run)* |
+| Retained Phase 1 and Phase 2 checks (A1–A14) | unchanged tiling, sessions, settings, name conflict | passed |
+| `scenario_tabbed_stacked` (10 assertions) | a tabbed/stacked container's children share the parent rect **minus the title row** | passed |
+| `scenario_decorations` (18 assertions) | one row for tabbed and one row per child for stacked, as real GTK frames; `$mod+e` restores the rectangles byte for byte | passed — the live theme measured **29px** per row (a tabbed child started at y=61 in a work area starting at y=32, and was 1019px tall in 1048) |
+| Two virtual outputs | the secondary work area is shorter than its monitor by the bar's strut, and tiles there start below the bar | passed — the bar reserved **28px**, the work area started 28px below the monitor's top, and a tile there was 692px tall on a 720px output |
+| Native-critical gate | no GJS/Mutter `CRITICAL` across enable, disable and shutdown with decorations present | passed |
+
+Unit suite alongside it: **521 tests in 48 files**, both TypeScript programs, Layer 0 and tree
+lint.
 
 Every rectangle in those scenarios is computed by an independent implementation of the layout rule
 from the reported work area, and compared against both the native Mutter frame and the engine's own
@@ -187,6 +191,18 @@ than reproduced.
 **What the automation deliberately does not cover**, and why this walk matters more in 3A than in
 any phase before it:
 
+- **No automated test asserts decoration geometry on screen — at all.** This is the gap to
+  understand before anything else on this list. The native suite asserts the *tree's* rectangles
+  (where each window was moved to) and the *work area*; the unit suite asserts actor *lifetime*
+  (built, reused, restyled, destroyed, never touched after disposal). Nothing in either one asks
+  where a decoration actor ended up on screen, how big it is, or what is above or below it. Two
+  real defects lived in exactly that gap and survived two reviews of the renderer: borders were
+  drawn *underneath* their own windows, where nothing could see them, and a title row was sized to
+  its container's whole rectangle, so its reactive tab buttons covered the client and swallowed
+  clicks meant for the window. Both were found by reasoning about the code, not by a failing test,
+  and both would have reached you. **A15's first box and A17's "clicking a tab focuses that window"
+  box are therefore carrying the weight for that whole class of defect** — please be unkind to
+  them.
 - **Nothing that is painted.** The harness reads geometry over D-Bus. Borders, the container
   outline, the tabs and their titles are `St` actors inside the shell process: their colour, their
   accent-following, which tab is highlighted, whether a title is readable, whether a click on a tab

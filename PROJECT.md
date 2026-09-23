@@ -11,7 +11,7 @@ fidelity.
 
 **State (2026-09-22):** Phase 1 and Phase 2A are merged into `main`; A1–A7 passed by user report on 2026-09-21. On `phase-2b`, all ten tasks of the approved integration plan are implemented; Tasks 1–9 are independently reviewed and Task 10 delivers the A8–A14 integration suite. **A8–A14 live acceptance is still the user's walk** — [docs/acceptance/phase-2.md](docs/acceptance/phase-2.md) is written and deliberately unchecked. The whole-branch review is outstanding. The [pause handoff](docs/handoff-2026-09-22.md) remains the record of the earlier checkpoint.
 
-Latest verification: **414/414 tests in 41 files**, both TypeScript programs, Layer 0, tree lint, and the full private nested suite — retained Phase 1 checks plus 159 Phase 2 assertions across single-monitor, two-monitor, settings-restoration and D-Bus-name-conflict scenarios. The suite found and fixed three production defects (see §5). Phase 2B is merged and pushed; `main` and `origin/main` are both `bbdf886`. Phases 3–4 remain unbuilt.
+Latest verification: **521 tests in 48 files**, both TypeScript programs, Layer 0, tree lint, and the full private nested suite — **228 integration assertions** across single-monitor (including the Phase 3A decoration geometry), two-monitor, settings-restoration and D-Bus-name-conflict scenarios. The suite found and fixed three production defects (see §5). Phase 2B is merged and pushed; `main` and `origin/main` are both `bbdf886`. Phases 3–4 remain unbuilt.
 
 ---
 
@@ -62,7 +62,7 @@ The user's i3 config (`~/.config/i3/config`) is the source of truth for behaviou
 
 ```sh
 npm ci                      # or npm install; .npmrc sets legacy-peer-deps
-npm test                    # vitest on Node — pure core + native adapter doubles (414 tests)
+npm test                    # vitest on Node — pure core + native adapter doubles (521 tests)
 npm run typecheck           # two programs: tsconfig.json (src, GNOME types) + tsconfig.test.json (tests + Layer 0, Node types)
 npm run check:layer0        # fails if Layer 0 imports gi:// / resource:// / src/shell (also part of `npm run build`)
 npm run build               # release bundle → dist/  (esbuild, single ESM file; schemas compiled)
