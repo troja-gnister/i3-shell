@@ -15,6 +15,38 @@ type Tab = TitleRow['tabs'][number];
  */
 const FRAME_WIDTH = 2;
 
+/** The strip of a container's rectangle its titles are drawn in, and one row of it. */
+interface Band {
+  height: number;
+  tabHeight: number;
+}
+
+/**
+ * How tall a title row's band is, and how tall one tab in it is.
+ *
+ * `plan.rowHeight` is the height of ONE row, whatever the layout:
+ * src/runtime/decoration.ts passes DecorationInput.rowHeight straight into
+ * every title row, unmultiplied. (The D-Bus snapshot's identically named field
+ * is a different number -- src/runtime/snapshot.ts publishes
+ * rowHeight * children.length for a stacked container -- so arithmetic must
+ * never be carried from one to the other.)
+ *
+ * The multiplying therefore happens here, and it has to reproduce exactly what
+ * the engine already reserved when it laid the children out
+ * (layoutWithRects(), src/tree/layout.ts): one row for `tabbed`, one row per
+ * child for `stacked` -- i3 keeps every stacked title visible at once -- and
+ * the whole band clamped to a container too short to hold it. A band any
+ * taller than that covers the client it titles.
+ */
+function bandOf(row: TitleRow): Band {
+  // The count comes from the tabs about to be drawn, not from the container's
+  // children: decorationPlan() drops a fullscreen child's tab, and the band
+  // must be as tall as what goes in it, never taller.
+  const rows = row.layout === 'stacked' ? Math.max(1, row.tabs.length) : 1;
+  const height = Math.min(row.rect.height, row.rowHeight * rows);
+  return {height, tabHeight: Math.floor(height / rows)};
+}
+
 interface BorderEntry {
   actor: St.Widget;
 }
@@ -162,7 +194,24 @@ export class Decorations {
       entry.actor.set_size(border.rect.width, border.rect.height);
       const colorSet = colorSetFor(this._colors, border.state);
       entry.actor.set_style(`border: ${border.width}px solid ${colorSet.border};`);
-      global.window_group.set_child_below_sibling(entry.actor, windowActor);
+      // ABOVE the window, not below it. A border actor is given the leaf's
+      // rect -- the very rect the window is moved to -- so below an opaque
+      // window it is invisible, which is what "the borders don't show up"
+      // meant. Styled with an outline and no background (stylesheet.css keeps
+      // `.i3-shell-border` transparent), the actor paints only its ring and
+      // the client shows through the middle.
+      //
+      // The trade-off, chosen rather than stumbled into: the ring overlaps the
+      // client's outermost `border.width` pixels. The i3-faithful alternative
+      // is to inset the client instead -- the engine shrinking every window
+      // rect by the border width so the ring sits inside the tile -- which is
+      // Layer 0 layout arithmetic and rewrites every geometry assertion in
+      // both suites; it was deliberately left for later.
+      //
+      // Load-bearing consequence: the actor must stay `reactive: false` (set
+      // at construction above), or an actor covering the client would swallow
+      // the input it covers. decorations.test.ts pins that.
+      global.window_group.set_child_above_sibling(entry.actor, windowActor);
     }
     for (const [window, entry] of [...this._borders]) {
       if (seen.has(window)) continue;
@@ -203,9 +252,17 @@ export class Decorations {
         this._rows.set(row.nodeId, entry);
         this._forgetOnDestroy(box, this._rows, row.nodeId, entry);
       }
+      const band = bandOf(row);
       entry.box.set_position(row.rect.x, row.rect.y);
-      entry.box.set_size(row.rect.width, row.rect.height);
-      this._applyTabs(entry, row);
+      // The band, never row.rect: sized to the container's whole rectangle,
+      // this box put its reactive tab buttons over the client area, where they
+      // swallowed the clicks meant for the window behind them.
+      entry.box.set_size(row.rect.width, band.height);
+      // Set on every pass rather than at construction: a container's layout
+      // can flip between tabbed and stacked (`layout stacked`) under the same
+      // NodeId, and the same box has to follow it.
+      entry.box.set_vertical(row.layout === 'stacked');
+      this._applyTabs(entry, row, band);
     }
     for (const [nodeId, entry] of [...this._rows]) {
       if (seen.has(nodeId)) continue;
@@ -213,8 +270,12 @@ export class Decorations {
     }
   }
 
-  private _applyTabs(entry: RowEntry, row: TitleRow): void {
+  private _applyTabs(entry: RowEntry, row: TitleRow, band: Band): void {
     const seen = new Set<NodeId>();
+    const count = Math.max(1, row.tabs.length);
+    // i3 gives a tabbed row equal-width tabs across the container; the last
+    // one absorbs the division's remainder so the row is spanned exactly.
+    const share = Math.floor(row.rect.width / count);
     row.tabs.forEach((tab: Tab, index: number) => {
       seen.add(tab.nodeId);
       let tabEntry = entry.tabs.get(tab.nodeId);
@@ -243,6 +304,14 @@ export class Decorations {
         entry.box.set_child_at_index(tabEntry.button, index);
       }
       tabEntry.window = tab.window;
+      // The box lays its children out along its own axis, so only the size is
+      // ours to set -- and it is what keeps a tab inside the band: a stacked
+      // tab spans the width and takes one row of the band, a tabbed one takes
+      // its share of the width and the band's whole (single-row) height.
+      const width = row.layout === 'stacked'
+        ? row.rect.width
+        : index === count - 1 ? row.rect.width - share * (count - 1) : share;
+      tabEntry.button.set_size(width, band.tabHeight);
       // Plain text only: a tab's title comes from an arbitrary application,
       // so it must never be interpreted as markup.
       tabEntry.button.label = tab.title;
