@@ -12,11 +12,20 @@ import {log} from '../../../src/shell/log';
 const theme = vi.hoisted(() => ({
   height: 26,
   constructorThrows: false,
+  tabConstructorThrows: false,
   measureThrows: false,
-  /** One entry per measurement: was the label in the stage when it was measured? */
+  /** One entry per measurement: was the row in the stage when it was measured? */
   measuredInStage: [] as boolean[],
   /** The `for_width` each measurement was asked for. */
   widths: [] as number[],
+  /**
+   * What the measured actor held at the moment it was measured, as
+   * `kind style_class` per child. Recorded here rather than read back
+   * afterwards: the row is destroyed on the way out, and Clutter's teardown
+   * unparents the children with it, so a row inspected after the call looks
+   * empty however it was built.
+   */
+  measuredChildren: [] as string[][],
 }));
 
 vi.mock('gi://St', async () => {
@@ -24,7 +33,9 @@ vi.mock('gi://St', async () => {
   return {
     default: {
       ...fakeSt,
-      Label: class extends fakeSt.Label {
+      // The row box is what gets measured: it is the actor the engine's
+      // rowHeight has to describe, padding and all.
+      BoxLayout: class extends fakeSt.BoxLayout {
         constructor(props: Record<string, unknown> = {}) {
           super(props);
           if (theme.constructorThrows) throw new Error('theme unavailable');
@@ -34,10 +45,18 @@ vi.mock('gi://St', async () => {
         get_preferred_height(forWidth: number): [number, number] {
           theme.measuredInStage.push(uiGroup.children.includes(this));
           theme.widths.push(forWidth);
+          theme.measuredChildren.push(
+            this.children.map(child => `${child.kind} ${String(child.props.style_class)}`));
           // Real St cannot answer for a widget with no theme node behind it;
           // it complains, and a caller must not assume an answer came back.
           if (theme.measureThrows) throw new Error('no theme node');
           return super.get_preferred_height(forWidth);
+        }
+      },
+      Button: class extends fakeSt.Button {
+        constructor(props: Record<string, unknown> = {}) {
+          super(props);
+          if (theme.tabConstructorThrows) throw new Error('no tab');
         }
       },
     },
@@ -47,7 +66,7 @@ vi.mock('resource:///org/gnome/shell/ui/main.js', async () =>
   (await import('./fakes/actors')).fakeMain);
 vi.mock('../../../src/shell/log', () => ({log: {info: vi.fn(), warn: vi.fn(), error: vi.fn()}}));
 
-const {fakeSt, uiGroup, resetFakeActors, liveActors, disposedAccesses, created} =
+const {fakeSt, uiGroup, resetFakeActors, liveActors, disposedAccesses, created, lastCreated} =
   await import('./fakes/actors');
 
 // The adapter's GNOME globals belong to the native TS program, so it is loaded
@@ -61,9 +80,11 @@ beforeEach(() => {
   resetFakeActors();
   theme.height = 26;
   theme.constructorThrows = false;
+  theme.tabConstructorThrows = false;
   theme.measureThrows = false;
   theme.measuredInStage.length = 0;
   theme.widths.length = 0;
+  theme.measuredChildren.length = 0;
   vi.mocked(log.error).mockClear();
 });
 
@@ -72,12 +93,24 @@ describe('measureRowHeight', () => {
     expect(measureRowHeight()).toBe(26);
   });
 
-  it('measures a tab-styled actor, for its natural width', () => {
+  it('measures a whole row -- a tab inside a row box -- for its natural width', () => {
     measureRowHeight();
-    // The row exists to hold tabs, so it is a tab that has to fit in it: any
-    // other style class measures padding and a font the tabs do not use.
-    expect(created.at(-1)!.props.style_class).toBe('i3-shell-tab');
+    // What the engine reserves is the row, and what the shell sizes to that
+    // number is the row box in decorations.ts, whose content is a tab button.
+    // Measuring a bare label instead reports the theme's line height and
+    // misses every pixel of padding either style class adds, so the tabs
+    // clip by exactly the padding the stylesheet gives them.
+    expect(lastCreated('row').kind).toBe('St.BoxLayout');
+    expect(theme.measuredChildren).toEqual([['St.Button i3-shell-tab']]);
     expect(theme.widths).toEqual([-1]);
+  });
+
+  it('measures the row box itself, not one of its children', () => {
+    measureRowHeight();
+    // A row is taller than the tab in it whenever `.i3-shell-row` has padding
+    // or a border of its own; only the box reports that.
+    expect(theme.measuredInStage).toHaveLength(1);
+    expect(lastCreated('row').preferredHeight).toBe(theme.height);
   });
 
   it('measures while the actor is in the stage, where St can resolve a theme node', () => {
@@ -129,10 +162,24 @@ describe('measureRowHeight', () => {
     expect(uiGroup.children).toEqual([]);
   });
 
+  it('falls back when building the tab throws, and leaves no row in the stage', () => {
+    // The tab is built after the row box, so this is the path where the
+    // cleanup has something to clean up.
+    theme.tabConstructorThrows = true;
+    expect(measureRowHeight()).toBe(FALLBACK_ROW_HEIGHT);
+    expect(log.error).toHaveBeenCalled();
+    // The row is this function's to clean up and it is gone from the stage.
+    // The half-built tab is not: a constructor that throws never handed one
+    // back, so there is nothing to destroy and nothing was ever parented.
+    expect(lastCreated('row').destroyed).toBe(true);
+    expect(uiGroup.children).toEqual([]);
+  });
+
   it('leaves no actor behind, in the stage or out of it', () => {
     measureRowHeight();
     measureRowHeight();
-    expect(created).toHaveLength(2);
+    // Two actors per measurement now: the row box and the tab inside it.
+    expect(created).toHaveLength(4);
     expect(liveActors()).toEqual([]);
     expect(uiGroup.children).toEqual([]);
   });
@@ -150,9 +197,9 @@ describe('measureRowHeight', () => {
     // disposedAccesses() is evidence rather than an accident of the fake --
     // measuring after destroy(), the one ordering mistake this file can make,
     // would show up.
-    const label = new fakeSt.Label({style_class: 'i3-shell-tab'});
-    label.destroy();
-    label.get_preferred_height(-1);
-    expect(disposedAccesses()).toEqual(['St.Label.get_preferred_height after dispose']);
+    const box = new fakeSt.BoxLayout({style_class: 'i3-shell-row'});
+    box.destroy();
+    box.get_preferred_height(-1);
+    expect(disposedAccesses()).toEqual(['St.BoxLayout.get_preferred_height after dispose']);
   });
 });

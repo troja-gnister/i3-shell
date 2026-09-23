@@ -23,21 +23,31 @@ export const FALLBACK_ROW_HEIGHT = 24;
  * detail: it has to be known before the first commit and re-read whenever the
  * font changes.
  *
+ * What is measured is a whole row -- a tab button inside a row box, both
+ * carrying the style classes src/shell/decorations.ts gives the real thing --
+ * and not a bare label. The row box is the actor the shell sizes to this
+ * number, so anything the stylesheet adds around the tab (the row's own
+ * padding, the tab's padding, a border on either) has to be inside the
+ * measurement. A bare label reports the theme's line height, which agrees with
+ * the row only for as long as neither class has a rule of its own; the moment
+ * one does, the engine reserves less than the row needs and the tabs clip.
+ *
  * St answers get_preferred_height from the widget's theme node, and a widget
  * outside the stage has no theme node -- it complains and reports the unthemed
- * size. So the throwaway label is parented into uiGroup for the measurement,
- * hidden so it never paints, and destroyed (which unparents it) on every path
- * out, including the ones that throw.
+ * size. So the throwaway row is parented into uiGroup for the measurement,
+ * hidden so it never paints, and destroyed (which unparents it, and takes the
+ * tab with it) on every path out, including the ones that throw.
  */
 export function measureRowHeight(): number {
-  let label: St.Label | null = null;
+  let row: St.BoxLayout | null = null;
   try {
-    // A tab is what has to fit in the row, so it is a tab that gets measured:
-    // any other style class reports a font and a padding the tabs do not use.
-    label = new St.Label({style_class: 'i3-shell-tab', text: 'Ag'});
-    label.hide();
-    Main.uiGroup.add_child(label);
-    const [, natural] = label.get_preferred_height(-1);
+    row = new St.BoxLayout({style_class: 'i3-shell-row'});
+    // Only the row is hidden, never the tab: Clutter leaves an invisible child
+    // out of its parent's preferred size, which would measure an empty box.
+    row.hide();
+    row.add_child(new St.Button({style_class: 'i3-shell-tab', label: 'Ag'}));
+    Main.uiGroup.add_child(row);
+    const [, natural] = row.get_preferred_height(-1);
     if (!Number.isFinite(natural) || natural <= 0) return FALLBACK_ROW_HEIGHT;
     // Themed heights are fractional once a scale factor is involved, and a row
     // a pixel shorter than its content clips the title it exists to show.
@@ -46,6 +56,6 @@ export function measureRowHeight(): number {
     log.error('could not measure the title row height; using the fallback', e);
     return FALLBACK_ROW_HEIGHT;
   } finally {
-    label?.destroy();
+    row?.destroy();
   }
 }

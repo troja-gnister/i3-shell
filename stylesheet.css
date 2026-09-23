@@ -13,3 +13,50 @@
   border-radius: 4px;
   font-weight: bold;
 }
+
+/*
+ * Phase 3A chrome. src/shell/decorations.ts and src/shell/bars.ts set every
+ * actor's geometry, and every colour that carries state (border colour, tab
+ * background and text), as an inline style -- so the rules below supply only
+ * what the renderers have no opinion about.
+ *
+ * A style class with no rule at all is not a neutral default: it is whatever
+ * the session's theme says about a bare St widget of that kind, which for a
+ * tab is a label with no padding -- tighter than i3's title bars, and measured
+ * as such by src/shell/rowHeight.ts. The padding below is therefore a layout
+ * input, not decoration: it is inside the number that function reports and the
+ * engine reserves at the top of every tabbed and stacked container.
+ */
+
+.i3-shell-border,
+.i3-shell-frame {
+  /* Only the outline paints. The interior of a border actor is the window it
+     surrounds, and the interior of a frame is the container it outlines; a
+     background here would hide what the decoration exists to point at. */
+  background-color: transparent;
+}
+
+.i3-shell-row {
+  /* The row box is given its container's whole rectangle, not just the band
+     the tabs occupy, so it must not paint either -- what is visible in a row
+     is the tabs in it. */
+  background-color: transparent;
+  spacing: 1px;
+}
+
+.i3-shell-tab {
+  /* The row is as tall as this padding makes it; see the note above. */
+  padding: 3px 8px;
+}
+
+.i3-shell-monitor-bar {
+  /* Nothing in the GNOME theme describes this actor, and a bar that paints
+     nothing would leave the pills floating on the wallpaper while still
+     reserving a strut. GNOME's own panel is a dark translucent band and these
+     bars are its counterpart on the other monitors. */
+  background-color: rgba(0, 0, 0, 0.85);
+  /* Horizontal only: bars.ts takes the bar's height from the preferred height
+     of the box inside it, which does not include this actor's own padding, so
+     vertical padding here would be reserved by nobody and clip the pills. */
+  padding: 0 6px;
+}
