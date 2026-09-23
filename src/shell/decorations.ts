@@ -205,7 +205,12 @@ export class Decorations {
       entry.actor.set_position(border.rect.x, border.rect.y);
       entry.actor.set_size(border.rect.width, border.rect.height);
       const colorSet = colorSetFor(this._colors, border.state);
-      entry.actor.set_style(`border: ${border.width}px solid ${colorSet.border};`);
+      // Clamped and rounded on the way into the stylesheet: `border pixel -5`
+      // parses as a finite number and reaches here verbatim, and CSS has no
+      // negative or fractional border width -- St would drop the whole
+      // declaration and the border would vanish rather than be turned off.
+      const width = Math.max(0, Math.round(border.width));
+      entry.actor.set_style(`border: ${width}px solid ${colorSet.border};`);
       // ABOVE the window, not below it. A border actor is given the leaf's
       // rect -- the very rect the window is moved to -- so below an opaque
       // window it is invisible, which is what "the borders don't show up"

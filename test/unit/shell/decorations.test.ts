@@ -530,6 +530,23 @@ describe('Decorations', () => {
     expect(actor.geometry).toEqual(R(0, 0, 10, 10));
   });
 
+  it('clamps a border width the CSS could not carry', () => {
+    // `border pixel -5` parses as a finite number and travels all the way
+    // here: Number('-5') is finite, so the command parser keeps it, the engine
+    // stores it as an override, and the plan hands it over verbatim. A CSS
+    // `border: -5px solid` is invalid and St drops the whole declaration, so
+    // the border silently vanishes instead of going away on purpose. A
+    // fraction (`border pixel 2.5`) is just as reachable and rounds.
+    resolvable.set(1, fakeWindow());
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    d.apply({borders: [{window: 1, rect: R(0, 0, 10, 10), state: 'focused', width: -5}], frames: [], titleRows: []});
+    expect(lastCreated('border').props.style)
+      .toBe(`border: 0px solid ${DEFAULT_COLORS.focused.border};`);
+    d.apply({borders: [{window: 1, rect: R(0, 0, 10, 10), state: 'focused', width: 2.5}], frames: [], titleRows: []});
+    expect(lastCreated('border').props.style)
+      .toBe(`border: 3px solid ${DEFAULT_COLORS.focused.border};`);
+  });
+
   it('sizes a tabbed row to one row height, not to the container it titles', () => {
     // The defect this suite missed: the box took row.rect -- the container's
     // whole rectangle -- so its reactive tab buttons covered the client area

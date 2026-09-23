@@ -162,4 +162,15 @@ describe('title row reservation', () => {
     const {windows} = layoutWithRects(root, {x: 0, y: 0, width: 400, height: 300});
     expect(windows.get(1)).toEqual({x: 0, y: 0, width: 400, height: 300});
   });
+
+  it('reserves nothing for a negative row height', () => {
+    // No caller passes one today -- measureRowHeight() has a floor and the
+    // engine's own default is 0 -- but a negative reservation is the one input
+    // that makes a child start ABOVE its container and be taller than it, a
+    // rectangle every consumer downstream would then trust. One clamp closes
+    // it for good rather than relying on every future caller.
+    const root = split('tabbed', [leaf(1)]);
+    const {windows} = layoutWithRects(root, {x: 0, y: 0, width: 400, height: 300}, -20);
+    expect(windows.get(1)).toEqual({x: 0, y: 0, width: 400, height: 300});
+  });
 });
