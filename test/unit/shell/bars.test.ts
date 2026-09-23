@@ -2,10 +2,10 @@ import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {DEFAULT_COLORS} from '../../../src/config/model';
 import type {Colors} from '../../../src/config/model';
 import type {PillState} from '../../../src/runtime/model';
-// Type-only: `StyledActor` is the half of the fake hierarchy that carries `label`.
-// The classes themselves come in through the dynamic import below, so they resolve
-// through the same mocked module `gi://St` does; this import contributes no runtime code.
-import type {FakeActor, StyledActor} from './fakes/actors';
+// Type-only: the classes themselves come in through the dynamic import below, so
+// they resolve through the same mocked module `gi://St` does; this import
+// contributes no runtime code.
+import type {FakeActor} from './fakes/actors';
 
 vi.mock('gi://Clutter', async () => ({default: (await import('./fakes/actors')).fakeClutter}));
 vi.mock('gi://St', async () => ({default: (await import('./fakes/actors')).fakeSt}));
@@ -14,8 +14,10 @@ vi.mock('resource:///org/gnome/shell/ui/main.js', async () =>
 // guard() (src/shell/util/signals.ts) logs through this when a pill's callback throws.
 vi.mock('../../../src/shell/log', () => ({log: {info: vi.fn(), warn: vi.fn(), error: vi.fn()}}));
 
-const {criticals, layout, trackedChrome, resetFakeActors, liveActors, disposedAccesses, created} =
-  await import('./fakes/actors');
+const {
+  criticals, layout, trackedChrome, resetFakeActors, liveActors, disposedAccesses, created,
+  pillsOf, labelsOf, activeIndexOf, modeLabelOf,
+} = await import('./fakes/actors');
 
 type Actor = FakeActor;
 
@@ -48,17 +50,8 @@ const pills: PillState[] = [
 /** Every bar currently in the chrome, in the order it was added. */
 const bars = (): Actor[] => trackedChrome();
 
-const pillsOf = (bar: Actor): StyledActor[] =>
-  bar.children[0].children.filter(child => child.props.style_class === 'i3-shell-ws') as StyledActor[];
-
-const labelsOf = (bar: Actor): string[] => pillsOf(bar).map(pill => pill.label);
-
-/** The pill styled with the focused background -- what the eye reads as "active". */
-const activeIndexOf = (bar: Actor): number =>
-  pillsOf(bar).findIndex(pill => String(pill.props.style ?? '').includes(DEFAULT_COLORS.focused.background));
-
-const modeLabelOf = (bar: Actor): StyledActor =>
-  bar.children[0].children.find(child => child.props.style_class === 'i3-shell-mode') as StyledActor;
+/** The box holding a bar's pills: what the theme actually sizes. */
+const contentBoxOf = (bar: Actor): Actor => bar.children[0];
 
 beforeEach(() => {
   resetFakeActors();
@@ -93,6 +86,47 @@ describe('MonitorBars', () => {
     expect(bars()[0].geometry.height).toBeGreaterThan(0);
   });
 
+  it('grows past the fixed height when the themed content is taller', () => {
+    // Review Focus: the bar's height is a constant but everything inside it is
+    // sized by the theme -- font, padding, scale factor. On a monitor with a
+    // different scale factor the pills outgrow the constant, so a fixed height
+    // clips them and the strut under-reserves the work area.
+    const monitorBars = new MonitorBars(() => {});
+    contentBoxOf(bars()[0]).preferredHeight = 44;
+
+    monitorBars.setPills(pills);
+
+    expect(bars()[0].geometry.height).toBe(44);
+  });
+
+  it('keeps the fixed height as a floor when the content is smaller', () => {
+    const monitorBars = new MonitorBars(() => {});
+    contentBoxOf(bars()[0]).preferredHeight = 10;
+
+    monitorBars.setPills(pills);
+
+    expect(bars()[0].geometry.height).toBe(28);
+  });
+
+  it('falls back to the floor when the actor reports no usable height', () => {
+    const monitorBars = new MonitorBars(() => {});
+    contentBoxOf(bars()[0]).preferredHeight = Number.NaN;
+
+    monitorBars.setPills(pills);
+
+    expect(bars()[0].geometry.height).toBe(28);
+  });
+
+  it('regrows when the binding mode makes the content taller', () => {
+    const monitorBars = new MonitorBars(() => {});
+    monitorBars.setPills(pills);
+    contentBoxOf(bars()[0]).preferredHeight = 40;
+
+    monitorBars.setMode('resize');
+
+    expect(bars()[0].geometry.height).toBe(40);
+  });
+
   it('mirrors the same pills onto every bar', () => {
     layout.monitors = [monitor(0, 0, 1728, 1048), monitor(1, 1728, 1920, 1080), monitor(2, 3648, 1280, 1024)];
     const monitorBars = new MonitorBars(() => {});
@@ -116,8 +150,8 @@ describe('MonitorBars', () => {
 
     expect(bars()).toHaveLength(2);
     expect(labelsOf(bars()[1])).toEqual(['1:I', '2:II']);
-    expect(modeLabelOf(bars()[1]).text).toBe('resize');
-    expect(modeLabelOf(bars()[1]).visible).toBe(true);
+    expect(modeLabelOf(bars()[1])?.text).toBe('resize');
+    expect(modeLabelOf(bars()[1])?.visible).toBe(true);
   });
 
   it('switches the shared workspace when a mirrored pill is clicked', () => {
@@ -231,11 +265,11 @@ describe('MonitorBars', () => {
     const monitorBars = new MonitorBars(() => {});
 
     monitorBars.setMode('resize');
-    expect(modeLabelOf(bars()[0]).text).toBe('resize');
-    expect(modeLabelOf(bars()[0]).visible).toBe(true);
+    expect(modeLabelOf(bars()[0])?.text).toBe('resize');
+    expect(modeLabelOf(bars()[0])?.visible).toBe(true);
 
     monitorBars.setMode(null);
-    expect(modeLabelOf(bars()[0]).visible).toBe(false);
+    expect(modeLabelOf(bars()[0])?.visible).toBe(false);
   });
 
   it('removes a bar and releases its strut when its monitor goes away', () => {

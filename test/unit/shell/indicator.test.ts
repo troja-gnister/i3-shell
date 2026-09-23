@@ -11,7 +11,7 @@ vi.mock('resource:///org/gnome/shell/ui/panelMenu.js', async () =>
   (await import('./fakes/actors')).fakePanelMenu);
 vi.mock('../../../src/shell/log', () => ({log: {info: vi.fn(), warn: vi.fn(), error: vi.fn()}}));
 
-const {criticals, panel, resetActors} = await import('./fakes/actors');
+const {criticals, panel, resetActors, labelsOf, activeIndexOf} = await import('./fakes/actors');
 
 interface IndicatorLike {
   setMode(name: string | null): void;
@@ -54,8 +54,8 @@ describe('panel indicator lifetime', () => {
     expect(criticals).toEqual([]);
     const button = panel.button;
     expect(button).not.toBeNull();
-    const created = button!.children[0].children.filter(child => child.kind === 'St.Button');
-    expect(created.map(child => (child as unknown as {label: string}).label)).toEqual(['1', '2', '3']);
+    expect(labelsOf(button!)).toEqual(['1', '2', '3']);
+    expect(activeIndexOf(button!)).toBe(1);
   });
 
   it('touches nothing once the shell destroys the panel button under it', () => {

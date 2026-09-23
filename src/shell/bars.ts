@@ -4,15 +4,15 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {DEFAULT_COLORS} from '../config/model';
 import type {Colors} from '../config/model';
 import type {PillState} from '../runtime/model';
-import {samePills} from './util/pills';
+import {applyMode, createModeLabel, createPill, samePills, stylePill, styleModeLabel} from './util/pills';
 import {guard} from './util/signals';
 
 /**
- * A bar's height. GNOME's panel takes its height from the theme, but these bars
- * are ours and no theme describes them, so the height is a decision rather than
- * a measurement -- and it has to be a stable one: addChrome({affectsStruts:
- * true}) turns it straight into the work area every window on that monitor is
- * tiled into.
+ * The shortest a bar may be. It is a floor, not a size: no theme describes
+ * these bars, but everything inside one -- font, padding, scale factor -- is
+ * themed, so on a monitor with a different scale factor the content outgrows
+ * any constant. A bar shorter than its content clips the pills and, worse,
+ * under-reserves the strut, so windows tile underneath it.
  */
 const BAR_HEIGHT = 28;
 
@@ -25,6 +25,8 @@ interface MonitorGeometry {
 }
 
 interface Bar {
+  /** Where this bar's monitor is; kept so a re-measure can resize without a rebuild. */
+  monitor: MonitorGeometry;
   /** The chrome actor: spans its monitor's full width at that monitor's top edge. */
   actor: St.BoxLayout;
   /** Holds the pills and the mode label, the way the panel indicator's box does. */
@@ -75,13 +77,17 @@ export class MonitorBars {
     for (const bar of [...this._bars]) {
       this._renderPills(bar);
       this._restyle(bar);
+      this._resize(bar);
     }
   }
 
   setMode(name: string | null): void {
     this._mode = name;
     if (this._destroyed) return;
-    for (const bar of [...this._bars]) this._renderMode(bar);
+    for (const bar of [...this._bars]) {
+      this._renderMode(bar);
+      this._resize(bar);      // a mode label can be taller than the pills beside it
+    }
   }
 
   setColors(colors: Colors): void {
@@ -137,14 +143,14 @@ export class MonitorBars {
     const actor = new St.BoxLayout({style_class: 'i3-shell-monitor-bar'});
     const box = new St.BoxLayout({style_class: 'i3-shell-bar', y_align: Clutter.ActorAlign.CENTER});
     actor.add_child(box);
-    const modeLabel = new St.Label({style_class: 'i3-shell-mode', y_align: Clutter.ActorAlign.CENTER});
-    modeLabel.hide();
+    const modeLabel = createModeLabel();
     box.add_child(modeLabel);
-    const bar: Bar = {actor, box, pills: new Map(), modeLabel};
+    const bar: Bar = {monitor, actor, box, pills: new Map(), modeLabel};
 
     // Every actor drops its own reference when it is destroyed, so one the
     // shell disposes behind our back cannot leave a dangling entry a later
-    // render writes into -- the defect src/shell/indicator.ts:31 describes.
+    // render writes into -- the defect src/shell/indicator.ts describes on
+    // its own `_destroyed` field.
     actor.connect('destroy', guard('monitor bar destroy', () => {
       const at = this._bars.indexOf(bar);
       if (at >= 0) this._bars.splice(at, 1);
@@ -156,28 +162,35 @@ export class MonitorBars {
     // A strut is only reserved for an actor that lies along a monitor edge, so
     // the bar spans the monitor's full width at its top.
     actor.set_position(monitor.x, monitor.y);
-    actor.set_size(monitor.width, BAR_HEIGHT);
     if (!this._visible) actor.hide();
     this._bars.push(bar);
+
+    // A bar built later -- a display plugged in mid-session -- starts life
+    // showing whatever the others already show. Fill it before measuring it,
+    // and measure it before the layout manager reads it for the strut.
+    this._renderPills(bar);
+    this._renderMode(bar);
+    this._restyle(bar);
+    this._resize(bar);
     // The same call GNOME's own panel makes: affectsStruts keeps windows out
     // from under the bar, trackFullscreen hides it for a fullscreen window on
     // that monitor.
     Main.layoutManager.addChrome(actor, {affectsStruts: true, trackFullscreen: true});
+  }
 
-    // A bar built later -- a display plugged in mid-session -- starts life
-    // showing whatever the others already show.
-    this._renderPills(bar);
-    this._renderMode(bar);
-    this._restyle(bar);
+  /** Spans the monitor's width; takes its height from the themed content, never less than the floor. */
+  private _resize(bar: Bar): void {
+    const [, natural] = bar.box.get_preferred_height(-1);
+    // An actor with no theme attached yet reports nothing useful; the floor
+    // is the answer then, not NaN.
+    const height = Number.isFinite(natural) ? Math.max(BAR_HEIGHT, Math.ceil(natural)) : BAR_HEIGHT;
+    bar.actor.set_size(bar.monitor.width, height);
   }
 
   private _renderPills(bar: Bar): void {
     this._states.forEach((_state, index) => {
       if (bar.pills.has(index)) return;
-      const pill = new St.Button({
-        style_class: 'i3-shell-ws', reactive: true, can_focus: false, track_hover: true,
-      });
-      pill.connect('clicked', guard('clicked', () => this._onPill(index)));
+      const pill = createPill(() => this._onPill(index));
       pill.connect('destroy', guard('monitor pill destroy', () => {
         if (bar.pills.get(index) === pill) bar.pills.delete(index);
       }));
@@ -191,14 +204,7 @@ export class MonitorBars {
   }
 
   private _renderMode(bar: Bar): void {
-    const label = bar.modeLabel;
-    if (!label) return;
-    if (this._mode === null) {
-      label.hide();
-    } else {
-      label.text = this._mode;
-      label.show();
-    }
+    if (bar.modeLabel) applyMode(bar.modeLabel, this._mode);
   }
 
   private _restyle(bar: Bar): void {
@@ -209,19 +215,9 @@ export class MonitorBars {
     bar.actor.set_style(`background-color: ${c.unfocused.background};`);
     this._states.forEach((state, index) => {
       const pill = bar.pills.get(index);
-      if (!pill) return;
-      // Plain text: a workspace name comes from the user's config, never markup.
-      pill.label = state.name;
-      if (state.active) {
-        pill.set_style(`background-color: ${c.focused.background}; color: ${c.focused.text};`);
-        pill.opacity = 255;
-      } else {
-        pill.set_style(`background-color: transparent; color: ${c.unfocused.text};`);
-        pill.opacity = state.occupied ? 255 : 128;
-      }
+      if (pill) stylePill(pill, state, c);
     });
-    bar.modeLabel?.set_style(
-      `background-color: ${c.focusedInactive.background}; color: ${c.focusedInactive.text};`);
+    if (bar.modeLabel) styleModeLabel(bar.modeLabel, c);
   }
 
   private _teardown(): void {

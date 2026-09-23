@@ -47,6 +47,18 @@ export class FakeActor {
     return this.destroyed;
   }
 
+  /**
+   * What get_preferred_height() reports as the natural height. Real St derives
+   * it from the theme -- font size, padding, scale factor -- none of which the
+   * doubles model, so a test that cares sets it directly.
+   */
+  preferredHeight = 0;
+
+  get_preferred_height(_forWidth: number): [number, number] {
+    this.touch('get_preferred_height');
+    return [0, this.preferredHeight];
+  }
+
   /** The actor's last-set position and size, so a test can assert a move/resize without a rebuild. */
   get geometry(): {x: number; y: number; width: number; height: number} {
     return {x: this._x, y: this._y, width: this._width, height: this._height};
@@ -121,6 +133,10 @@ export class FakeActor {
     this.destroyCount++;
     if (this.touch('destroy')) return;
     this.destroyed = true;
+    // Note the order: 'destroy' is emitted while the actor is still in its
+    // parent's child list, whereas Clutter unparents first and emits after.
+    // No handler on this branch reads parent.children, so it makes no
+    // difference today -- but a handler that did would see one actor too many.
     this.emit('destroy');
     // Clutter tears the subtree down with the parent; each child unparents
     // itself as it goes, so iterate a snapshot rather than the live array.
@@ -189,6 +205,39 @@ export function lastCreated(kind: string): FakeActor {
     if (created[i].props.style_class === styleClass) return created[i];
   }
   throw new Error(`no actor created with style_class "${styleClass}"`);
+}
+
+/** Every actor under `root`, itself included, in child order. */
+function descendants(root: FakeActor): FakeActor[] {
+  return [root, ...root.children.flatMap(descendants)];
+}
+
+/**
+ * Every workspace pill under `root`, in child order. `root` is whatever holds
+ * the pill box -- the panel indicator's PanelMenu.Button or a monitor bar's
+ * chrome actor -- so one helper reads both renderings of the same PillState[].
+ */
+export function pillsOf(root: FakeActor): StyledActor[] {
+  return descendants(root).filter(actor => actor.props.style_class === 'i3-shell-ws') as StyledActor[];
+}
+
+/** The text on each pill under `root`, in order. */
+export function labelsOf(root: FakeActor): string[] {
+  return pillsOf(root).map(pill => pill.label);
+}
+
+/**
+ * Which pill reads as active. Both renderings paint every inactive pill
+ * `background-color: transparent`, so "the one with a background" is the
+ * highlight, whatever colours are in force.
+ */
+export function activeIndexOf(root: FakeActor): number {
+  return pillsOf(root).findIndex(pill => !String(pill.props.style ?? '').includes('transparent'));
+}
+
+/** The binding-mode label under `root`, if it has been built. */
+export function modeLabelOf(root: FakeActor): StyledActor | undefined {
+  return descendants(root).find(actor => actor.props.style_class === 'i3-shell-mode') as StyledActor | undefined;
 }
 
 /** Every created actor not yet destroyed. */
