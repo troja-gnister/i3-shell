@@ -1,3 +1,4 @@
+import {descendFocused} from '../tree/node';
 import type {Con, NodeId, Rect, SplitCon, WindowId} from '../tree/node';
 import type {WindowInfo} from './model';
 
@@ -11,7 +12,7 @@ export interface DecorationPlan {
     rect: Rect;
     rowHeight: number;
     layout: 'tabbed' | 'stacked';
-    tabs: Array<{window: WindowId; title: string; selected: boolean}>;
+    tabs: Array<{nodeId: NodeId; window: WindowId | null; title: string; selected: boolean}>;
   }>;
 }
 
@@ -43,9 +44,14 @@ export function decorationPlan(input: DecorationInput): DecorationPlan {
 
   function borderState(con: Con, active: boolean): BorderState {
     if (con === focused) return 'focused';
-    if (active && focused && (isAncestor(focused, con) || con.parent === focused.parent)) {
-      return 'focused_inactive';
-    }
+    if (!active || !focused) return 'unfocused';
+    if (isAncestor(focused, con)) return 'focused_inactive';
+    // "The other leaves of the focused container" only applies when the
+    // selection itself is a leaf — a SplitCon selection ($mod+a) is made
+    // visible by `isAncestor` alone above, and an unrelated sibling of that
+    // selected container must not inherit its state just because they share
+    // a grandparent.
+    if (focused.kind === 'leaf' && con.parent === focused.parent) return 'focused_inactive';
     return 'unfocused';
   }
 
@@ -65,14 +71,18 @@ export function decorationPlan(input: DecorationInput): DecorationPlan {
     if (rect && (con.layout === 'tabbed' || con.layout === 'stacked')) {
       const tabs: DecorationPlan['titleRows'][number]['tabs'] = [];
       for (const child of con.children) {
-        if (child.kind !== 'leaf') continue;
-        const childInfo = windows.get(child.window);
-        if (childInfo?.fullscreen) continue;
-        tabs.push({
-          window: child.window,
-          title: windows.get(child.window)?.title ?? '',
-          selected: child === con.focusedChild,
-        });
+        const selected = child === con.focusedChild;
+        if (child.kind === 'leaf') {
+          const childInfo = windows.get(child.window);
+          if (childInfo?.fullscreen) continue;
+          tabs.push({nodeId: child.id, window: child.window, title: childInfo?.title ?? '', selected});
+          continue;
+        }
+        // A nested container's tab shows its own focused descendant's
+        // window title, the way i3 titles a stacked/tabbed child container.
+        const descendant = descendFocused(child);
+        const title = descendant ? windows.get(descendant.window)?.title ?? '' : '';
+        tabs.push({nodeId: child.id, window: null, title, selected});
       }
       if (tabs.length > 0) {
         titleRows.push({nodeId: con.id, rect, rowHeight, layout: con.layout, tabs});

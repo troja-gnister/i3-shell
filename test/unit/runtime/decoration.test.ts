@@ -64,8 +64,58 @@ describe('decorationPlan', () => {
     });
     expect(plan.titleRows).toEqual([{
       nodeId: root.id, rect: R(0, 0, 400, 300), rowHeight: 20, layout: 'tabbed',
-      tabs: [{window: 1, title: 'Window 1', selected: false},
-             {window: 2, title: 'Second', selected: true}],
+      tabs: [{nodeId: root.children[0].id, window: 1, title: 'Window 1', selected: false},
+             {nodeId: root.children[1].id, window: 2, title: 'Second', selected: true}],
+    }]);
+  });
+
+  it('leaves an unrelated sibling of a selected container unfocused', () => {
+    // Reproduces the container-selection ($mod+a) case: A is a sibling of the
+    // selected container B, not a descendant of it, so it must not inherit
+    // focused_inactive from the (unrelated) `parent === parent` check.
+    const a = leaf(1);
+    const c = leaf(2);
+    const d = leaf(3);
+    const b = split('splitv', [c, d]);
+    const root = split('splith', [a, b]);
+    const plan = decorationPlan({
+      roots: [{root, active: true}],
+      rects: new Map<Con, Rect>([
+        [root, R(0, 0, 400, 300)],
+        [a, R(0, 0, 200, 300)],
+        [b, R(200, 0, 200, 300)],
+        [c, R(200, 0, 200, 150)],
+        [d, R(200, 150, 200, 150)],
+      ]),
+      windows: new Map([[1, info(1)], [2, info(2)], [3, info(3)]]),
+      focused: b, rowHeight: 20, borderWidth: 2, borderOverrides: new Map(),
+    });
+    expect(plan.borders.find(x => x.window === 1)!.state).toBe('unfocused');
+    expect(plan.borders.find(x => x.window === 2)!.state).toBe('focused_inactive');
+    expect(plan.borders.find(x => x.window === 3)!.state).toBe('focused_inactive');
+  });
+
+  it('titles a nested-container tab by its focused descendant and tracks its own selection', () => {
+    const nested = split('splitv', [leaf(2), leaf(3)]);
+    nested.focusedChild = nested.children[1];
+    const root = split('tabbed', [leaf(1), nested]);
+    root.focusedChild = nested;
+    const plan = decorationPlan({
+      roots: [{root, active: true}],
+      rects: new Map<Con, Rect>([[root, R(0, 0, 400, 300)]]),
+      windows: new Map([
+        [1, info(1)],
+        [2, info(2, {title: 'Second'})],
+        [3, info(3, {title: 'Third'})],
+      ]),
+      focused: nested, rowHeight: 20, borderWidth: 2, borderOverrides: new Map(),
+    });
+    expect(plan.titleRows).toEqual([{
+      nodeId: root.id, rect: R(0, 0, 400, 300), rowHeight: 20, layout: 'tabbed',
+      tabs: [
+        {nodeId: root.children[0].id, window: 1, title: 'Window 1', selected: false},
+        {nodeId: nested.id, window: null, title: 'Third', selected: true},
+      ],
     }]);
   });
 
