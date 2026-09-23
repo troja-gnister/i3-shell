@@ -5,6 +5,8 @@ import type {MonitorId} from '../tree/node';
 import {existingWindows} from './windowEnumeration';
 import {WindowTracker, type WindowBackend} from './windowTracker';
 import {NativeWindowLifecycle, watchFirstFrame} from './nativeWindowLifecycle';
+import {log} from './log';
+import {guard} from './util/signals';
 
 export class ManagedWindows extends WindowTracker<Meta.Window> {
   constructor(
@@ -26,10 +28,11 @@ function nativeWindowBackend(
     info: window => windowInfo(window, monitorId),
     focused: () => global.display.focus_window,
     watchCreated: callback => {
-      const id = global.display.connect('window-created', (_display, window) => {
-        lifecycle.track(window);
-        callback(window);
-      });
+      const id = global.display.connect('window-created',
+        guard('window-created', (_display: Meta.Display, window: Meta.Window) => {
+          lifecycle.track(window);
+          callback(window);
+        }));
       const disconnect = disconnectOnce(global.display, id);
       return () => { disconnect(); lifecycle.destroy(); };
     },
@@ -37,11 +40,21 @@ function nativeWindowBackend(
       if (event === 'removed' || lifecycle.isLive(window)) callback(event);
     }),
     firstFrame: (window, callback) => {
-      const actor = window.get_compositor_private<Meta.WindowActor>();
-      return watchFirstFrame(actor, callback);
+      // @girs types this non-nullable, but Mutter returns null until the actor
+      // exists. Connecting to null would throw into Mutter's emission and leave
+      // the window pending forever with no [i3-shell] diagnostic, so report it.
+      const actor = window.get_compositor_private<Meta.WindowActor>() as Meta.WindowActor | null;
+      if (!actor) {
+        log.warn(`window "${window.get_title() ?? ''}" has no compositor actor yet; it cannot be adopted`);
+        return () => {};
+      }
+      return watchFirstFrame(actor, guard('first-frame', callback));
     },
     activate: (window, timestamp) => {
-      window.activate(timestamp);
+      // The engine passes 0 when it has no native event timestamp of its own
+      // (a signal callback rather than a command); the current server time
+      // keeps focus-stealing prevention from dropping the activation.
+      window.activate(timestamp || global.get_current_time());
       return true;
     },
     kill: (window, timestamp) => {
@@ -141,7 +154,10 @@ function watchWindow(
 ): () => void {
   const dispose: Array<() => void> = [];
   const connectWindow = (signal: string, event: Exclude<WindowEvent['type'], 'added'>): void => {
-    const id = window.connect(signal, () => callback(event));
+    // Guarded like every other adapter callback: an exception escaping into
+    // Mutter's emission is logged without the [i3-shell] prefix, so it would
+    // be invisible to the journal filter the README documents.
+    const id = window.connect(signal, guard(signal, () => callback(event)));
     dispose.push(disconnectOnce(window, id));
   };
 
@@ -152,20 +168,22 @@ function watchWindow(
   connectWindow('notify::minimized', 'minimized');
   connectWindow('notify::fullscreen', 'fullscreen');
   connectWindow('notify::appears-focused', 'focused');
-  const focusId = global.display.connect('notify::focus-window', () => callback('focused'));
+  const focusId = global.display.connect('notify::focus-window',
+    guard('notify::focus-window', () => callback('focused')));
   dispose.push(disconnectOnce(global.display, focusId));
 
   let maximizedIdle = 0;
   const maximizedChanged = (): void => {
     if (maximizedIdle !== 0) return;
-    maximizedIdle = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+    maximizedIdle = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, guard('maximized idle', () => {
       maximizedIdle = 0;
       callback('maximized');
       return GLib.SOURCE_REMOVE;
-    });
+    }));
   };
-  const maximizedH = window.connect('notify::maximized-horizontally', maximizedChanged);
-  const maximizedV = window.connect('notify::maximized-vertically', maximizedChanged);
+  const guardedMaximized = guard('notify::maximized', maximizedChanged);
+  const maximizedH = window.connect('notify::maximized-horizontally', guardedMaximized);
+  const maximizedV = window.connect('notify::maximized-vertically', guardedMaximized);
   dispose.push(disconnectOnce(window, maximizedH), disconnectOnce(window, maximizedV));
 
   let live = true;

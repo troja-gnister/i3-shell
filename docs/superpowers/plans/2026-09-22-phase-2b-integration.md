@@ -864,8 +864,8 @@ git diff --check
 
 Inspect the release bundle for absence of debug XML/methods and verify the installation symlink points to this checkout's `dist`. Any integration failure still requires release `make install`. Do not rerun unchanged checks repeatedly after they have passed unless a later change requires it.
 
-- [ ] **Commit:** `test: verify live tree integration and document phase two acceptance`. Record actual test counts, commands, limitations and install result, rather than predicted results.
-- [ ] **Request whole-branch review using the preserved subagent workflow.** Resolve findings with focused verification and record the final outcome. Keep the phase branch until the user requests integration; the earlier Phase 2A merge/push instruction does not authorize future Phase 2B merges or pushes.
+- [x] **Commit:** `test: verify live tree integration and document phase two acceptance` (`91020d2`), with the review fixes in `bf00788` and the count corrections in `4057afa`. Actual counts, commands and install results are recorded below and in `README.md`/`PROJECT.md`.
+- [x] **Request whole-branch review using the preserved subagent workflow.** Resolve findings with focused verification and record the final outcome. Keep the phase branch until the user requests integration; the earlier Phase 2A merge/push instruction does not authorize future Phase 2B merges or pushes.
 
 ## Coverage and carry-forward audit
 
@@ -920,9 +920,55 @@ Ruling: Run the complex nested-layout/pending-split reload and selected-parent a
 | 7 — D-Bus and session lifecycle | GPT-5.6 Sol / GPT-5.6 Sol | `e477139` | 43 focused tests; 358 full-suite tests; both TypeScript programs; Layer 0; test/release builds and Debug exclusions; staged diff check | Spec compliant, quality approved; no findings. Native name-loss ownership proof assigned to Task 10. |
 | 8 — config/input follow-ups | GPT-5.6 Sol / GPT-5.6 Sol | `0772df1` | 23 focused tests; 367 full-suite tests; both TypeScript programs; staged diff check | Spec compliant, quality approved; no findings. Native exclusive grabs and re-enable proof assigned to Tasks 9–10. |
 | 9 — private GTK fixtures/native lifetime | GPT-6 Astra / GPT-6 Astra; fix re-review GPT-5.6 Sol | `bdf0cb8`, `c8b64cd` | 10 focused tests; 371 full-suite tests; both TypeScript programs/Layer 0; native smoke and Phase 1 acceptance; 14 cleanup-gate cases; release install, Debug exclusions and symlink | Fixture critical-log gate omission fixed and re-reviewed clean. Native teardown regressions fixed. Ancillary host warnings remain disclosed; visible mode and Xwayland clients are unverified. Monitor scenarios follow in Task 10. |
-| 10 — A8–A14/delivery | Opus 5 (1M) / pending | pending | 378 full-suite tests in 38 files (7 new focused tests); both TypeScript programs; Layer 0; tree lint; diff check; full `run.sh` with Phase 1 plus 142 Phase 2 assertions; release restored | A8–A14 integration, two-monitor reconfiguration, A6 settings restoration and the Control-name conflict all pass. Two production defects found and fixed after focused RED tests: disposed-actor writes in the indicator at shutdown, and CRITICAL severity for a handled D-Bus name conflict. Live checklist written and unchecked. |
+| 10 — A8–A14/delivery | Opus 5 (1M) / Opus 5 (1M) | `91020d2`, `bf00788`, `4057afa` | 373 full-suite tests in 39 files (13 new focused tests; 12 duplicate classify rows collapsed to one); both TypeScript programs; Layer 0; tree lint; diff check; full `run.sh` with Phase 1 plus 142 Phase 2 assertions; release restored | A8–A14 integration, two-monitor reconfiguration, A6 settings restoration and the Control-name conflict all pass. Two production defects found and fixed after focused RED tests: disposed-actor writes in the indicator at shutdown, and CRITICAL severity for a handled D-Bus name conflict. Live checklist written and unchecked. |
 
-Final review must triage two deferred Minors: the normalized ignored-type table does not independently test every native enum mapping (`test/unit/runtime/classify.test.ts:30`), and successful private sessions retain disclosed ancillary a11y/GJS NetworkManager/GDM/portal warnings. Neither is an open task-review blocker. Full A8–A14 integration, native name-conflict/settings restoration proof, final delivery gates and whole-branch review remain unperformed.
+Both deferred Minors were triaged by the whole-branch review. The normalized ignored-type table is
+collapsed to a single honest case, because `classifyWindow` only ever sees the normalised label and
+the native enum mapping lives in `src/shell/windows.ts`; the ancillary a11y/GJS NetworkManager/GDM/
+portal warnings in successful private sessions remain disclosed, not suppressed. **A8–A14
+integration, the native name-conflict and settings-restoration proofs, the final delivery gates and
+the whole-branch review are all performed.** What remains for Phase 2 is the user's live A8–A14 walk
+in `docs/acceptance/phase-2.md` and the two scoped decisions recorded in the Phase 1 carry-forward.
+
+Ruling: Report a rival owner of `org.i3shell.Control` with `log.warn`, not `log.error`. — GJS emits
+`console.error` as a GNOME `CRITICAL`, so the extension's deliberate, handled report of an
+environmental condition claimed the extension had failed, and tripped the harness critical gate; the
+synthetic `new Error(...)` also printed a stack trace for a condition with no exception. The one-time
+user notification is unchanged. — Cost if wrong: a genuinely unreachable control interface is a
+warning rather than a critical in the journal; `test/unit/shell/control.test.ts` pins the severity.
+
+Ruling: Drive A9/A10's `focus right` through the accelerators the reference config actually binds,
+with the contested ones disclosed rather than silently avoided. — `<Super>semicolon` works once the
+harness suppresses IBus, so the spec's own A10 wording (`$mod+j/k/l/;`) is exercised as written; the
+keys IBus contests are listed explicitly in `docs/acceptance/phase-2.md` for the live walk, which is
+the only place they can be certified. — Cost if wrong: the automated suite passes on a configuration
+the user's session does not reproduce exactly; the checklist calls that risk out by name.
+
+Ruling: Accept the IBus accelerator conflict as a scoped decision for the user rather than fixing it
+in Task 10. — Established: with IBus present a varying subset of the extension's accelerators never
+dispatches although `grab_accelerator` returned a valid action, `allowKeybinding` was called with
+`NORMAL|OVERVIEW` and `Main.actionMode` was `NORMAL`; with IBus absent all twelve probed accelerators
+dispatched 3/3 with the IBus *settings* left untouched. `org.freedesktop.ibus.panel.emoji hotkey`
+claims `<Super>semicolon` and `org.freedesktop.ibus.general.hotkey triggers` claims `<Super>space`,
+neither of which is in the five schemas of spec §13; the mechanism for the keys IBus does not claim
+is unconfirmed. Options are detect-and-warn, extending the override scan, or documenting only. —
+Cost if wrong: two of the user's configured bindings may not work in a live session until the
+decision is taken; the live checklist marks a failure there as a known conflict, not a regression.
+
+Ruling (correction, recorded because it was investigated and disproved): `g_bus_own_name` with
+`BusNameOwnerFlags.NONE` was suspected of never invoking `name_lost`, which would have made a queued
+extension silently unreachable. Direct experiment showed the opposite — `name_lost` fires when
+another connection owns the name, and `name_acquired` fires when that owner releases it, including
+across an own → unown → re-own cycle. The real cause was the test client: `g_bus_get_sync`'s shared
+connection is held by a weak reference, so dropping the last language-level reference finalised it and
+released the name. The ownership design was already correct and no production code changed.
+
+Ruling (correction): the A11 parent-selection integration check was relabelled rather than
+re-pointed. A review asked for it to present a *different* leaf; `test/unit/engine/commands.test.ts`
+pins the opposite semantics — a focus report for a different window is specified to replace the
+parent selection, while a duplicate report preserves it — so that change would have asserted against
+the spec. The check now states what it verifies, and the complementary half is asserted separately as
+a real native focus change.
 
 Ruling: Use Meta.TabList.NORMAL_ALL_MRU for per-workspace adoption instead of the NORMAL example in spec §8.5. The installed Mutter 18 API explicitly guarantees pure MRU order for this variant, including minimized windows; classification still decides which windows are managed. — Preserves the binding MRU intent rather than relying on unordered Workspace.list_windows or NORMAL grouping behavior. — Cost if wrong: adoption may include additional eligible windows or choose a different initial order; native integration must verify adoption and minimized-window behavior.
 

@@ -8,6 +8,13 @@ import {parseCommands} from './commands/parse';
 import type {Command, WorkspaceTarget} from './commands/model';
 import type {Binding, Colors, Config, Diagnostic} from './config/model';
 
+/**
+ * How many commits a window may still report itself maximized before the engine
+ * stops waiting for the unmaximize it asked for. Generous enough that the normal
+ * asynchronous round trip never reaches it.
+ */
+const UNMAXIMIZE_OBSERVATIONS = 10;
+
 export interface LoadedConfig {
   config: Config | null;
   diagnostics: Diagnostic[];
@@ -82,6 +89,7 @@ export class Engine {
   private readonly _expectedFocus = new Set<WindowId>();
   private _lastFocus: WindowId | null = null;
   private readonly _unmaximizing = new Set<WindowId>();
+  private readonly _unmaximizeAttempts = new Map<WindowId, number>();
   private readonly _forced = new Set<WindowId>();
   private _monitorInvalidation = false;
   private readonly _reconciler = new RectReconciler();
@@ -163,6 +171,9 @@ export class Engine {
       const token = this._ports.deferred.defer(() => {
         const read = this._frameReads.get(event.id);
         this._frameReads.delete(event.id);
+        // The commit publishes only when _observe queued something: relayout()
+        // and unlock stay unconditional, because scenarios use their revision
+        // bump as an ordering barrier.
         if (read) this.commit(() => this._observe(event.id, read.generation));
       });
       this._frameReads.set(event.id, {token, generation});
@@ -175,6 +186,9 @@ export class Engine {
         const location = this._tree?.location(event.id);
         const selected = this._selectedIds().includes(event.id);
         this._forget(event.id);
+        // 0 = no native event timestamp here (this is a signal callback, not a
+        // command); the windows adapter substitutes the current server time so
+        // focus-stealing prevention cannot drop the activation.
         if (selected && location?.workspace === this._tree?.activeWorkspace) this._activateSelection(0);
       } else {
         this._syncWindow(event.id, event.type === 'workspace');
@@ -272,8 +286,13 @@ export class Engine {
       if (this._disposed) return;
       this._raiseChanged();
     } else {
-      // Keep ready ids known even while the compositor has no complete topology.
-      for (const info of this._ports.windows.list()) this._windows.set(info.id, {...info, rect: {...info.rect}});
+      // Keep ready ids known even while the compositor has no complete topology,
+      // but still drop ids that are gone: the pill occupancy below is computed
+      // from this map, so a stale id would keep its workspace lit forever.
+      const live = this._ports.windows.list();
+      const ids = new Set(live.map(w => w.id));
+      for (const id of this._windows.keys()) if (!ids.has(id)) this._forget(id);
+      for (const info of live) this._windows.set(info.id, {...info, rect: {...info.rect}});
     }
     if (this._disposed) return;
     this._pills = Array.from({length: this._workspaceCount}, (_, index) => ({
@@ -318,7 +337,8 @@ export class Engine {
       const workspace = expected !== undefined && !workspaceEvent ? expected : info.workspace;
       if (location && location.workspace !== workspace) tree.remove(id);
       if (!tree.location(id) && tree.workspaces.has(workspace)) {
-        const monitor = tree.workspace(workspace).monitors.has(info.monitor!) ? info.monitor : this._topology?.primary;
+        const monitor = info.monitor !== null && tree.workspace(workspace).monitors.has(info.monitor)
+          ? info.monitor : this._topology?.primary;
         if (monitor !== undefined && monitor !== null) {
           if (this._floating(info)) tree.addFloating(id, workspace);
           else tree.insert(id, workspace, monitor);
@@ -327,13 +347,24 @@ export class Engine {
     }
     if (!info.fullscreen && !info.minimized && !this._floating(info)) {
       if (info.maximizedH || info.maximizedV) {
-        if (!this._unmaximizing.has(id)) {
+        const seen = (this._unmaximizeAttempts.get(id) ?? 0) + 1;
+        this._unmaximizeAttempts.set(id, seen);
+        if (seen > UNMAXIMIZE_OBSERVATIONS) {
+          // A client that keeps its maximized state would otherwise stay out of
+          // the layout forever, because _unmaximizing excludes it from expected.
+          if (this._unmaximizing.delete(id))
+            this._ports.log.warn(
+              `window ${id} is still maximized ${seen} commits after its unmaximize request; tiling it as it is`);
+        } else if (!this._unmaximizing.has(id)) {
           this._unmaximizing.add(id);
           const requested = this._ports.windows.unmaximize(id);
           if (this._disposed) return;
           if (!requested) this._unmaximizing.delete(id);
         }
-      } else if (this._unmaximizing.delete(id)) this._forced.add(id);
+      } else {
+        this._unmaximizeAttempts.delete(id);
+        if (this._unmaximizing.delete(id)) this._forced.add(id);
+      }
     }
   }
 
@@ -345,6 +376,7 @@ export class Engine {
     this._expectedWorkspace.delete(id);
     this._expectedFocus.delete(id);
     this._unmaximizing.delete(id);
+    this._unmaximizeAttempts.delete(id);
     this._forced.delete(id);
     this._floatingRects.delete(id);
     this._reconciler.forget(id);
@@ -354,10 +386,16 @@ export class Engine {
     if (this._lastFocus === id) this._lastFocus = null;
   }
 
-  private _observe(id: WindowId, generation: number | undefined): void {
+  /**
+   * Returns true when the observation queued a corrective re-apply, so a frame
+   * notification for a window already at its target costs nothing: measured at
+   * ~2 commits per floating move, half of which were this echo.
+   */
+  private _observe(id: WindowId, generation: number | undefined): boolean {
     const info = this._ports.windows.get(id);
-    if (!info || info.fullscreen || info.minimized || this._floating(info) || this._unmaximizing.has(id)) return;
-    if (generation !== undefined) this._reconciler.observe(id, info.rect, generation);
+    if (!info || info.fullscreen || info.minimized || this._floating(info) || this._unmaximizing.has(id)) return false;
+    if (generation === undefined) return false;
+    return this._reconciler.observe(id, info.rect, generation);
   }
 
   private _selectWindow(id: WindowId): void {

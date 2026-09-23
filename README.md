@@ -6,7 +6,7 @@ The i3 experience in GNOME 50: your `~/.config/i3/config` drives workspaces, key
 
 **Status (2026-09-22):** Phase 2B is implemented on `phase-2b`, with the full A8–A14 integration suite passing. The engine connects the tree to native windows: selection-based commands, tiling, resizing, floating windows, geometry reconciliation, monitor reconfiguration and settings restoration. A8–A14 **live** acceptance is still the user's walk — see [docs/acceptance/phase-2.md](docs/acceptance/phase-2.md). No Phase 2B merge or push has occurred.
 
-Verification: **378/378 unit tests**, both TypeScript programs, Layer 0, tree lint, and the private nested suite — retained Phase 1 checks plus 142 Phase 2 assertions across single-monitor, two-monitor, settings-restoration and D-Bus-name-conflict scenarios. A1–A7 live acceptance passed by user report on 2026-09-21. The installed `dist/` is a release build.
+Verification: **373/373 unit tests**, both TypeScript programs, Layer 0, tree lint, and the private nested suite — retained Phase 1 checks plus 142 Phase 2 assertions across single-monitor, two-monitor, settings-restoration and D-Bus-name-conflict scenarios. A1–A7 live acceptance passed by user report on 2026-09-21. The installed `dist/` is a release build.
 
 ## Prerequisites
 

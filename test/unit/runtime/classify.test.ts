@@ -28,11 +28,10 @@ describe('classifyWindow', () => {
     expect(classifyWindow({...normal, ...change})).toBe('floating');
   });
 
-  it.each([
-    ['desktop'], ['dock'], ['toolbar'], ['menu'], ['splashscreen'],
-    ['dropdown menu'], ['popup menu'], ['tooltip'], ['notification'],
-    ['combo'], ['drag-and-drop'], ['other override-redirect'],
-  ])('ignores the native %s type even when it is transient', () => {
+  // One case, not one row per native type: classifyWindow only ever sees the
+  // normalised 'ignored' label, so extra rows would pass identical input and
+  // imply coverage of the enum mapping that lives in src/shell/windows.ts.
+  it('ignores a normalised ignored type even when it is transient', () => {
     expect(classifyWindow({...normal, type: 'ignored', transient: true})).toBeNull();
   });
 

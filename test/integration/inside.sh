@@ -32,11 +32,13 @@ cleanup() {
   # Reap the GTK client before the compositor and private bus go away.
   stop_process "$FIXTURE_PID" fixture
   stop_process "$SHELL_PID" gnome-shell
-  if [[ -f "$LOG" ]] && rg -q '(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' "$LOG"; then
+  # grep -E, not rg: a missing ripgrep exits 127, the condition reads false and
+  # the gate would pass silently. Both patterns are plain ERE.
+  if [[ -f "$LOG" ]] && grep -Eq '(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' "$LOG"; then
     echo 'native criticals found in shell.log' >&2
     status=1
   fi
-  if [[ -f "$FIXTURE_LOG" ]] && rg -q 'fixture [[:alnum:]]+ failed|(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' "$FIXTURE_LOG"; then
+  if [[ -f "$FIXTURE_LOG" ]] && grep -Eq 'fixture [[:alnum:]]+ failed|(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' "$FIXTURE_LOG"; then
     echo 'fixture failures found in fixture.log' >&2
     status=1
   fi

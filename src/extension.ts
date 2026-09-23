@@ -51,6 +51,9 @@ export default class I3ShellExtension extends Extension {
     const loader = new ConfigLoader(settings);
     const geometry = new Geometry(id => this._windows?.resolve(id));
     this._geometry = geometry;
+    // Seed the stable monitor ids before any window is enumerated: ManagedWindows
+    // resolves each window's monitor through geometry.monitorId(index), which is
+    // empty until a topology has been read at least once.
     geometry.topology();
     const windows = new ManagedWindows(guard('window event', event => this._engine?.onWindowEvent(event)),
       index => geometry.monitorId(index));
@@ -104,6 +107,9 @@ export default class I3ShellExtension extends Extension {
 
     tracker.connect(Main.layoutManager, 'monitors-changed', () => engine.onMonitorsChanged());
     tracker.connect(global.display, 'workareas-changed', () => engine.relayout());
+    // Windows before the engine: start() enumerates the existing windows and
+    // arms their first-frame watches, so engine.start() adopts them in its first
+    // commit instead of one late arrival at a time.
     windows.start();
     engine.start(session.isLocked);
     const debug = __I3SHELL_TEST__ ? new DebugObject(session, engine) : null;

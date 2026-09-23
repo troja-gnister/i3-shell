@@ -1,3 +1,5 @@
+import {guard} from './util/signals';
+
 /** The signal subset shared by Meta.Window and its Clutter actor. */
 interface SignalObject {
   connect(signal: string, callback: () => void): number;
@@ -19,15 +21,17 @@ export class NativeWindowLifecycle<W extends SignalObject> {
 
   track(window: W): void {
     if (this._handlers.has(window) || this._retired.has(window)) return;
-    const starting = window.connect('unmanaging', () => {
+    // Guarded: these run inside Mutter's own emission, where an exception is
+    // logged without the [i3-shell] prefix and would strand the window.
+    const starting = window.connect('unmanaging', guard('unmanaging', () => {
       this._retired.add(window);
       this._retiring.add(window);
-    });
-    const finished = window.connect('unmanaged', () => {
+    }));
+    const finished = window.connect('unmanaged', guard('unmanaged', () => {
       this._retiring.delete(window);
       this._order = this._order.filter(candidate => candidate !== window);
       this._disconnect(window);
-    });
+    }));
     this._handlers.set(window, [starting, finished]);
   }
 
@@ -59,8 +63,8 @@ export class NativeWindowLifecycle<W extends SignalObject> {
 /** An actor may be destroyed before its pending window emits unmanaged. */
 export function watchFirstFrame(actor: SignalObject, callback: () => void): () => void {
   let live = true;
-  const frame = actor.connect('first-frame', callback);
-  const destroyed = actor.connect('destroy', () => { live = false; });
+  const frame = actor.connect('first-frame', guard('first-frame', callback));
+  const destroyed = actor.connect('destroy', guard('actor destroy', () => { live = false; }));
   return () => {
     if (!live) return;
     live = false;

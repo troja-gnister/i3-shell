@@ -1,7 +1,6 @@
 # Phase 2 acceptance — live session
 
-**Product revision:** `91020d2` on branch `phase-2b`
-(`test: verify live tree integration and document phase two acceptance`).
+**Product revision:** `4057afa` on branch `phase-2b` (Phase 2B Task 10 and its review fixes).
 **Build under test:** release `make install` (no `org.i3shell.Debug` interface or methods).
 **Environment:** GNOME Shell 50.5 / Mutter 18, Wayland, Fedora Silverblue 44.
 **Date prepared:** 2026-09-22. **Result: not yet walked — every A8–A14 box below is the user's to tick.**
@@ -101,6 +100,11 @@ Arrange `A | (B over C)` as in A9 and focus `C`.
 
 These two are the only keys the automated suite deliberately cannot certify, because the harness
 suppresses IBus to stay deterministic (see below). Check them first — they are the ones at risk.
+
+> **A failure on either of the two boxes below is a known, pre-diagnosed environmental
+> conflict, not a Phase 2B regression.** Note it and carry on with the rest of the walk —
+> it does not block acceptance. Please also record **whether it fails every time or only
+> after some logins**: the evidence says the losing set varies between sessions.
 
 - [ ] `$mod+semicolon` really moves focus right, and does **not** open the emoji picker.
       IBus claims `<Super>semicolon` through `org.freedesktop.ibus.panel.emoji hotkey`, using the
