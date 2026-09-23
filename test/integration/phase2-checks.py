@@ -22,6 +22,10 @@ CONFIG = Path(os.environ['XDG_CONFIG_HOME']) / 'i3/config'
 UUID = 'i3-shell@troja'
 DEFAULT_GRABS = 65
 RESIZE_GRABS = 11
+# Upstream Mutter 50.5, not this extension: see scenario_fullscreen_at_map and
+# the matching filter in inside.sh.
+STACK_ASSERTION = ("meta_window_set_stack_position_no_sync: "
+                   "assertion 'window->stack_position >= 0' failed")
 
 
 # --------------------------------------------------------------------------
@@ -727,6 +731,149 @@ def scenario_geometry_states():
 
 
 # --------------------------------------------------------------------------
+# a window that is already maximized when the shell first sees it
+# --------------------------------------------------------------------------
+
+def scenario_maximized_at_map():
+    """Adoption of a window that is mapped maximized, not maximized afterwards.
+
+    This is the 2026-09-23 live defect. Classification ran
+    Meta.Window.allows_resize(), which Mutter answers false for a merely
+    maximized window, and windowTracker caches the answer for the window's
+    lifetime -- so every window whose application opens maximized was filed as
+    floating forever and tiling never engaged at all. Every other fixture in
+    this file maps un-maximized, which is why the whole suite passed over a
+    feature that was completely dead on the user's desktop. Only a window that
+    is maximized at map time exercises the classification path that failed.
+    """
+    reset_windows()
+    create('MX one')
+    alone = node('splith', [leaf('MX one')], [1.0])
+    check_tiling(alone, 'MX an ordinary window takes the whole work area')
+
+    # Guard against a vacuous scenario: prove the fixture really is mapped
+    # maximized. A transient window is classified floating, so the engine never
+    # asks it to unmaximize and its mapped state can be read at leisure -- for
+    # the tiled window below the engine removes that state immediately.
+    create('MX guard', 'maximized', 'MX one')
+    guard = window_by_title('MX guard')
+    check('MX a transient maximized fixture floats', (guard['kind'], guard['state']),
+          ('floating', 'floating'))
+    wait_until(lambda: (window_by_title('MX guard')['maximizedH']
+                        and window_by_title('MX guard')['maximizedV']),
+               'MX the maximized fixture is mapped maximized')
+    ok('MX the fixture maps maximized, so the case below is real')
+    close('MX guard')
+    check_tiling(alone, 'MX the guard never disturbed the tiling')
+
+    # The case itself: a normal, genuinely resizable window, maximized at map.
+    create('MX two', 'maximized')
+    two = window_by_title('MX two')
+    check('MX a window maximized at map time is adopted as tiled', (two['kind'], two['state']),
+          ('tiled', 'tiled'))
+    assert leaf_node('MX two') is not None, 'MX two is classified tiled but is not in the tree'
+
+    # spec 19: "Maximized tiled window -> Unmaximize and retile". The engine's
+    # existing path has to carry a window that arrived maximized, not only one
+    # maximized while tiled.
+    halves = node('splith', [leaf('MX one'), leaf('MX two')], [0.5, 0.5])
+    wait_until(lambda: not window_by_title('MX two')['maximizedH']
+                       and not window_by_title('MX two')['maximizedV'],
+               'MX the engine unmaximized the window it adopted', timeout=15)
+    check_tiling(halves, 'MX a window maximized at map is unmaximized into its tile')
+
+    # ...and it is a real member of the tree, not a one-off placement: it takes
+    # the freed space when its neighbour closes, and shares it again after.
+    close('MX one')
+    check_tiling(node('splith', [leaf('MX two')], [1.0]),
+                 'MX the adopted window re-tiles when its neighbour closes')
+    ensure_selected('MX two')
+    create('MX three', 'maximized')
+    check_tiling(node('splith', [leaf('MX two'), leaf('MX three')], [0.5, 0.5]),
+                 'MX two windows that both mapped maximized tile as halves')
+
+
+# --------------------------------------------------------------------------
+# a window that is already fullscreen when the shell first sees it
+# --------------------------------------------------------------------------
+
+def scenario_fullscreen_at_map():
+    """The twin of scenario_maximized_at_map, from the same root cause.
+
+    Mutter's meta_window_recalc_features() clears has_resize_func while a window
+    is fullscreen, so the `resizeable` property is false for a player that opens
+    fullscreen exactly as allows_resize() was false for a terminal that opens
+    maximized -- and classification is cached for the window's lifetime either
+    way. Spec 19 keeps a fullscreen window's tree slot ("Fullscreen | Mutter
+    native, tree slot kept"), so such a window must be adopted tiled, must not
+    be dragged out of fullscreen, and must land in its tile when it leaves it.
+    Every other fullscreen coverage in this file starts from an already-adopted
+    window, which is the case that always worked.
+    """
+    reset_windows()
+
+    # Mutter 50.5 raises a window that is not yet in its stack when a client
+    # maps fullscreen: xdg_toplevel.set_fullscreen (meta-wayland-xdg-shell.c)
+    # -> meta_window_make_fullscreen -> meta_window_make_fullscreen_internal
+    # -> meta_window_raise (window.c) -> meta_stack_raise (stack.c), while the
+    # surface still has no buffer, so meta_window_wayland_is_stackable() is
+    # false and stack_position is still -1. meta_stack_raise early-returns when
+    # no *other* window on the workspace has a stack position, so a fullscreen
+    # window mapped alone must not produce it. That is a falsifiable prediction
+    # of the diagnosis, and it is what makes the narrow filter in inside.sh
+    # safe: if this ever counts more than zero, the filter is hiding something
+    # else and must be removed rather than widened.
+    offset = len(shell_log_text())
+    create('FS alone', 'fullscreen')
+    check('FS a fullscreen window mapped alone raises no stack assertion',
+          log_count(STACK_ASSERTION, offset), 0)
+    close('FS alone')
+
+    create('FS one')
+    check_tiling(node('splith', [leaf('FS one')], [1.0]),
+                 'FS an ordinary window takes the whole work area')
+
+    create('FS two', 'fullscreen')
+    # Read with no wait. The engine never leaves fullscreen on a window's
+    # behalf, so the state persists -- but it can only be true *here* if the
+    # fixture was already fullscreen when the shell classified it at its first
+    # frame. A fixture that went fullscreen afterwards reads false and fails
+    # loudly rather than passing vacuously; that is the guard, and it is why
+    # this scenario needs no floating stand-in the way the maximized one does.
+    two = window_by_title('FS two')
+    check('FS the fixture is fullscreen by the time it is adopted', two['fullscreen'], True)
+    check('FS a window mapped fullscreen is adopted as tiled', (two['kind'], two['state']),
+          ('tiled', 'tiled'))
+    assert leaf_node('FS two') is not None, 'FS two is classified tiled but is not in the tree'
+
+    halves = node('splith', [leaf('FS one'), leaf('FS two')], [0.5, 0.5])
+    tile = place(halves, work_area())
+    # The *tree node's* rect, not the window's expectedRect. `expectedRect` is
+    # null here by construction and that is intended, not incidental: engine.ts
+    # omits a fullscreen window from the `expected` map it hands the reconciler
+    # (spec 19 leaves its geometry to Mutter, spec 8.4 item 2 says fullscreen
+    # windows are not held to tiled geometry), and RectReconciler.plan() only
+    # ever creates state for ids in that map. So a window that was tiled first
+    # and *then* went fullscreen keeps its last target -- which is what the GS
+    # scenario asserts -- while a window fullscreen since adoption has no
+    # reconciliation state at all. That difference is asserted below, so the
+    # next person does not re-make this mistake.
+    wait_until(lambda: (leaf_node('FS two') or {}).get('rect') == tile['FS two'],
+               'FS the tree holds a half for the fullscreen window')
+    check('FS a window fullscreen since adoption has no engine target yet',
+          (window_by_title('FS two')['expectedRect'], window_by_title('FS two')['generation']),
+          (None, None))
+    check('FS the neighbour keeps its own half meanwhile',
+          window_by_title('FS one')['rect'], tile['FS one'])
+    check('FS fullscreen is left to Mutter rather than forced into the tile',
+          window_by_title('FS two')['rect'] != tile['FS two'], True)
+
+    assert fixture('Action', '(ss)', ('FS two', 'unfullscreen'))[0]
+    wait_until(lambda: not window_by_title('FS two')['fullscreen'], 'FS left fullscreen')
+    check_tiling(halves, 'FS leaving fullscreen puts the adopted window into its tile')
+
+
+# --------------------------------------------------------------------------
 # a client that refuses its tile: bounded, reported, still responsive
 # --------------------------------------------------------------------------
 
@@ -1377,6 +1524,8 @@ def single_monitor():
     scenario_a13()
     scenario_tabbed_stacked()
     scenario_geometry_states()
+    scenario_maximized_at_map()
+    scenario_fullscreen_at_map()
     scenario_stubborn()
     scenario_parent_kill_transfer()
     scenario_reload_restart()

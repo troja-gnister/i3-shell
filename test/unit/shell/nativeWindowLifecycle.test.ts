@@ -43,6 +43,13 @@ class NativeWindow extends Signals {
   minimized = false;
   maximized_horizontally = false;
   maximized_vertically = false;
+  // The four readings windowFacts uses for the fixed-size fact. Mutter reports
+  // an unset program size hint as 0 with a false "known" flag, and the default
+  // below is that pair -- an absent hint, not a zero-sized window.
+  resizeFunction = true;
+  fullscreenState = false;
+  minSize: [boolean, number, number] = [false, 0, 0];
+  maxSize: [boolean, number, number] = [false, 0, 0];
   private read(): void { if (this.retiring) throw new Error('native read on retiring window'); }
   get_compositor_private(): Signals { this.read(); return this.actor; }
   get_window_type(): number { this.read(); return 0; }
@@ -50,7 +57,9 @@ class NativeWindow extends Signals {
   get_transient_for(): null { this.read(); return null; }
   is_attached_dialog(): boolean { this.read(); return false; }
   is_on_all_workspaces(): boolean { this.read(); return false; }
-  allows_resize(): boolean { this.read(); return true; }
+  get resizeable(): boolean { this.read(); return this.resizeFunction; }
+  get_min_size(): [boolean, number, number] { this.read(); return this.minSize; }
+  get_max_size(): [boolean, number, number] { this.read(); return this.maxSize; }
   get_workspace(): {index(): number} | null { this.read(); return this.workspace; }
   get_frame_rect(): {x: number; y: number; width: number; height: number} {
     this.read(); return {x: 0, y: 32, width: 800, height: 600};
@@ -58,7 +67,7 @@ class NativeWindow extends Signals {
   get_monitor(): number { this.read(); return 0; }
   get_title(): string { this.read(); return 'fixture'; }
   get_wm_class(): string { this.read(); return 'fixture'; }
-  is_fullscreen(): boolean { this.read(); return false; }
+  is_fullscreen(): boolean { this.read(); return this.fullscreenState; }
   activate(): void { this.read(); }
   delete(): void { this.read(); }
   make_fullscreen(): void { this.read(); }
@@ -81,8 +90,9 @@ function setup() {
   let observer: ((event: WindowEvent) => void) | undefined;
   const tracker = new ManagedWindows(event => { events.push(event); observer?.(event); }, () => 1);
   tracker.start();
-  function create(draw = true): NativeWindow {
+  function create(draw = true, configure?: (window: NativeWindow) => void): NativeWindow {
     const window = new NativeWindow();
+    configure?.(window);
     order.unshift(window);
     for (const handler of display.handlers.values())
       if (handler.signal === 'window-created') handler.callback(display, window);
@@ -164,6 +174,45 @@ describe('native window lifetime', () => {
     f.tracker.destroy();
     for (const window of [a, b, c, d]) expect(window.handlers.size).toBe(0);
     expect(f.display.handlers.size).toBe(0);
+  });
+
+  // Classification happens once, at the first frame, from whatever Mutter
+  // reports then. The two cases below pin the native readings windowFacts
+  // depends on -- their names and their shapes -- which no Layer 0 test can
+  // reach, and which the 2026-09-23 live defect got wrong: allows_resize() is
+  // false for a merely maximized window, so every window opened maximized was
+  // filed as floating for its lifetime and tiling never engaged.
+  it('adopts a window that is already maximized at its first frame as tiled', () => {
+    const f = setup();
+    f.create(true, window => {
+      window.maximized_horizontally = true;
+      window.maximized_vertically = true;
+    });
+    expect(f.tracker.list().map(w => w.kind)).toEqual(['tiled']);
+    f.tracker.destroy();
+  });
+
+  it('adopts a window that is already fullscreen at its first frame as tiled', () => {
+    const f = setup();
+    // Mutter clears has_resize_func while a window is fullscreen, so this is
+    // exactly what it reports for a player that opens fullscreen.
+    f.create(true, window => {
+      window.fullscreenState = true;
+      window.resizeFunction = false;
+    });
+    expect(f.tracker.list().map(w => w.kind)).toEqual(['tiled']);
+    f.tracker.destroy();
+  });
+
+  it('floats a window whose client fixed its size', () => {
+    const f = setup();
+    f.create(true, window => {
+      window.resizeFunction = false;
+      window.minSize = [true, 360, 240];
+      window.maxSize = [true, 360, 240];
+    });
+    expect(f.tracker.list().map(w => w.kind)).toEqual(['floating']);
+    f.tracker.destroy();
   });
 
   it('disconnects every owned handler if destroyed during a pending retirement', () => {

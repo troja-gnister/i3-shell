@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {classifyWindow} from '../../../src/runtime/classify';
+import {classifyWindow, isResizable, type SizeLimits} from '../../../src/runtime/classify';
 import type {WindowFacts} from '../../../src/runtime/model';
 
 const normal: WindowFacts = {
@@ -41,5 +41,112 @@ describe('classifyWindow', () => {
     ['sticky and skip-taskbar', {sticky: true, skipTaskbar: true}],
   ] satisfies Array<[string, Partial<WindowFacts>]>)('ignores an otherwise ordinary %s window', (_name, change) => {
     expect(classifyWindow({...normal, ...change})).toBeNull();
+  });
+});
+
+// The readings below are what Mutter reports through the `resizeable` property
+// and get_min_size()/get_max_size(); none of them mentions maximization,
+// fullscreen or tiling, which is exactly the point. allows_resize() folds those
+// transient states in, so it cannot be the fixed-size test.
+const noHints: SizeLimits = {
+  resizeable: true,
+  fullscreen: false,
+  minKnown: false, minWidth: 0, minHeight: 0,
+  maxKnown: false, maxWidth: 0, maxHeight: 0,
+};
+// A terminal that opens maximized: Mutter keeps has_resize_func true, and the
+// client set no program size hints, so both getters report "unknown" and 0.
+const maximizedTerminal: SizeLimits = noHints;
+// GTK's `resizable: false`: min and max are set to the same size, which also
+// clears has_resize_func.
+const fixedSize: SizeLimits = {
+  resizeable: false,
+  fullscreen: false,
+  minKnown: true, minWidth: 360, minHeight: 240,
+  maxKnown: true, maxWidth: 360, maxHeight: 240,
+};
+// has_resize_func absent for a reason of Mutter's own.
+const noResizeFunction: SizeLimits = {...noHints, resizeable: false};
+// A video player that opens fullscreen. recalc_features() clears has_resize_func
+// while a window is fullscreen, so `resizeable` is false here for a reason that
+// is not intrinsic either, and only the hints can answer.
+const fullscreenAtMap: SizeLimits = {...noHints, resizeable: false, fullscreen: true};
+
+describe('isResizable', () => {
+  it('accepts a window whose client set no size hints', () => {
+    // Regression: an unknown bound is an absent bound. Mutter reports an unset
+    // hint as 0 with a false flag while defaulting internally to min 0 /
+    // max G_MAXINT, so reading the 0s as real limits would make every hintless
+    // window "fixed-size" - the same total failure, with the opposite cause.
+    expect(isResizable(noHints)).toBe(true);
+  });
+
+  it('rejects a window with no resize function', () => {
+    expect(isResizable(noResizeFunction)).toBe(false);
+  });
+
+  it('rejects a window whose minimum size equals its maximum size', () => {
+    expect(isResizable(fixedSize)).toBe(false);
+  });
+
+  it('accepts a fullscreen window whose resize function Mutter cleared', () => {
+    // meta_window_recalc_features(): "if (meta_window_is_fullscreen (window))
+    // { ... window->has_resize_func = FALSE; ... }". For a normal window
+    // has_resize_func is exactly !(min == max) && !fullscreen, so while the
+    // window is fullscreen the property says nothing intrinsic and the hints
+    // are the whole answer.
+    expect(isResizable(fullscreenAtMap)).toBe(true);
+  });
+
+  it('still rejects a fixed-size window while it is fullscreen', () => {
+    expect(isResizable({...fixedSize, fullscreen: true})).toBe(false);
+  });
+
+  it('applies the hint test on its own, without the resize function', () => {
+    expect(isResizable({...fixedSize, resizeable: true})).toBe(false);
+  });
+
+  it.each([
+    ['only a minimum', {minKnown: true, minWidth: 400, minHeight: 300}],
+    ['only a maximum', {maxKnown: true, maxWidth: 400, maxHeight: 300}],
+    ['a range in both dimensions', {
+      minKnown: true, minWidth: 100, minHeight: 80,
+      maxKnown: true, maxWidth: 400, maxHeight: 300,
+    }],
+    ['a fixed width but a free height', {
+      minKnown: true, minWidth: 400, minHeight: 80,
+      maxKnown: true, maxWidth: 400, maxHeight: 300,
+    }],
+    ['a fixed height but a free width', {
+      minKnown: true, minWidth: 100, minHeight: 300,
+      maxKnown: true, maxWidth: 400, maxHeight: 300,
+    }],
+  ] satisfies Array<[string, Partial<SizeLimits>]>)('accepts a window with %s', (_name, change) => {
+    expect(isResizable({...noHints, ...change})).toBe(true);
+  });
+});
+
+describe('classifyWindow over native size limits', () => {
+  const classify = (limits: SizeLimits): ReturnType<typeof classifyWindow> =>
+    classifyWindow({...normal, resizable: isResizable(limits)});
+
+  it('tiles a normal window that is maximized when first seen', () => {
+    // The live defect: GetWindows reported maximizedH/V true for two fresh
+    // terminals and classified both floating, so nothing ever entered the tree.
+    expect(classify(maximizedTerminal)).toBe('tiled');
+  });
+
+  it('floats a genuinely fixed-size normal window', () => {
+    expect(classify(fixedSize)).toBe('floating');
+  });
+
+  it('floats a normal window whose resize function is absent', () => {
+    expect(classify(noResizeFunction)).toBe('floating');
+  });
+
+  it('tiles a normal window that is fullscreen when first seen', () => {
+    // The twin of the case above it: spec 19 keeps a fullscreen window's tree
+    // slot, so a window that *opens* fullscreen must be adopted tiled.
+    expect(classify(fullscreenAtMap)).toBe('tiled');
   });
 });
