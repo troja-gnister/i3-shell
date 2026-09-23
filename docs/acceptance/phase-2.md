@@ -1,6 +1,6 @@
 # Phase 2 acceptance — live session
 
-**Product revision:** `4e95a27` on `main` (Phase 2B merged 2026-09-23).
+**Product revision:** `42adda2` on `main` (Phase 2B merged 2026-09-23; the maximized/fullscreen classification fix merged the same day). Before this fix any window that opened maximized was classified floating for its whole lifetime, so on a desktop whose terminal opens maximized no tiling check below could have passed.
 **Build under test:** release `make install` (no `org.i3shell.Debug` interface or methods).
 **Environment:** GNOME Shell 50.5 / Mutter 18, Wayland, Fedora Silverblue 44.
 **Date prepared:** 2026-09-22. **Result: not yet walked — every A8–A14 box below is the user's to tick.**
