@@ -216,6 +216,30 @@ describe('SettingsOverrides', () => {
       writes.filter(w => w.schema === EXTENSION).at(-1)!.value as string);
     expect(snapshot[MUTTER]['workspaces-only-on-primary']).toBe(true);
   });
+
+  it('clears workspaces-only-on-primary even with no named workspaces', () => {
+    // Pins the placement: this must not be nested inside `if (plan.workspaceCount > 0)`
+    // beside dynamic-workspaces, or a config naming no workspaces would leave a secondary
+    // output stuck non-tiling.
+    const f = fixture();
+    overrides(f.extension).apply({...plan, workspaceCount: 0, workspaceNames: []});
+    expect(f.mutter.values['workspaces-only-on-primary']).toBe(false);
+  });
+
+  it('restores workspaces-only-on-primary on disable with no named workspaces', () => {
+    // Pins the restore side of the same placement. A reconfigure down to no named
+    // workspaces must not itself restore the key (it stays forced false, unconditionally,
+    // the same way dynamic-workspaces would wrongly get restored early if this key's
+    // restore were nested beside it in the `else` branch); only restoreAll() -- disable --
+    // may hand it back.
+    const f = fixture();
+    const settings = overrides(f.extension);
+    settings.apply(plan);
+    settings.apply({...plan, workspaceCount: 0, workspaceNames: []});
+    expect(f.mutter.values['workspaces-only-on-primary']).toBe(false);
+    settings.restoreAll();
+    expect(f.mutter.values['workspaces-only-on-primary']).toBe(true);
+  });
 });
 
 describe('accelerators claimed outside GNOME\'s own keybinding schemas', () => {
