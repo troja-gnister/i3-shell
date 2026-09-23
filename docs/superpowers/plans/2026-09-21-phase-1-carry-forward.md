@@ -4,7 +4,7 @@ Phase 1 (Foundation) was executed from `docs/superpowers/plans/2026-09-20-phase-
 (29 commits on top of `e4628e2`). Every task passed a spec + quality review; a whole-branch review ended
 "with fixes", the fix wave landed (`0da16d4`, `bc21876`, `f79660f`) and its scoped re-review was clean.
 Automated acceptance (`npm run test:integration`: A1, A3, A4, A5, A7 in a nested headless shell) is green.
-**The live walk in `docs/acceptance/phase-1.md` (A1–A7 on the real desktop) passed by user report on 2026-09-21.** No Phase 1 findings were reported. Phase 2A was subsequently implemented, reviewed and merged into `main`, with 234 tests passing. As of 2026-09-22, [Phase 2B](2026-09-22-phase-2b-integration.md) is fully implemented on `phase-2b`, with 373 tests and the complete private native suite passing (Phase 1 checks plus 142 Phase 2 assertions). A8–A14 **live** acceptance ([docs/acceptance/phase-2.md](../../acceptance/phase-2.md)) and the whole-branch review remain pending.
+**The live walk in `docs/acceptance/phase-1.md` (A1–A7 on the real desktop) passed by user report on 2026-09-21.** No Phase 1 findings were reported. Phase 2A was subsequently implemented, reviewed and merged into `main`, with 234 tests passing. As of 2026-09-22, [Phase 2B](2026-09-22-phase-2b-integration.md) is fully implemented on `phase-2b`, with 373 tests and the complete private native suite passing (Phase 1 checks plus 142 Phase 2 assertions). The whole-branch review is done; A8–A14 **live** acceptance ([docs/acceptance/phase-2.md](../../acceptance/phase-2.md)) remains the user's walk.
 
 ## Follow-up analysis (2026-09-21, baseline `a41638f`)
 

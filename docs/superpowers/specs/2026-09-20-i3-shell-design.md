@@ -1,7 +1,7 @@
 # i3-shell — Design Specification
 
 - **Date:** 2026-09-20
-- **Status (2026-09-22):** Approved design; Phase 1 and Phase 2A merged, A1–A7 live walk passed by user report. Phase 2B Tasks 1–9 implemented/reviewed on `phase-2b`; paused at the user's request before Task 10 implementation. Full A8–A14 automation/live acceptance and whole-branch review remain pending. Phases 3–4 are unimplemented. See [pause handoff](../../handoff-2026-09-22.md).
+- **Status (2026-09-22):** Approved design; Phase 1 and Phase 2A merged, A1–A7 live walk passed by user report. **Phase 2B is complete on `phase-2b`**: all ten tasks implemented, per-task reviews and the whole-branch review done, A8–A14 covered by the private integration suite. A8–A14 **live** acceptance remains the user's walk ([docs/acceptance/phase-2.md](../../acceptance/phase-2.md), deliberately unchecked), and nothing is merged or pushed. Phases 3–4 are unimplemented. The [pause handoff](../../handoff-2026-09-22.md) is history; current state is in [PROJECT.md](../../../PROJECT.md) and the [Phase 2B plan](../plans/2026-09-22-phase-2b-integration.md).
 - **Target:** GNOME Shell 50.x (Mutter 18), Wayland session, Fedora Silverblue 44
 - **Repository:** `~/Dev/i3-shell` (GitHub-bound)
 - **License:** GPL-2.0-or-later

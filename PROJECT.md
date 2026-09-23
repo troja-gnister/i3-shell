@@ -23,7 +23,7 @@ Latest verification: **373/373 tests in 39 files**, both TypeScript programs, La
 | `docs/superpowers/plans/2026-09-20-phase-1-foundation.md` | The Phase 1 implementation plan (14 TDD tasks with full code). Several of its code blocks were wrong and were fixed during execution — where plan and code differ, the code (and the carry-forward doc) wins. |
 | `docs/superpowers/plans/2026-09-21-phase-1-carry-forward.md` | Execution record: every ruling made while building Phase 1, items deferred to Phases 2/4, security note. **Read before planning Phase 2.** |
 | `docs/superpowers/plans/2026-09-21-phase-2a-tree.md` | Completed/merged Phase 2A plan, audit and execution record. Its tree/property tests are retained in Phase 2B's integration. |
-| `docs/superpowers/plans/2026-09-22-phase-2b-integration.md` | Approved Phase 2B plan and execution record. Tasks 1–9 complete/reviewed; paused before Task 10 implementation. |
+| `docs/superpowers/plans/2026-09-22-phase-2b-integration.md` | Approved Phase 2B plan and execution record. All ten tasks complete and reviewed, with every ruling. **The only record of this phase that survives a clone.** |
 | `docs/handoff-2026-09-22.md` | Exact pause checkpoint, verified evidence, native environment findings, remaining Task 10 work, review obligations and all six rulings. |
 | `docs/acceptance/phase-1.md` | The live-session checklist for A1–A7, passed by user report on 2026-09-21. |
 | `README.md` | User-facing: install, control via D-Bus, dev commands. |

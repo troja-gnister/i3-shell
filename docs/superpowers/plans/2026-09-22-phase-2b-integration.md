@@ -1,6 +1,8 @@
 # Phase 2B — Live window integration Implementation Plan
 
-**Paused by user request, 2026-09-22.** Tasks 1–9 are implemented and independently reviewed on `phase-2b`; Task 10 was stopped after reading its brief, with no edits or active commands. Resume only when asked. See the [handoff](../../handoff-2026-09-22.md) for the exact checkpoint, verified release installation and remaining work.
+**Complete on `phase-2b`, 2026-09-22.** All ten tasks are implemented; Tasks 1–9 were independently reviewed per task, and Task 10 passed a task review, a fix round and the whole-branch review over `b6fe8cc..HEAD`. Verified: 373/373 unit tests in 39 files, both TypeScript programs, Layer 0, tree lint, and the full private nested suite (187 assertions) with a release `make install`. **What remains for Phase 2 is the user's live A8–A14 walk in [docs/acceptance/phase-2.md](../../acceptance/phase-2.md)**, which is deliberately unchecked, plus the two scoped decisions recorded in the [Phase 1 carry-forward](2026-09-21-phase-1-carry-forward.md). Nothing has been merged or pushed.
+
+Work was paused before Task 10 on 2026-09-22 and resumed the same day; the [handoff](../../handoff-2026-09-22.md) is kept as the record of that pause and is superseded by this document and `PROJECT.md`.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -752,7 +754,7 @@ Correct the retry comment to `500 ms, 1.5 s, 4 s`. Keep real exec, valid/invalid
 
 ## Task 10: Exercise A8–A14 and record delivery evidence
 
-**Pause checkpoint:** No Task 10 code or native checks have run. The user-requested pause documentation updates README/PROJECT and carry-forward status, but final evidence, the Phase 2 checklist, remaining scenarios and reviews below are still required.
+**Status: complete** (`91020d2`, `bf00788`, `4057afa`, plus the whole-branch fix wave). Every box below was performed. The suite found two production defects, each reproduced in a focused unit test before any source change: disposed-actor writes from the panel indicator at shell shutdown, and `CRITICAL` severity for a handled D-Bus name conflict. The review wave added guards to nine native callbacks, a null check for `get_compositor_private()`, a measured conditional-commit change on the frame path, a `_forget` sweep for the not-ready branch and a bound on engine-initiated unmaximize. Outcomes, rulings and limitations are in the execution record at the end of this document.
 
 **Files:** Create `test/integration/phase2-checks.py`, `test/integration/run.sh` and `docs/acceptance/phase-2.md`; modify `test/integration/nested.sh`, `test/integration/inside.sh`, `package.json`, `README.md`, `PROJECT.md` and the carry-forward/plan execution records.
 
@@ -761,7 +763,7 @@ Correct the retry comment to `500 ms, 1.5 s, 4 s`. Keep real exec, valid/invalid
 - `npm run test:integration` invokes `bash test/integration/run.sh`, which builds the test bundle, runs Phase 1 plus Phase 2 single-monitor scenarios, then a fresh two-monitor Phase 2 monitor scenario. Restore the release build on exit; the controller still performs the required final `make install`.
 - No added production-only test state and no simulated topology substitute for the real monitor event.
 
-- [ ] **Write exact-rectangle assertions before scenarios.**
+- [x] **Write exact-rectangle assertions before scenarios.**
 
 ~~~python
 def horizontal_halves(area):
@@ -780,7 +782,7 @@ def assert_frame(window, expected):
 
 Locate windows by unique fixture title, then use their opaque ids. Read the work area from the selected root but calculate expected splits independently; merely comparing native frames with engine targets can let the same layout bug pass twice. Poll for settled frames with a timeout, reporting `GetTree`, `GetWindows` and logs on failure.
 
-- [ ] **Run the new scenario driver before implementing it.** With the test build installed in the nested sandbox, the missing scenario/rectangle assertions fail. Add the scenarios one at a time and verify each on the current implementation; reproduce production failures in a focused unit test before changing production code.
+- [x] **Run the new scenario driver before implementing it.** With the test build installed in the nested sandbox, the missing scenario/rectangle assertions fail. Add the scenarios one at a time and verify each on the current implementation; reproduce production failures in a focused unit test before changing production code.
 
 | Criterion | Automated sequence and independent assertion |
 |---|---|
@@ -794,9 +796,9 @@ Locate windows by unique fixture title, then use their opaque ids. Read the work
 
 Tabbed and stacked scenarios additionally assert equal child rectangles and focused-subtree raise behavior using focus/visible entry interaction, not just the presence of a layout label. Kill/transfer a parent affects all its descendants; destination workspace does not become active. Valid reload preserves nested layout/percentages, invalid reload preserves all state, and restart re-adopts live ids.
 
-- [ ] **Exercise native geometry state changes.** For a tiled leaf, request fullscreen then exit; minimize then unminimize; maximize then wait for the engine's unmaximize. Verify native frames return to the unchanged tree rectangle for each. Enlarge a resizable fixture's minimum width beyond its tile to test a refusing client; bounded retry is asserted by the unit ledger, and integration must stay responsive with a stubborn window reported. Change its expected rect to permit a new attempt, then remove it. Do not use fixed sleeps as evidence of correctness.
+- [x] **Exercise native geometry state changes.** For a tiled leaf, request fullscreen then exit; minimize then unminimize; maximize then wait for the engine's unmaximize. Verify native frames return to the unchanged tree rectangle for each. Enlarge a resizable fixture's minimum width beyond its tile to test a refusing client; bounded retry is asserted by the unit ledger, and integration must stay responsive with a stubborn window reported. Change its expected rect to permit a new attempt, then remove it. Do not use fixed sleeps as evidence of correctness.
 
-- [ ] **Exercise actual monitor reconfiguration on the private bus.** Start two virtual outputs using `--monitor 1920x1080 --monitor 1280x720`. In private test settings set `workspaces-only-on-primary=false` solely for this scenario. Move a fixture to the second output using floating enable → explicit position inside that output → floating disable, waiting for its native monitor id between operations. Record its node/id and tree structure.
+- [x] **Exercise actual monitor reconfiguration on the private bus.** Start two virtual outputs using `--monitor 1920x1080 --monitor 1280x720`. In private test settings set `workspaces-only-on-primary=false` solely for this scenario. Move a fixture to the second output using floating enable → explicit position inside that output → floating disable, waiting for its native monitor id between operations. Record its node/id and tree structure.
 
 Use `org.gnome.Mutter.DisplayConfig.GetCurrentState` and reconstruct logical monitor configuration from the returned connector specs/current mode ids. Invoke `ApplyMonitorsConfig` with temporary method 1, retaining only the primary logical monitor, then restore both with a freshly fetched serial:
 
@@ -816,9 +818,9 @@ connection.call_sync(
 
 After removal, assert every tracked id survives under the primary root and frame/target equality returns. Surviving connector identities must not change just because native indices changed. Reconnection must produce valid empty/new roots and stable live membership; richer output history/lid behavior remains Phase 4. If the installed headless backend rejects temporary output removal, record that specific integration limitation and leave physical monitor acceptance unchecked; do not substitute a debug-only fake monitor event and claim hotplug passed.
 
-- [ ] **Cover settings restoration and repeated enable.** On the private keyfile backend capture colliding binding values before enable, wait for their clearing, disable and compare originals, then re-enable and check re-clearing plus adopted windows. Use a separate startup configuration with the extension initially disabled so the “before” values are real originals. Keep actual frames on disable, clear debug/control exports, and return to 65 grabs on re-enable. Test D-Bus name conflict on the private bus and confirm the extension logs/notifies once while keys/tiling continue.
+- [x] **Cover settings restoration and repeated enable.** On the private keyfile backend capture colliding binding values before enable, wait for their clearing, disable and compare originals, then re-enable and check re-clearing plus adopted windows. Use a separate startup configuration with the extension initially disabled so the “before” values are real originals. Keep actual frames on disable, clear debug/control exports, and return to 65 grabs on re-enable. Test D-Bus name conflict on the private bus and confirm the extension logs/notifies once while keys/tiling continue.
 
-- [ ] **Implement the run wrapper with failure-safe release restoration.**
+- [x] **Implement the run wrapper with failure-safe release restoration.**
 
 ~~~bash
 #!/usr/bin/env bash
@@ -846,11 +848,11 @@ Include the private initially-disabled restoration scenario in `phase2-checks.py
 
 For `--name-conflict`, synchronously request `org.i3shell.Control` through `org.freedesktop.DBus.RequestName` on the Python client's private connection before enabling. Assert ownership stays with that connection, the Shell log reports one name-loss warning and the usual successful grab count, and a newly created small normal fixture expands to the workspace via its GTK Size reply. Disable, release the dummy name, re-enable and verify Control/GetTree and frame assertions work again. Do not use GTK client size as a replacement for the normal exact Mutter-frame assertions. Both initially-disabled scenarios start with empty fixture windows and restore their own temporary state.
 
-- [ ] **Write the live checklist while preserving honest provenance.** `docs/acceptance/phase-2.md` begins with exact commit/build/date fields and unchecked A8–A14 boxes. Give concrete keys/window arrangements, expected geometry/focus, floating/dialog behavior, lock/re-enable and laptop monitor checks. Separate automated evidence, physical display checks and the user's future report. The user logs out/in to load the release, enables `i3-shell@troja`, then performs the checklist. No automatic step ticks live acceptance.
+- [x] **Write the live checklist while preserving honest provenance.** `docs/acceptance/phase-2.md` begins with exact commit/build/date fields and unchecked A8–A14 boxes. Give concrete keys/window arrangements, expected geometry/focus, floating/dialog behavior, lock/re-enable and laptop monitor checks. Separate automated evidence, physical display checks and the user's future report. The user logs out/in to load the release, enables `i3-shell@troja`, then performs the checklist. No automatic step ticks live acceptance.
 
 Update README with GetTree/GetWindows usage, Phase 2 behavior, the private integration command, and recovery when the extension was removed without disable: reinstall the same UUID/schema, enable so the persisted originals can be loaded, then disable to restore them; never advise clearing `overridden-settings` before restoration. Update PROJECT architecture/current counts/next phase, and the carry-forward dispositions. Record the host-dependent monitor limitation if encountered.
 
-- [ ] **Run final delivery checks once fixes and task reviews are complete:**
+- [x] **Run final delivery checks once fixes and task reviews are complete:**
 
 ~~~bash
 npm test
@@ -901,7 +903,7 @@ Self-review corrected the void-returning Tree.check assertions, stable-monitor l
 
 ## Execution record
 
-Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–9 are complete and independently reviewed. Work was paused before Task 10 on 2026-09-22 and resumed the same day at the user's request; Task 10 is implemented against baseline `2fe055f`. A8–A14 live acceptance and the whole-branch review remain.
+Implementation started on `phase-2b` after the user approved this written plan. Base: `b6fe8cc`. The plan-scoped ledger is `.superpowers/sdd/2026-09-22-phase-2b-integration/progress.md`. Tasks 1–9 are complete and independently reviewed. Work was paused before Task 10 on 2026-09-22 and resumed the same day at the user's request; Task 10 is implemented against baseline `2fe055f`, and the whole-branch review over `b6fe8cc..HEAD` is complete with its fix wave applied. **Only the user's live A8–A14 walk remains.**
 
 Ruling: suppress `ibus-daemon` in the nested harness with a PATH stub, and disclose it. — IBus registers its own accelerators (`<Super>semicolon`, `<Super>space`) through the shell's `GrabAccelerators`, the same external-grab mechanism the extension uses; with IBus running a varying subset of the extension's grabs never dispatches, which made the suite non-deterministic. Removing the claimant made all twelve probed accelerators dispatch 3/3 with the IBus *setting* left untouched, so the claimant's existence is the variable. — Cost if wrong: automated coverage excludes this conflict, exactly as `--no-x11` excludes Xwayland clients; the Phase 2 live checklist covers those two keys by hand and the carry-forward records the product decision as the user's to make.
 
