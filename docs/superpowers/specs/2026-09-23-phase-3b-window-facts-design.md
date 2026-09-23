@@ -82,10 +82,30 @@ It replaces the bare `info.minimized` at `engine.ts:485` and the `!w.minimized` 
 `tree.normalize(...)` live set at `engine.ts:391`. Both sites exist today; both consult a predicate
 instead of a field.
 
-Re-entry needs no new code. `_syncWindow`'s else-branch already re-inserts a window that is absent
-from the tree via `tree.insert(id, workspace, monitor)`, which places it beside the focus — the
-behaviour chosen in §1 — and already restores the floating state it had before it left. That path is
-what minimize/unminimize uses and it has passed an acceptance walk.
+Re-entry needs no new **engine** code. `_syncWindow`'s else-branch already re-inserts a window that
+is absent from the tree via `tree.insert(id, workspace, monitor)`, which places it beside the focus —
+the behaviour chosen in §1 — and already restores the floating state it had before it left. That path
+is what minimize/unminimize uses and it has passed an acceptance walk.
+
+### 3.3.1 Detection: the two signals nobody is watching
+
+The engine re-reads `WindowInfo` on `_syncWindow`, which fires from a window event
+(`engine.ts:241`) or from the commit loop (`engine.ts:379`). The tracker watches
+`notify::minimized`, `notify::fullscreen`, `notify::maximized*` and `notify::appears-focused` — and
+**nothing for `on-all-workspaces` or `skip-taskbar`**. Without a signal, a flipped fact would sit
+unnoticed until some unrelated commit happened to re-read it, so the window would leave or rejoin the
+tiling at an arbitrary later moment rather than when the user acted.
+
+The native lifecycle backend therefore gains two connections, `notify::on-all-workspaces` and
+`notify::skip-taskbar`, each emitting an existing `ChangeEvent`. `WindowEvent`
+(`src/runtime/model.ts:25-29`) gains one variant name for them — `'membership'` — rather than reusing
+`'minimized'`, so a log line or a test failure says which fact moved. Both connections are disposed
+by the same per-window `disposeWatch` that already tears the others down; they must not introduce a
+second teardown path.
+
+This is the one place the phase adds a native subscription, and it is the half that makes the rest
+observable. A fix that moved the fact without watching it would pass every unit test and still feel
+broken on a real desktop.
 
 ### 3.4 There is no `tiled ⇄ floating` reclassification in this phase
 
@@ -137,6 +157,10 @@ every application, while the extension is enabled. `disable()` puts it back.
 - `windowTracker` allocates an id and **keeps the watch** for a window whose facts would previously
   have classified `null`. This is the permanent drop written as an assertion.
 - `windowFacts()` no longer reads `is_on_all_workspaces()` or `is_skip_taskbar()`; `WindowInfo` does.
+- the lifecycle backend emits a `'membership'` event on `notify::on-all-workspaces` and on
+  `notify::skip-taskbar`, and both handlers are disposed by the existing `disposeWatch` — asserted by
+  the doubles that record post-dispose access, since a leaked handler on a destroyed window is the
+  defect class this project has already shipped once.
 - `SettingsOverrides` clears `workspaces-only-on-primary`, restores it on `restoreAll()`, and
   re-clears on a repeated enable — the shape the IBus keys already use.
 
@@ -160,7 +184,8 @@ Phase 3A taught us a correct tree is not a correct screen:
   restores it on disable.
 - **§17's Phase 4 list** drops `workspaces-only-on-primary`; per-output focus and movement stay.
 - **§7.10** gains the pinned-versus-derived note from §3.4.
-- **§8.2** must record that `sticky` and `skipTaskbar` are no longer classification inputs.
+- **§8.2** must record that `sticky` and `skipTaskbar` are no longer classification inputs, and that
+  they are watched through `notify::on-all-workspaces` and `notify::skip-taskbar`.
 
 ## 7. Acceptance criteria
 
