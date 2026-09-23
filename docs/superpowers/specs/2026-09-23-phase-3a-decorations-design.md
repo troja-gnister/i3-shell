@@ -106,12 +106,21 @@ The main spec §19 leaves a fullscreen window's geometry to Mutter, and chrome d
 contradict that; a fullscreen window owns the whole monitor, so the rule is per root and not per
 container.
 
-Per container is not enough, and the difference is visible: `frames` and `titleRows` are added to
-`global.window_group` with no stacking control (§4.1 stacks only borders), which puts them above
-every window actor, a fullscreen one included. Suppressing only the row of the container that holds
-the fullscreen leaf leaves a *sibling* container's tab bar, and the focused-container frame, painted
-straight across the fullscreen client. Should frames and rows ever get explicit stacking, this rule
-is worth revisiting — today it is what keeps their lack of it invisible.
+Per container is not enough, and the difference is visible: every decoration is raised explicitly,
+on every apply — a border immediately above its own window actor, and a frame or title row above
+every window actor in `global.window_group` (§4.1) — so all of them sit above a fullscreen window
+too. Suppressing only the row of the container that holds the fullscreen leaf would leave a
+*sibling* container's tab bar, and the focused-container frame, painted straight across the
+fullscreen client.
+
+**Amended after the whole-branch review.** This paragraph previously justified the rule by frames
+and rows having *no* stacking control, and read "should frames and rows ever get explicit stacking,
+this rule is worth revisiting". They now have it: unmanaged stacking was never a guarantee, because
+Mutter restacks `window_group` on every stacking change and requires a plugin to maintain its own
+foreign actors' order itself, so chrome could have landed above one window and below the next. The
+rule is unchanged, and its reasoning is now stronger rather than weaker: chrome sits over a
+fullscreen client *deterministically*, so suppressing it per root is required rather than merely
+prudent.
 
 ### 3.3 Where the plan is produced
 

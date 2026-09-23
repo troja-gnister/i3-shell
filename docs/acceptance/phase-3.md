@@ -194,7 +194,10 @@ below are the ones in `examples/i3-shell.config`: `$mod+a` focus parent, `$mod+w
 
 Run with `bash test/integration/run.sh` on 2026-09-23 in a private nested GNOME Shell — separate
 bus, settings, runtime and Wayland socket, never the live session. **228 assertions, exit 0, no
-native criticals.** It ticks nothing above.
+native criticals.** Re-run against this branch head after the whole-branch review's fixes — which
+changed what `window_group` holds on every commit and which Clutter restacking calls are made — with
+the same result: exit 0, 228 assertions, zero native criticals, no new stacking warnings. It ticks
+nothing above.
 
 | Scenario | What it pins | Result |
 |---|---|---|
@@ -204,10 +207,8 @@ native criticals.** It ticks nothing above.
 | Two virtual outputs | the secondary work area is shorter than its monitor by the bar's strut, and tiles there start below the bar | passed — the bar reserved **28px**, the work area started 28px below the monitor's top, and a tile there was 692px tall on a 720px output |
 | Native-critical gate | no GJS/Mutter `CRITICAL` across enable, disable and shutdown with decorations present | passed |
 
-Unit suite alongside it: **538 tests in 48 files** as the branch now stands, both TypeScript
-programs, Layer 0 and tree lint. (The native run above predates the whole-branch
-review's fixes. Those fixes added unit tests only and changed no scenario in the table, but the
-native suite has not been re-run since them.)
+Unit suite alongside it: **538 tests in 48 files**, both TypeScript programs, Layer 0 and tree
+lint. The review's fixes added unit tests only and changed no scenario in the table above.
 
 Every rectangle in those scenarios is computed by an independent implementation of the layout rule
 from the reported work area, and compared against both the native Mutter frame and the engine's own
