@@ -30,7 +30,7 @@ Latest verification: **527 tests in 48 files**, both TypeScript programs, Layer 
 | `src/` | The extension (TypeScript, see §4). |
 | `test/unit/` | Vitest on Node: pure core and native adapter doubles, including `fixtures/reference.i3config`, the reference i3 config used by golden/native tests. |
 | `test/integration/` | Private nested harness (`nested.sh`, `inside.sh`), GTK4 fixture (`windows.js`), typed D-Bus client/smoke (`client.py`), Phase 1 checks (`phase1-checks.sh`), the Phase 2 A8–A14 driver (`phase2-checks.py`) and the failure-safe wrapper (`run.sh`). |
-| `docs/acceptance/phase-2.md` | The live-session checklist for A8–A14, **unchecked**: the user's walk. |
+| `docs/acceptance/phase-2.md` | The live-session checklist for A8–A14. The user **walked and passed** it; the boxes are left unticked as the record of what was walked. |
 | `docs/acceptance/phase-3.md` | The live-session checklist for A15–A21 (Phase 3A decorations), **unchecked**: the user's walk. |
 | `schemas/`, `metadata.json`, `stylesheet.css`, `esbuild.mjs`, `Makefile`, `tsconfig*.json` | Build and packaging. |
 

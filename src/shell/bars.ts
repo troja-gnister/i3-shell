@@ -209,9 +209,16 @@ export class MonitorBars {
 
   private _restyle(bar: Bar): void {
     const c = this._colors;
+    // The bar's background, and the only place it is set: an inline style
+    // beats stylesheet.css, so a rule there would be dead. It has to be
+    // painted by something -- nothing in the GNOME theme describes this actor,
+    // and a bar that painted nothing would leave the pills floating on the
+    // wallpaper while still reserving a strut.
+    //
     // i3 gives its bar its own colour block; Phase 3A only parses the client.*
     // colours, so the bar borrows the unfocused background -- which is i3bar's
-    // default dark look anyway.
+    // default dark look anyway. _addBar() calls this before the bar reaches
+    // the screen, so there is no unpainted first frame.
     bar.actor.set_style(`background-color: ${c.unfocused.background};`);
     this._states.forEach((state, index) => {
       const pill = bar.pills.get(index);

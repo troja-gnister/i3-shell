@@ -80,7 +80,9 @@ below are the ones in `examples/i3-shell.config`: `$mod+a` focus parent, `$mod+w
 - [ ] `$mod+a` again widens the outline to the whole workspace.
 - [ ] Clicking inside a window, or focusing one with `$mod+l`, removes the outline (the selection
       is a window again).
-- [ ] The outline is drawn *around* the pair, not over either window's contents.
+- [ ] The outline is drawn along the container's edge, not across the middle of either window.
+      (St draws a border *inside* the actor's rectangle, so the ring does cover the outermost
+      couple of pixels of the windows at that edge — that is expected, not a failure.)
 
 ## A17 — a tabbed container
 - [ ] With two tiles, press `$mod+w`: one row of tabs appears across the top of the container, one
@@ -155,6 +157,14 @@ below are the ones in `examples/i3-shell.config`: `$mod+a` focus parent, `$mod+w
 
 ## Known limitations to expect — note them, do not file them
 
+- **A border is drawn over the edge of its window, not beside it.** i3 shrinks the client by the
+  border width so the border sits in space of its own; i3-shell paints the ring on top of the
+  client's outermost pixels instead, so the window loses that much of its own edge to it. At the
+  default 2px it is easy to miss — but it grows with the width, so the `border pixel 8` in A19
+  hides 8 pixels of your terminal all the way round, and that is the deliberate behaviour, not a
+  defect to file. Insetting the client instead means subtracting the border width inside the
+  layout itself, which is Layer 0 arithmetic and moves every window rectangle in both test suites;
+  the design (spec §4.1) records it as a Phase 4 option, taken knowingly rather than stumbled into.
 - **`border toggle` is two-state.** It alternates between the configured width and `0`. i3 cycles
   `normal → none → pixel`; with no title bars to draw, `normal` and `pixel` are the same thing
   here, so the cycle would have two indistinguishable stops out of three.
@@ -194,8 +204,10 @@ native criticals.** It ticks nothing above.
 | Two virtual outputs | the secondary work area is shorter than its monitor by the bar's strut, and tiles there start below the bar | passed — the bar reserved **28px**, the work area started 28px below the monitor's top, and a tile there was 692px tall on a 720px output |
 | Native-critical gate | no GJS/Mutter `CRITICAL` across enable, disable and shutdown with decorations present | passed |
 
-Unit suite alongside it: **524 tests in 48 files**, both TypeScript programs, Layer 0 and tree
-lint.
+Unit suite alongside it: **538 tests in 48 files** as the branch now stands, both TypeScript
+programs, Layer 0 and tree lint. (The native run above predates the whole-branch
+review's fixes. Those fixes added unit tests only and changed no scenario in the table, but the
+native suite has not been re-run since them.)
 
 Every rectangle in those scenarios is computed by an independent implementation of the layout rule
 from the reported work area, and compared against both the native Mutter frame and the engine's own

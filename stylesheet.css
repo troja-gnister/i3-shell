@@ -63,11 +63,9 @@
 }
 
 .i3-shell-monitor-bar {
-  /* Nothing in the GNOME theme describes this actor, and a bar that paints
-     nothing would leave the pills floating on the wallpaper while still
-     reserving a strut. GNOME's own panel is a dark translucent band and these
-     bars are its counterpart on the other monitors. */
-  background-color: rgba(0, 0, 0, 0.85);
+  /* No background here: bars.ts sets one inline on every render, from the
+     configured colours, and an inline style wins over this file -- a rule here
+     would look like the source of truth while doing nothing. */
   /* Horizontal only: bars.ts takes the bar's height from the preferred height
      of the box inside it, which does not include this actor's own padding, so
      vertical padding here would be reserved by nobody and clip the pills. */
