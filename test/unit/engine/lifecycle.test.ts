@@ -57,6 +57,29 @@ describe('engine lifecycle', () => {
     f.change(1, {rect: {x: 2, y: 2, width: 2, height: 2}}, 'frame'); f.engine.stop();
     const count = f.applied.length; f.flush(); f.engine.relayout(); f.remove(1); expect(f.applied).toHaveLength(count);
   });
+  it('applies a deferred frame-read normally, but drops one that resolves after onClosing()', () => {
+    // Meta.Display::closing fires while the session tears down, but a frame
+    // read queued before it does not resolve synchronously -- it comes back
+    // on a later main-loop turn (see the 'frame' branch of onWindowEvent).
+    // Gating only the synchronous entry point would let that deferred tail
+    // still reach commit() -> _layoutAndPublish() after closing.
+    //
+    // Two windows, each observed exactly once: RectReconciler.observe()
+    // gives a window's *first* mismatch a correction and only marks it
+    // stubborn (and permanently silent) on a second one, so reusing one
+    // window for both halves of this test would make the "after" half
+    // pass whether or not onClosing() actually did anything.
+    const f = fakeEngine(); f.engine.start(); f.add(1); f.add(2); f.flush(); f.applied.length = 0; f.calls.length = 0;
+    f.change(1, {rect: {x: 3, y: 3, width: 3, height: 3}}, 'frame'); f.flush();
+    expect(f.applied.length).toBeGreaterThan(0); // still works normally: closing has not fired
+
+    f.applied.length = 0; f.calls.length = 0;
+    f.change(2, {rect: {x: 9, y: 9, width: 9, height: 9}}, 'frame'); // queues a deferred read
+    f.engine.onClosing();
+    f.flush(); // drains the queue; the read must not reach commit()
+    expect(f.applied).toEqual([]);
+    expect(f.calls).not.toContain('decorations');
+  });
   it('isolates failed subscribers and publishes detached values', () => {
     const f = fakeEngine(); f.engine.start(); let notified = 0;
     f.engine.subscribeTreeChanged(() => { throw new Error('listener failed'); });
@@ -347,6 +370,20 @@ describe('accent colours', () => {
     f.engine.start();
     f.setAccent({background: '#e62d42', text: '#ffffff'});
     expect(f.pushedColors!.focused.background).toBe('#13BEAA');
+  });
+
+  it('repaints on an accent change normally, but not once onClosing() has fired', () => {
+    // notify::accent-color pushes straight to the indicator/decorations ports
+    // (Engine.start()'s accent.subscribe callback), bypassing commit()
+    // entirely -- so gating commit() alone would leave this path open.
+    const f = fakeEngine('bindsym Mod4+q kill');
+    f.engine.start();
+    f.setAccent({background: '#e62d42', text: '#ffffff'});
+    expect(f.pushedColors!.focused.background).toBe('#e62d42'); // still works normally: closing has not fired
+
+    f.engine.onClosing();
+    f.setAccent({background: '#111111', text: '#ffffff'});
+    expect(f.pushedColors!.focused.background).toBe('#e62d42'); // unchanged: the push after onClosing() never happened
   });
 });
 

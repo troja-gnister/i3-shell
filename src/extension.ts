@@ -62,8 +62,19 @@ export default class I3ShellExtension extends Extension {
     // geometry on a window being destroyed or write to chrome the shell is
     // disposing. Every handler wired through `closing.unlessClosing` below
     // shares this one flag instead of guarding itself.
+    //
+    // ClosingGate alone only stops a handler's synchronous entry point: a
+    // deferred frame-read queued before closing still resolves afterward
+    // (engine.ts's 'frame' branch), and the accent subscription pushes
+    // straight to the indicator/decorations ports outside any handler here
+    // at all. Engine.onClosing() is the second, engine-level flag that
+    // covers those -- see engine.ts's commit() and the accent.subscribe
+    // callback in start().
     const closing = new ClosingGate();
-    tracker.connect(global.display, 'closing', () => closing.close());
+    tracker.connect(global.display, 'closing', () => {
+      closing.close();
+      this._engine?.onClosing();
+    });
 
     const settings: Gio.Settings = this.getSettings();
     const overrides = new SettingsOverrides(settings);

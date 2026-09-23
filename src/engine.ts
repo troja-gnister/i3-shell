@@ -92,6 +92,7 @@ export class Engine {
   private _locked = false;
   private _started = false;
   private _disposed = false;
+  private _closing = false;
   private _lastLoadTime = 0;
   private _workspaceCount = 1;
   private _tree: Tree | null = null;
@@ -145,8 +146,10 @@ export class Engine {
     this._started = true;
     this._ports.accent.subscribe(() => {
       // Only the pushed colours change; the tree and every rectangle are
-      // untouched, so this deliberately does not run a commit.
-      if (!this._disposed && this._started) this._pushColors();
+      // untouched, so this deliberately does not run a commit. It bypasses
+      // commit() entirely, so it needs its own _closing check: gating
+      // commit() alone would not stop this push.
+      if (!this._disposed && this._started && !this._closing) this._pushColors();
     });
     this._applyLoaded(loaded);
   }
@@ -155,6 +158,19 @@ export class Engine {
     const colors = effectiveColors(this._config.colors, this._config.specifiedColors, this._ports.accent.current());
     this._ports.indicator.setColors(colors);
     this._ports.decorations.setColors(colors);
+  }
+
+  /**
+   * Meta.Display::closing has fired: the session is tearing down and GNOME
+   * will start destroying its own windows and actors underneath the
+   * extension, ahead of disable(). Unlike stop() this is not the teardown
+   * path -- it does not cancel grabs or deferred reads, only stops new work
+   * from reaching commit() (which covers every deferred continuation, not
+   * just the signals that call it synchronously) and stops the accent
+   * subscription's direct port push.
+   */
+  onClosing(): void {
+    this._closing = true;
   }
 
   stop(): void {
@@ -287,7 +303,7 @@ export class Engine {
 
   /** Native callbacks may enqueue work, but never mutate a tree during its traversal. */
   private commit(change: () => boolean | void = () => {}): void {
-    if (!this._started || this._disposed) return;
+    if (!this._started || this._disposed || this._closing) return;
     this._queued.push(change);
     if (this._committing) return;
     this._committing = true;
