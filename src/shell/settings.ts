@@ -10,6 +10,26 @@ const KEYBINDING_SCHEMAS = [
   'org.gnome.mutter.wayland.keybindings',
   'org.gnome.settings-daemon.plugins.media-keys',
 ];
+/**
+ * Accelerator keys outside GNOME's own keybinding schemas, named one by one.
+ *
+ * GNOME Shell's `GrabAccelerator` D-Bus API is restricted to `org.gnome.Settings`,
+ * `org.gnome.SettingsDaemon.MediaKeys` and `org.freedesktop.impl.portal.desktop.gnome`
+ * (`ui/shellDBus.js`), so IBus never competes for the grab and this extension wins it
+ * every time. The conflict is at the settings layer instead: ibus-extension-gtk3 reads
+ * these keys and acts on the same accelerator independently of the grab. Clearing them
+ * is the remedy already applied to GNOME's own schemas.
+ *
+ * These are named rather than discovered because their schemas are not keybinding
+ * schemas: `org.freedesktop.ibus.general` holds `xkb-latin-layouts`, a long list of
+ * layout names, and `org.freedesktop.ibus.general.hotkey` holds `trigger`, which uses
+ * IBus's own `Control+space` spelling rather than GTK's. Scanning either by type would
+ * corrupt data that has nothing to do with accelerators.
+ */
+const FOREIGN_BINDING_KEYS: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['org.freedesktop.ibus.panel.emoji', ['hotkey', 'unicode-hotkey']],
+  ['org.freedesktop.ibus.general.hotkey', ['triggers']],
+];
 const WM_PREFS = 'org.gnome.desktop.wm.preferences';
 const MUTTER = 'org.gnome.mutter';
 
@@ -45,32 +65,20 @@ export class SettingsOverrides implements SettingsPort {
       const settings = this._settings(schemaId);
       if (!settings)
         continue;
-      const schema = settings.settings_schema;
-      for (const key of schema.list_keys()) {
-        const type = schema.get_key(key).get_value_type().dup_string();
-        if (type !== 'as' && type !== 's')
-          continue;
-        const current = type === 'as' ? settings.get_strv(key) : [settings.get_string(key)];
-        const saved = this._snapshot[schemaId]?.[key];
-        const original = saved === undefined ? current : Array.isArray(saved) ? saved : [saved as string];
-        const keep = original.filter(a => a === '' || !wanted.has(canonicalAccel(a)));
-        if (keep.length === original.length) {
-          if (saved !== undefined)
-            this._restoreOne(schemaId, settings, key, saved);
-          continue;
-        }
-        this._remember(schemaId, key, type === 'as' ? original : original[0]);
-        for (const a of original) {
-          if (a !== '' && wanted.has(canonicalAccel(a)))
-            cleared.push({schema: schemaId, key, accel: a});
-        }
-        const desired = type === 'as' ? keep : keep[0] ?? '';
-        if (!this._equal(type === 'as' ? current : current[0], desired)) {
-          if (type === 'as')
-            settings.set_strv(key, keep);
-          else
-            settings.set_string(key, desired as string);
-        }
+      for (const key of settings.settings_schema.list_keys())
+        this._clearColliding(schemaId, settings, key, wanted, cleared);
+    }
+
+    for (const [schemaId, keys] of FOREIGN_BINDING_KEYS) {
+      const settings = this._settings(schemaId);
+      if (!settings)
+        continue;
+      // get_key() aborts on a key the installed schema does not have, and these
+      // schemas belong to another project, free to drop one in any release.
+      const present = new Set(settings.settings_schema.list_keys());
+      for (const key of keys) {
+        if (present.has(key))
+          this._clearColliding(schemaId, settings, key, wanted, cleared);
       }
     }
 
@@ -95,8 +103,39 @@ export class SettingsOverrides implements SettingsPort {
 
     this._saveSnapshot();
     for (const c of cleared)
-      log.info(`cleared GNOME binding ${c.schema} ${c.key} = ${c.accel}`);
+      log.info(`cleared conflicting binding ${c.schema} ${c.key} = ${c.accel}`);
     return cleared;
+  }
+
+  /** Drops any accelerator in `wanted` from one key, remembering what was there. */
+  private _clearColliding(
+    schemaId: string, settings: Gio.Settings, key: string,
+    wanted: Set<string>, cleared: ClearedBinding[],
+  ): void {
+    const type = settings.settings_schema.get_key(key).get_value_type().dup_string();
+    if (type !== 'as' && type !== 's')
+      return;
+    const current = type === 'as' ? settings.get_strv(key) : [settings.get_string(key)];
+    const saved = this._snapshot[schemaId]?.[key];
+    const original = saved === undefined ? current : Array.isArray(saved) ? saved : [saved as string];
+    const keep = original.filter(a => a === '' || !wanted.has(canonicalAccel(a)));
+    if (keep.length === original.length) {
+      if (saved !== undefined)
+        this._restoreOne(schemaId, settings, key, saved);
+      return;
+    }
+    this._remember(schemaId, key, type === 'as' ? original : original[0]);
+    for (const a of original) {
+      if (a !== '' && wanted.has(canonicalAccel(a)))
+        cleared.push({schema: schemaId, key, accel: a});
+    }
+    const desired = type === 'as' ? keep : keep[0] ?? '';
+    if (!this._equal(type === 'as' ? current : current[0], desired)) {
+      if (type === 'as')
+        settings.set_strv(key, keep);
+      else
+        settings.set_string(key, desired as string);
+    }
   }
 
   /** Restores saved values; keeps failed or unavailable entries persisted for a later retry. */
