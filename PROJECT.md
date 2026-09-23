@@ -11,7 +11,7 @@ fidelity.
 
 **State (2026-09-22):** Phase 1 and Phase 2A are merged into `main`; A1–A7 passed by user report on 2026-09-21. On `phase-2b`, all ten tasks of the approved integration plan are implemented; Tasks 1–9 are independently reviewed and Task 10 delivers the A8–A14 integration suite. **A8–A14 live acceptance is still the user's walk** — [docs/acceptance/phase-2.md](docs/acceptance/phase-2.md) is written and deliberately unchecked. The whole-branch review is outstanding. The [pause handoff](docs/handoff-2026-09-22.md) remains the record of the earlier checkpoint.
 
-Latest verification: **391/391 tests in 39 files**, both TypeScript programs, Layer 0, tree lint, and the full private nested suite — retained Phase 1 checks plus 158 Phase 2 assertions across single-monitor, two-monitor, settings-restoration and D-Bus-name-conflict scenarios. The suite found and fixed three production defects (see §5). Phase 2B is merged and pushed; `main` and `origin/main` are both `bbdf886`. Phases 3–4 remain unbuilt.
+Latest verification: **410/410 tests in 41 files**, both TypeScript programs, Layer 0, tree lint, and the full private nested suite — retained Phase 1 checks plus 158 Phase 2 assertions across single-monitor, two-monitor, settings-restoration and D-Bus-name-conflict scenarios. The suite found and fixed three production defects (see §5). Phase 2B is merged and pushed; `main` and `origin/main` are both `bbdf886`. Phases 3–4 remain unbuilt.
 
 ---
 
@@ -61,7 +61,7 @@ The user's i3 config (`~/.config/i3/config`) is the source of truth for behaviou
 
 ```sh
 npm ci                      # or npm install; .npmrc sets legacy-peer-deps
-npm test                    # vitest on Node — pure core + native adapter doubles (391 tests)
+npm test                    # vitest on Node — pure core + native adapter doubles (410 tests)
 npm run typecheck           # two programs: tsconfig.json (src, GNOME types) + tsconfig.test.json (tests + Layer 0, Node types)
 npm run check:layer0        # fails if Layer 0 imports gi:// / resource:// / src/shell (also part of `npm run build`)
 npm run build               # release bundle → dist/  (esbuild, single ESM file; schemas compiled)
@@ -119,7 +119,7 @@ Verification: unit 52/52; typecheck both programs; `npm run test:integration` gr
 
 **Live acceptance passed:** the user reported all A1–A7 checks green on 2026-09-21, with no Phase 1 findings. `docs/acceptance/phase-1.md` records that report and its provenance. Tiling and tiled resizing were outside that Phase 1 walk; it does not certify Phase 2.
 
-The follow-up fixes restore last-good-cache recovery for a missing config at startup and preserve saved GNOME settings when restoration fails. The 64-test Phase 1 regression baseline is preserved in the current 391-test suite. Phase 2A delivery passed 234 tests and its reviews/merge completed; it did not rerun native integration. Phase 2B Task 9 subsequently passed the updated Phase 1 native checks with real GTK tiles. Remaining carry-forward items and their owners are recorded in the carry-forward doc.
+The follow-up fixes restore last-good-cache recovery for a missing config at startup and preserve saved GNOME settings when restoration fails. The 64-test Phase 1 regression baseline is preserved in the current 410-test suite. Phase 2A delivery passed 234 tests and its reviews/merge completed; it did not rerun native integration. Phase 2B Task 9 subsequently passed the updated Phase 1 native checks with real GTK tiles. Remaining carry-forward items and their owners are recorded in the carry-forward doc.
 
 **Two production defects were found by the Phase 2 integration suite and fixed (Task 10), each reproduced in a focused unit test before any source change:**
 1. `src/shell/indicator.ts` wrote to already-disposed `St.Button` actors. At shell shutdown the panel is destroyed before `disable()` runs, but `workareas-changed` still drives a `commit()` that publishes pills, so `_restyle()` hit disposed actors — a burst of `Gjs-CRITICAL` in the journal on **every logout**. Found by Task 9's critical-log gate, not by an assertion. The indicator now watches its own button's `destroy` signal and stops touching actors afterwards.

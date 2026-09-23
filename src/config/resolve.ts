@@ -63,9 +63,10 @@ export function resolve(parsed: ParseResult): ResolveResult {
   const modes = new Map<string, Mode>([['default', {name: 'default', bindings: []}]]);
   const rules: Rule[] = [];
   const colors: Colors = {...DEFAULT_COLORS};
+  const specifiedColors = new Set<keyof Colors>();
   const workspaceNames = new Map<number, string>();
   const config: Config = {
-    modes, rules, colors, workspaceNames,
+    modes, rules, colors, specifiedColors, workspaceNames,
     defaultBorder: {style: 'normal', width: 2},
     defaultFloatingBorder: {style: 'normal', width: 2},
     floatingModifier: 'Mod4',
@@ -138,6 +139,7 @@ export function resolve(parsed: ParseResult): ResolveResult {
       case 'client': {
         const key = d.which === 'focused_inactive' ? 'focusedInactive' : d.which;
         colors[key] = colorSet(d.colors, DEFAULT_COLORS[key]);
+        specifiedColors.add(key);
         break;
       }
       case 'unsupported':

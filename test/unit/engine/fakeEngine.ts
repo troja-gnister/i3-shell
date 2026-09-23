@@ -1,6 +1,7 @@
 import {Engine, type EnginePorts, type LoadedConfig} from '../../../src/engine';
 import {loadConfigText} from '../../../src/config';
-import type {Binding} from '../../../src/config/model';
+import type {Binding, Colors} from '../../../src/config/model';
+import type {Accent} from '../../../src/config/colors';
 import type {PillState, Topology, WindowEvent, WindowInfo} from '../../../src/runtime/model';
 import type {Rect, WindowId} from '../../../src/tree/node';
 
@@ -23,6 +24,8 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill') {
   let currentTopology: Topology | null = topology();
   let nextLoad: LoadedConfig | null = null;
   let grabbed: Binding[] = [];
+  let accent: Accent | null = {background: '#6f8396', text: '#ffffff'};
+  let accentChanged: (() => void) | null = null;
   const load = (text: string): LoadedConfig => ({...loadConfigText(text), source: 'file', path: '/fake/config'});
   const ports: EnginePorts = {
     keys: {
@@ -61,8 +64,13 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill') {
       restoreAll: () => { calls.push('settings.restore'); },
     },
     indicator: {
-      setMode: name => { calls.push(`mode:${name}`); }, setColors: () => { calls.push('colors'); },
+      setMode: name => { calls.push(`mode:${name}`); },
+      setColors: colors => { calls.push('colors'); f.pushedColors = colors; },
       setPills: pills => { f.pills = pills; }, setVisible: visible => { f.visible = visible; },
+    },
+    accent: {
+      current: () => accent,
+      subscribe: callback => { accentChanged = callback; },
     },
     now: () => 123456789,
     exec: command => { calls.push(`exec:${command}`); },
@@ -73,7 +81,7 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill') {
   const engine = new Engine(ports);
   const f = {
     engine, ports, calls, applied, windows, load,
-    pills: [] as PillState[], visible: true, refuseGeometry: false, emitFrames: true, activationFails: false,
+    pills: [] as PillState[], pushedColors: null as Colors | null, visible: true, refuseGeometry: false, emitFrames: true, activationFails: false,
     onApply: null as ((id: WindowId) => void) | null,
     add(id: WindowId, patch: Partial<WindowInfo> = {}) { windows.set(id, windowInfo(id, patch)); engine.onWindowEvent({type: 'added', id}); },
     change(id: WindowId, patch: Partial<WindowInfo>, eventType: Exclude<WindowEvent['type'], 'added' | 'removed' | 'focused'>) {
@@ -87,6 +95,7 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill') {
     setTopology(value: Topology | null) { currentTopology = value; },
     setNativeCount(value: number) { count = value; engine.onWorkspacesChanged(); },
     grabbedAccels: () => grabbed.map(b => b.accel),
+    setAccent(value: Accent | null) { accent = value; accentChanged?.(); },
   };
   return f;
 }

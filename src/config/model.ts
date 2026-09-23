@@ -61,6 +61,13 @@ export interface Config {
   modes: Map<string, Mode>;
   rules: Rule[];
   colors: Colors;
+  /**
+   * Which `client.*` keys the config actually set. `colors` is always fully
+   * populated from i3's defaults, so it cannot distinguish a colour the user
+   * asked for from one they never mentioned; chrome that falls back to the
+   * desktop accent needs that distinction. See effectiveColors().
+   */
+  specifiedColors: ReadonlySet<keyof Colors>;
   defaultBorder: BorderStyle;
   defaultFloatingBorder: BorderStyle;
   floatingModifier: 'Mod4' | 'Mod1' | 'none';

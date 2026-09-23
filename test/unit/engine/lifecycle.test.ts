@@ -318,3 +318,31 @@ describe('engine lifecycle', () => {
   });
 
 });
+
+describe('accent colours', () => {
+  it('paints focused chrome with the desktop accent when the config asks for no colour', () => {
+    const f = fakeEngine('bindsym Mod4+q kill');
+    f.engine.start();
+    expect(f.pushedColors!.focused.background).toBe('#6f8396');
+  });
+
+  it('keeps the config colour when the config does specify one', () => {
+    const f = fakeEngine('bindsym Mod4+q kill\nclient.focused #13BEAA #13BEAA #FFFFFF');
+    f.engine.start();
+    expect(f.pushedColors!.focused.background).toBe('#13BEAA');
+  });
+
+  it('repaints when the desktop accent changes', () => {
+    const f = fakeEngine('bindsym Mod4+q kill');
+    f.engine.start();
+    f.setAccent({background: '#e62d42', text: '#ffffff'});
+    expect(f.pushedColors!.focused.background).toBe('#e62d42');
+  });
+
+  it('does not repaint on an accent change when the config pinned the colour', () => {
+    const f = fakeEngine('bindsym Mod4+q kill\nclient.focused #13BEAA #13BEAA #FFFFFF');
+    f.engine.start();
+    f.setAccent({background: '#e62d42', text: '#ffffff'});
+    expect(f.pushedColors!.focused.background).toBe('#13BEAA');
+  });
+});
