@@ -68,8 +68,24 @@ const R = (x: number, y: number, width: number, height: number) => ({x, y, width
 const empty: DecorationPlan = {borders: [], frames: [], titleRows: []};
 const border = (window: WindowId, rect = R(0, 0, 100, 100)): DecorationPlan =>
   ({borders: [{window, rect, state: 'focused' as const, width: 2}], frames: [], titleRows: []});
-const row = (rect: ReturnType<typeof R>, tabs: DecorationPlan['titleRows'][number]['tabs']): DecorationPlan =>
-  ({borders: [], frames: [], titleRows: [{nodeId: 7, rect, rowHeight: 20, layout: 'tabbed', tabs}]});
+/**
+ * The plan's `rowHeight` is the height of ONE title row, whatever the layout
+ * (src/runtime/decoration.ts passes DecorationInput.rowHeight straight
+ * through). The snapshot's same-named field is a different number -- there it
+ * is already multiplied by the child count for a stacked container
+ * (src/runtime/snapshot.ts) -- so a test that reads one must not reason from
+ * the other.
+ */
+const ROW_HEIGHT = 20;
+const row = (
+  rect: ReturnType<typeof R>,
+  tabs: DecorationPlan['titleRows'][number]['tabs'],
+  layout: 'tabbed' | 'stacked' = 'tabbed',
+  rowHeight: number = ROW_HEIGHT,
+): DecorationPlan =>
+  ({borders: [], frames: [], titleRows: [{nodeId: 7, rect, rowHeight, layout, tabs}]});
+const tab = (nodeId: number, title: string, window: WindowId | null = null) =>
+  ({nodeId, window, title, selected: false});
 
 /** Every tab button built so far, in creation order. */
 const tabActors = (): StyledActor[] =>
@@ -116,7 +132,9 @@ describe('Decorations', () => {
     // A rectangle key would have destroyed and rebuilt an actor that only moved.
     expect(lastCreated('row')).toBe(first);
     expect(first.destroyCount).toBe(0);
-    expect(first.geometry).toEqual(R(0, 0, 200, 300));
+    // The box follows the container's x/y and width, but never its height --
+    // it is the reserved band, not the container (see the geometry tests).
+    expect(first.geometry).toEqual(R(0, 0, 200, ROW_HEIGHT));
   });
 
   it('skips a window when the resolver finds nothing, without touching a disposed actor', () => {
@@ -151,10 +169,13 @@ describe('Decorations', () => {
     expect(liveActors().filter(actor => actor.props.style_class === 'i3-shell-border')).toEqual([]);
   });
 
-  it('stacks each border immediately below its own window actor in window_group', () => {
-    // Brief requirement: "a border is lowered to sit immediately below its
-    // window actor via set_child_below_sibling". Two windows, so the assertion
-    // distinguishes "below its own window" from "somewhere near the bottom".
+  it('stacks each border immediately above its own window actor in window_group', () => {
+    // Was "immediately below" (the plan's original wording), which drew every
+    // border underneath an opaque window and so drew nothing at all. The
+    // border actor paints only its outline -- no background -- so above the
+    // window it is the one thing visible and the client shows through the
+    // middle. Two windows, so the assertion distinguishes "above its own
+    // window" from "somewhere near the top".
     const first = new FakeActor('meta-window-actor');
     const second = new FakeActor('meta-window-actor');
     windowGroup.add_child(first);          // where Mutter keeps the real window actors
@@ -172,10 +193,19 @@ describe('Decorations', () => {
     const borders = created.filter(actor => actor.props.style_class === 'i3-shell-border');
     expect(borders).toHaveLength(2);
     expect(windowGroup.children).toHaveLength(4);
-    expect(windowGroup.children[0]).toBe(borders[0]);
-    expect(windowGroup.children[1]).toBe(first);
-    expect(windowGroup.children[2]).toBe(borders[1]);
-    expect(windowGroup.children[3]).toBe(second);
+    expect(windowGroup.children[0]).toBe(first);
+    expect(windowGroup.children[1]).toBe(borders[0]);
+    expect(windowGroup.children[2]).toBe(second);
+    expect(windowGroup.children[3]).toBe(borders[1]);
+  });
+
+  it('keeps a border non-reactive, so a border above a window cannot swallow its input', () => {
+    // Load-bearing since the border moved above the window actor: a reactive
+    // actor covering the client would eat every click on it.
+    resolvable.set(1, fakeWindow());
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    d.apply(border(1));
+    expect(lastCreated('border').props.reactive).toBe(false);
   });
 
   it('does not interpret markup in a tab title', () => {
@@ -417,6 +447,98 @@ describe('Decorations', () => {
     const actor = lastCreated('border');
     expect(actor.props.style).toBe(`border: 0px solid ${DEFAULT_COLORS.focused.border};`);
     expect(actor.geometry).toEqual(R(0, 0, 10, 10));
+  });
+
+  it('sizes a tabbed row to one row height, not to the container it titles', () => {
+    // The defect this suite missed: the box took row.rect -- the container's
+    // whole rectangle -- so its reactive tab buttons covered the client area
+    // and swallowed every click meant for the window.
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    d.apply(row(R(10, 20, 400, 300), [tab(1, 'One'), tab(2, 'Two')]));
+    expect(lastCreated('row').geometry).toEqual(R(10, 20, 400, ROW_HEIGHT));
+    expect(lastCreated('row').vertical).toBe(false);
+    expect(criticals).toEqual([]);
+  });
+
+  it('sizes a stacked row to the whole reserved band, one row height per child', () => {
+    // i3 keeps every title visible in a stacked container, so the engine
+    // reserves rowHeight * children (src/tree/layout.ts) and the band holds
+    // one tab per child, stacked down the axis.
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    d.apply(row(R(10, 20, 400, 300), [tab(1, 'One'), tab(2, 'Two'), tab(3, 'Three')], 'stacked'));
+    const box = lastCreated('row');
+    expect(box.geometry).toEqual(R(10, 20, 400, ROW_HEIGHT * 3));
+    expect(box.vertical).toBe(true);
+    // Only the size is the renderer's to set -- the box lays its children out
+    // down its own axis, so each tab asks for the full width and one row.
+    expect(tabActors().map(({geometry}) => [geometry.width, geometry.height])).toEqual([
+      [400, ROW_HEIGHT], [400, ROW_HEIGHT], [400, ROW_HEIGHT],
+    ]);
+    expect(criticals).toEqual([]);
+  });
+
+  it('gives a tabbed row equal-width tabs that span it, the last absorbing the remainder', () => {
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    d.apply(row(R(0, 0, 400, 300), [tab(1, 'One'), tab(2, 'Two'), tab(3, 'Three')]));
+    const widths = tabActors().map(button => button.geometry.width);
+    expect(widths).toEqual([133, 133, 134]);     // 400 split three ways, nothing lost
+    expect(widths.reduce((a, b) => a + b, 0)).toBe(400);
+  });
+
+  it('keeps every tab inside the reserved band, clear of the client area', () => {
+    // The assertion that would have caught the click-swallowing: a tab must
+    // not reach below the band, whatever the layout, because everything under
+    // the band belongs to the window.
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    for (const layout of ['tabbed', 'stacked'] as const) {
+      const rect = R(0, 100, 400, 300);
+      const tabs = [tab(1, 'One'), tab(2, 'Two')];
+      d.apply(row(rect, tabs, layout));
+      const box = lastCreated('row');
+      const rows = layout === 'stacked' ? tabs.length : 1;
+      const bandBottom = rect.y + ROW_HEIGHT * rows;
+      expect(box.geometry.y + box.geometry.height).toBe(bandBottom);
+      for (const button of tabActors().filter(button => !button.destroyed)) {
+        expect(button.geometry.height).toBeGreaterThan(0);     // sized at all
+        expect(box.geometry.y + button.geometry.height).toBeLessThanOrEqual(bandBottom);
+      }
+      d.apply(empty);
+    }
+  });
+
+  it('clamps the band to a container too short to hold it', () => {
+    // src/tree/layout.ts reserves Math.min(rect.height, rowHeight * rows); the
+    // renderer has to draw the same band the engine reserved, not a taller one.
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    d.apply(row(R(0, 0, 400, 30), [tab(1, 'One'), tab(2, 'Two')], 'stacked'));
+    expect(lastCreated('row').geometry).toEqual(R(0, 0, 400, 30));
+    expect(tabActors().map(button => button.geometry.height)).toEqual([15, 15]);
+  });
+
+  it('re-orients a row in place when its container switches tabbed <-> stacked', () => {
+    // `layout stacked` on a tabbed container keeps the same NodeId, so the
+    // same box is reused and its axis and height have to follow the plan.
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    const tabs = [tab(1, 'One'), tab(2, 'Two')];
+    d.apply(row(R(0, 0, 400, 300), tabs, 'tabbed'));
+    const box = lastCreated('row');
+    d.apply(row(R(0, 0, 400, 300), tabs, 'stacked'));
+    expect(lastCreated('row')).toBe(box);
+    expect(box.vertical).toBe(true);
+    expect(box.geometry).toEqual(R(0, 0, 400, ROW_HEIGHT * 2));
+    d.apply(row(R(0, 0, 400, 300), tabs, 'tabbed'));
+    expect(box.vertical).toBe(false);
+    expect(box.geometry).toEqual(R(0, 0, 400, ROW_HEIGHT));
+    expect(criticals).toEqual([]);
+  });
+
+  it('follows the row height the plan carries rather than a constant of its own', () => {
+    // rowHeight is measured from the theme (src/shell/rowHeight.ts) and is a
+    // layout input the engine already reserved against; a HiDPI row is taller.
+    const d = new Decorations(DEFAULT_COLORS, () => {}, resolve, defer);
+    d.apply(row(R(0, 0, 400, 300), [tab(1, 'One')], 'tabbed', 37));
+    expect(lastCreated('row').geometry.height).toBe(37);
+    expect(tabActors()[0].geometry.height).toBe(37);
   });
 
   it('creates and removes a frame around the focused container, keyed by nodeId', () => {

@@ -122,6 +122,26 @@ export class FakeActor {
     this.children.splice(at < 0 ? 0 : at, 0, child);
   }
 
+  /** Moves `child` to sit immediately above `sibling` (or to the top when `sibling` is null). */
+  set_child_above_sibling(child: FakeActor, sibling: FakeActor | null): void {
+    this.touch('set_child_above_sibling');
+    // As above: reordering around a foreign sibling has to inspect it, so a
+    // disposed one is exactly what `criticals` exists to catch.
+    sibling?.touch('set_child_above_sibling');
+    const current = this.children.indexOf(child);
+    if (current >= 0) this.children.splice(current, 1);
+    const at = sibling ? this.children.indexOf(sibling) : -1;
+    this.children.splice(at < 0 ? this.children.length : at + 1, 0, child);
+  }
+
+  /** St.BoxLayout's axis switch, recorded so a test can read a row's orientation back. */
+  vertical = false;
+
+  set_vertical(value: boolean): void {
+    this.touch('set_vertical');
+    this.vertical = value;
+  }
+
   set_style(style: string): void {
     this.touch('set_style');
     this.props.style = style;
