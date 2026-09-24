@@ -2,6 +2,8 @@ import {describe, it, expect} from 'vitest';
 import {readFileSync} from 'node:fs';
 import {fakeEngine, topology, windowInfo, type EngineFixture} from './fakeEngine';
 import {parseCommands} from '../../../src/commands/parse';
+import type {NodeSnapshot, TreeSnapshot} from '../../../src/runtime/snapshot';
+import type {NodeId, WindowId} from '../../../src/tree/node';
 
 const referenceText = readFileSync(new URL('../fixtures/reference.i3config', import.meta.url), 'utf8');
 
@@ -611,6 +613,18 @@ describe('focusNode', () => {
   });
 });
 
+/** The nodeId of the leaf holding `window` on workspace 0's only monitor. */
+function leafOf(snapshot: TreeSnapshot, window: WindowId): NodeId {
+  const walk = (node: NodeSnapshot): NodeId | null => {
+    if (node.kind === 'leaf') return node.window === window ? node.id : null;
+    for (const child of node.children) { const found = walk(child); if (found !== null) return found; }
+    return null;
+  };
+  const found = walk(snapshot.workspaces[0].monitors[0].root);
+  if (found === null) throw new Error(`window ${window} has no leaf`);
+  return found;
+}
+
 describe('exclusion from the tree', () => {
   it('removes a window from the tiling when it becomes sticky', () => {
     const f = fakeEngine(); f.engine.start();
@@ -658,6 +672,10 @@ describe('exclusion from the tree', () => {
     expect(f.engine.state().mode).toBe('default');
     expect(() => f.engine.run(parseCommands('focus left').commands, 0)).not.toThrow();
     expect(f.applied.at(-1)!.has(2)).toBe(false);
+    // Where it landed, not merely that nothing threw: the assertions above all
+    // hold with the selection still pointing at the removed leaf.
+    const snapshot = f.engine.treeSnapshot();
+    expect(snapshot.workspaces[0].selected).toEqual({kind: 'tiled', nodeId: leafOf(snapshot, 1)});
   });
 
   it('admits a window that is already sticky at its first frame', () => {
@@ -690,5 +708,46 @@ describe('exclusion from the tree', () => {
     f.flush();
     expect(f.engine.treeSnapshot().workspaces[0].floating).toEqual([]);
     expect(f.applied.at(-1)!.has(2)).toBe(false);
+  });
+
+  it('does not unmaximize a pinned window the user maximized', () => {
+    // Review Focus: the unmaximize gate must ask the same question tree
+    // membership asks. A sticky window is not ours: it is excluded from
+    // `expected`, so unmaximizing it cannot tile it -- it only undoes the
+    // user's own maximize, once per maximize, forever, because
+    // _unmaximizeAttempts resets every time the window reports unmaximized.
+    const f = fakeEngine(); f.engine.start();
+    f.add(1); f.add(2); f.flush();
+    f.change(2, {sticky: true}, 'membership'); f.flush();
+
+    f.change(2, {maximizedH: true, maximizedV: true}, 'maximized'); f.flush();
+
+    expect(f.calls).not.toContain('unmaximize:2');
+  });
+
+  it('does not unmaximize an excluded skip-taskbar window', () => {
+    // Review Focus: the same omission for the third exclusion reason.
+    const f = fakeEngine(); f.engine.start();
+    f.add(1); f.add(2); f.flush();
+    f.change(2, {skipTaskbar: true}, 'membership'); f.flush();
+
+    f.change(2, {maximizedH: true}, 'maximized'); f.flush();
+
+    expect(f.calls).not.toContain('unmaximize:2');
+  });
+
+  it('does not commit a rectangle correction for a window that has left the tree', () => {
+    // Review Focus: _observe carries the same gate. A pinned window the user
+    // drags is not drifting from a target we set -- its reconciler state is
+    // merely stale -- so queueing a correction publishes a commit that can
+    // never apply anything.
+    const f = fakeEngine(); f.engine.start();
+    f.add(1); f.add(2); f.flush();
+    f.change(2, {sticky: true}, 'membership'); f.flush();
+    const revision = f.engine.treeSnapshot().revision;
+
+    f.change(2, {rect: {x: 7, y: 9, width: 11, height: 13}}, 'frame'); f.flush();
+
+    expect(f.engine.treeSnapshot().revision).toBe(revision);
   });
 });

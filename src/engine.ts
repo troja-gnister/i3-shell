@@ -503,7 +503,11 @@ export class Engine {
         }
       }
     }
-    if (!info.fullscreen && !info.minimized && !this._floating(info)) {
+    // The same predicate as tree membership, not `minimized` alone: a window
+    // excluded for any reason is not ours, and is not in `expected` either, so
+    // an unmaximize request could never tile it -- it would only undo the
+    // user's own maximize, once per maximize, forever.
+    if (!info.fullscreen && !excludedFromTree(info) && !this._floating(info)) {
       if (info.maximizedH || info.maximizedV) {
         const seen = (this._unmaximizeAttempts.get(id) ?? 0) + 1;
         this._unmaximizeAttempts.set(id, seen);
@@ -552,7 +556,8 @@ export class Engine {
    */
   private _observe(id: WindowId, generation: number | undefined): boolean {
     const info = this._ports.windows.get(id);
-    if (!info || info.fullscreen || info.minimized || this._floating(info) || this._unmaximizing.has(id)) return false;
+    if (!info || info.fullscreen || excludedFromTree(info) || this._floating(info) ||
+      this._unmaximizing.has(id)) return false;
     if (generation === undefined) return false;
     return this._reconciler.observe(id, info.rect, generation);
   }
