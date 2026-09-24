@@ -11,6 +11,11 @@ export const criticals: string[] = [];
 
 export function resetActors(): void {
   criticals.length = 0;
+  ops.length = 0;
+  modal.stack.length = 0;
+  modal.pushed.length = 0;
+  modal.popped.length = 0;
+  modal.outcome = 'grant';
   panel.button = null;
   panel.activitiesVisible = true;
   activities.container.destroyed = false;
@@ -106,9 +111,21 @@ export class FakeActor {
     return id;
   }
 
-  emit(signal: string): void {
+  /**
+   * `args` are what Clutter passes after the emitting actor -- the event, for
+   * the key-press and scroll handlers src/shell/launcher.ts connects.
+   */
+  emit(signal: string, ...args: unknown[]): void {
     for (const handler of [...this.handlers.values()])
-      if (handler.signal === signal) handler.callback(this);
+      if (handler.signal === signal) handler.callback(this, ...args);
+  }
+
+  /** The value the last handler for `signal` returned; EVENT_STOP vs PROPAGATE. */
+  emitFor(signal: string, ...args: unknown[]): unknown {
+    let result: unknown;
+    for (const handler of [...this.handlers.values()])
+      if (handler.signal === signal) result = handler.callback(this, ...args);
+    return result;
   }
 
   add_child(child: FakeActor): void {
@@ -194,10 +211,39 @@ export class FakeActor {
   hide(): void { this.touch('hide'); this.visible = false; }
   show(): void { this.touch('show'); this.visible = true; }
 
+  /** The four reads src/shell/launcher.ts's debugState() makes. */
+  get_x(): number { this.touch('get_x'); return this._x; }
+  get_y(): number { this.touch('get_y'); return this._y; }
+  get_width(): number { this.touch('get_width'); return this._width; }
+  get_height(): number { this.touch('get_height'); return this._height; }
+
+  /** How many times key focus was taken; see Main.popModal below. */
+  focusCount = 0;
+
+  grab_key_focus(): void {
+    this.touch('grab_key_focus');
+    this.focusCount++;
+    keyFocus = this;
+  }
+
+  /** St.Bin/St.ScrollView's single-child slot. */
+  set_child(child: FakeActor | null): void {
+    this.touch('set_child');
+    for (const existing of [...this.children]) existing.destroy();
+    if (child) this.add_child(child);
+  }
+
+  destroy_all_children(): void {
+    this.touch('destroy_all_children');
+    for (const child of [...this.children]) child.destroy();
+  }
+
   destroy(): void {
     this.destroyCount++;
     if (this.touch('destroy')) return;
+    ops.push(`destroy:${String(this.props.style_class ?? this.kind)}`);
     this.destroyed = true;
+    if (keyFocus === this) keyFocus = null;
     // Note the order: 'destroy' is emitted while the actor is still in its
     // parent's child list, whereas Clutter unparents first and emits after.
     // No handler on this branch reads parent.children, so it makes no
@@ -227,6 +273,9 @@ export class StyledActor extends FakeActor {
   get text(): string { return this._text; }
   set text(value: string) { this.touch('text'); this._text = value; }
 
+  /** St.Entry's setter, as src/shell/launcher.ts calls it every render. */
+  set_text(value: string): void { this.text = value; }
+
   get opacity(): number { return this._opacity; }
   set opacity(value: number) { this.touch('opacity'); this._opacity = value; }
 
@@ -251,7 +300,31 @@ export const fakeSt = {
   Button: class extends StyledActor {
     constructor(props: Record<string, unknown> = {}) { super('St.Button', props); created.push(this); }
   },
+  Entry: class extends StyledActor {
+    constructor(props: Record<string, unknown> = {}) { super('St.Entry', props); created.push(this); }
+  },
+  Icon: class extends FakeActor {
+    constructor(props: Record<string, unknown> = {}) { super('St.Icon', props); created.push(this); }
+  },
+  ScrollView: class extends FakeActor {
+    /** The vertical adjustment, modelled only as far as set_value(). */
+    readonly vadjustment = new FakeAdjustment();
+
+    constructor(props: Record<string, unknown> = {}) { super('St.ScrollView', props); created.push(this); }
+  },
 };
+
+/** St.Adjustment, reduced to the one call src/shell/launcher.ts makes on it. */
+export class FakeAdjustment {
+  value = 0;
+  /** Every value it was set to, in order. */
+  readonly values: number[] = [];
+
+  set_value(value: number): void {
+    this.value = value;
+    this.values.push(value);
+  }
+}
 
 /**
  * Test helpers for a suite that builds its own actors through `fakeSt` (decorations.test.ts).
@@ -321,9 +394,55 @@ export function disposedAccesses(): readonly string[] {
 
 export const fakeClutter = {
   ActorAlign: {CENTER: 2},
-  ScrollDirection: {SMOOTH: 4, UP: 0, DOWN: 1},
+  ScrollDirection: {SMOOTH: 4, UP: 0, DOWN: 1, LEFT: 2, RIGHT: 3},
+  EventFlags: {NONE: 0, FLAG_REPEATED: 2},
   EVENT_STOP: true,
   EVENT_PROPAGATE: false,
+};
+
+/** Shell.ActionMode, as far as the launcher's grab needs it. */
+export const fakeShell = {
+  ActionMode: {NONE: 0, NORMAL: 2, OVERVIEW: 4, POPUP: 256},
+};
+
+/**
+ * An ordered log of the operations whose ORDER is the thing under test.
+ *
+ * The launcher's worst possible failure is releasing its modal grab after
+ * destroying the actor the grab was taken on -- Mutter is then holding a grab
+ * against a dead actor and the session's keyboard is gone with no way back.
+ * That is an ordering bug, not a state bug, so state assertions cannot see it.
+ */
+export const ops: string[] = [];
+
+/** Whatever last took key focus, as Clutter would track it. */
+let keyFocus: FakeActor | null = null;
+
+export function focusedActor(): FakeActor | null { return keyFocus; }
+
+/** A Clutter.Grab, plus whether the shell revoked it. */
+export class FakeGrab {
+  revoked = false;
+
+  constructor(readonly actor: FakeActor) {}
+
+  is_revoked(): boolean { return this.revoked; }
+}
+
+/**
+ * The modal stack Main.pushModal/popModal maintain.
+ *
+ * `outcome` is how the NEXT push behaves. GNOME 50's pushModal has no failure
+ * return -- global.stage.grab() always hands back a grab -- so a refusal shows
+ * up as `revoke`; `null` is kept for the shells that did return one, and
+ * `throw` is the path src/shell/launcher.ts used to unwind through with the
+ * actor already parented and nothing recorded to clean it up with.
+ */
+export const modal = {
+  stack: [] as FakeGrab[],
+  pushed: [] as Array<{actor: FakeActor; params: Record<string, unknown>}>,
+  popped: [] as FakeGrab[],
+  outcome: 'grant' as 'grant' | 'revoke' | 'null' | 'throw',
 };
 
 export const fakePanelMenu = {
@@ -391,11 +510,45 @@ export const uiGroup = new FakeActor('uiGroup');
 
 export const fakeMain = {
   uiGroup,
+  /**
+   * Main.pushModal(). It reaches into the actor for real (it grabs on the
+   * stage and then sets key focus on it), so it is an access a disposed actor
+   * must not see.
+   */
+  pushModal(actor: FakeActor, params: Record<string, unknown> = {}): FakeGrab | null {
+    ops.push('pushModal');
+    actor.touch('pushModal');
+    modal.pushed.push({actor, params});
+    if (modal.outcome === 'throw') throw new Error('pushModal: no stage');
+    if (modal.outcome === 'null') return null;
+    const grab = new FakeGrab(actor);
+    if (modal.outcome === 'revoke') grab.revoked = true;
+    else modal.stack.push(grab);
+    return grab;
+  },
+  /**
+   * Main.popModal(). Real popModal throws 'incorrect pop' for a grab that is
+   * no longer on the stack, and restores the previous key focus on the way
+   * out -- which is what re-enters the launcher's own key-focus-out handler.
+   */
+  popModal(grab: FakeGrab): void {
+    ops.push('popModal');
+    modal.popped.push(grab);
+    const at = modal.stack.indexOf(grab);
+    if (at < 0) throw new Error('incorrect pop');
+    modal.stack.splice(at, 1);
+    grab.actor.touch('popModal');
+    if (keyFocus === grab.actor) {
+      keyFocus = null;
+      grab.actor.emit('key-focus-out');
+    }
+  },
   panel: {
     addToStatusArea(_name: string, button: FakeActor): void { panel.button = button; },
     statusArea: {activities},
   },
   layoutManager: {
+    uiGroup,
     get monitors(): FakeMonitor[] { return layout.monitors; },
     get primaryIndex(): number { return layout.primaryIndex; },
     // All three reach into the actor for real -- addChrome reparents it into
