@@ -376,8 +376,34 @@ function launchApp(item: LauncherItem): void {
 }
 
 function toAction(event: Clutter.Event): LauncherAction | null {
-  const symbol = event.get_key_symbol();
   const state = event.get_state();
+
+  // Ahead of the symbol switch on purpose: with the grab held in POPUP mode
+  // i3-shell's own bindings do not fire (spec 2.4), so every $mod-modified key
+  // lands here rather than at the engine -- which is what makes `$mod+d` close
+  // the launcher without the launcher having to know which modifier the user
+  // configured as $mod, and what keeps `$mod+1` from both switching workspace
+  // and typing a `1`.
+  //
+  // If this ran AFTER the switch, `$mod+Return` would be claimed by the Return
+  // case and ACCEPT the selection -- and in an i3 config `$mod+Return` means
+  // "open a terminal", so the user would get an arbitrary application launched
+  // instead of a shell. A dismiss rule whose exceptions start processes is not
+  // a rule.
+  //
+  // Control stays below, so Ctrl+n and Ctrl+p keep navigating. Shift is not in
+  // this set: Shift+Enter is acceptInTerminal, and Shift+letter is ordinary
+  // uppercase typing.
+  //
+  // Both Super bits are tested: Mutter reports the Super key on real key
+  // events as MOD4_MASK, while SUPER_MASK is the virtual modifier, and which
+  // one arrives is not worth betting the `$mod+d` close on.
+  const modKey = (state & (Clutter.ModifierType.MOD1_MASK
+    | Clutter.ModifierType.MOD4_MASK
+    | Clutter.ModifierType.SUPER_MASK)) !== 0;
+  if (modKey) return {kind: 'dismiss'};
+
+  const symbol = event.get_key_symbol();
   const shift = (state & Clutter.ModifierType.SHIFT_MASK) !== 0;
   const control = (state & Clutter.ModifierType.CONTROL_MASK) !== 0;
 
@@ -394,23 +420,10 @@ function toAction(event: Clutter.Event): LauncherAction | null {
   if (control && (symbol === Clutter.KEY_n)) return {kind: 'down'};
   if (control && (symbol === Clutter.KEY_p)) return {kind: 'up'};
 
-  // The grab is held in POPUP mode, so i3-shell's own bindings do not fire
-  // while the launcher is open (spec 2.4) -- which means the second `$mod+d`
-  // press lands here rather than in the engine. Any Super/Alt/Control-modified
-  // key dismisses: that satisfies "$mod+d closes the launcher" without the
-  // launcher having to know which modifier the user configured as $mod, and it
-  // keeps "$mod+1 does not switch workspace" true while also stopping the `1`
-  // from being typed into the query.
-  //
-  // Shift is deliberately not in this set -- Shift+Enter is acceptInTerminal
-  // above, and Shift+letter is ordinary uppercase typing.
-  //
-  // Both Super bits are tested: Mutter reports the Super key on real key
-  // events as MOD4_MASK, while SUPER_MASK is the virtual modifier, and which
-  // one arrives is not worth betting the `$mod+d` close on.
-  const superHeld = (state & (Clutter.ModifierType.MOD4_MASK | Clutter.ModifierType.SUPER_MASK)) !== 0;
-  const altHeld = (state & Clutter.ModifierType.MOD1_MASK) !== 0;
-  if (control || superHeld || altHeld) return {kind: 'dismiss'};
+  // Control is tested here rather than with the $mod keys above, so that
+  // Ctrl+n and Ctrl+p reach their cases first. Every other Control-modified
+  // key dismisses, for the same reason those do.
+  if (control) return {kind: 'dismiss'};
 
   const unicode = event.get_key_unicode();
   return unicode && unicode >= ' ' ? {kind: 'type', char: unicode} : null;
