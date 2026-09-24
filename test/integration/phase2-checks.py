@@ -1543,9 +1543,19 @@ def scenario_launcher(primary_id, second_id, primary_area, second_area):
     press('Escape')
     wait_until(lambda: not launcher_state()['open'], 'LA Escape closes the launcher')
 
-    # The grab is released only if a binding fires again afterwards. Asserting
-    # "not open" alone would pass with the keyboard still captured, which is the
-    # failure that costs the user their session.
+    # Spec 2.3: closing returns focus to the window that had it. Checked here,
+    # before anything else moves focus -- the grab-release proof below switches
+    # workspace twice, and a focus check after that would be testing whether
+    # focus survives a workspace round trip, which is a different claim.
+    # GetWindows reports no focus field (WindowSnapshot spreads WindowInfo,
+    # which has none), so focus is proved the way the rest of this file proves
+    # it: a bare key reaches only the natively focused client's Entry.
+    type_key('z', 'LA primary', {})
+    ok('LA focus returned to the window that had it')
+
+    # Only now the grab-release proof. Asserting "not open" alone would pass
+    # with the keyboard still captured, which is the failure that costs the
+    # user their session.
     workspace_before = json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace']
     press('<Super>2')
     wait_until(
@@ -1554,12 +1564,6 @@ def scenario_launcher(primary_id, second_id, primary_area, second_area):
     ok('LA the launcher released its grab')
     run(f'workspace number {workspace_before + 1}')
 
-    # Spec 2.3: closing returns focus to the window that had it. GetWindows
-    # reports no focus field -- WindowSnapshot spreads WindowInfo, which has
-    # none -- so focus is proved the way the rest of this file proves it: a bare
-    # key reaches only the natively focused client's Entry.
-    type_key('z', 'LA primary', {})
-    ok('LA focus returned to the window that had it')
     reset_windows()
 
 
