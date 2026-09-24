@@ -1487,7 +1487,7 @@ def launcher_state():
     return json.loads(call('org.i3shell.Debug', 'LauncherState')[0])
 
 
-def inside(box, area, label):
+def check_inside(box, area, label):
     check(label,
           [box['x'] >= area['x'],
            box['y'] >= area['y'],
@@ -1512,7 +1512,7 @@ def scenario_launcher(primary_id, second_id, primary_area, second_area):
     run('launcher')
     wait_until(lambda: launcher_state()['open'], 'LA the launcher opens')
     box = launcher_state()
-    inside(box, primary_area, 'LA the launcher opens inside the primary work area')
+    check_inside(box, primary_area, 'LA the launcher opens inside the primary work area')
     run('launcher')
     wait_until(lambda: not launcher_state()['open'], 'LA the same command closes it')
 
@@ -1527,7 +1527,7 @@ def scenario_launcher(primary_id, second_id, primary_area, second_area):
     run('launcher')
     wait_until(lambda: launcher_state()['open'], 'LA the launcher opens with focus on the second output')
     box = launcher_state()
-    inside(box, second_area, 'LA the launcher follows focus to the second output')
+    check_inside(box, second_area, 'LA the launcher follows focus to the second output')
     check('LA the launcher is not on the primary output',
           box['x'] + box['width'] <= primary_area['x'] + primary_area['width']
           and box['x'] >= primary_area['x'],
