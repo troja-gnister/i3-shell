@@ -57,7 +57,29 @@ export class FakeActor {
 
   get_preferred_height(_forWidth: number): [number, number] {
     this.touch('get_preferred_height');
+    // Real St warns "st_widget_get_theme_node called on the widget ... which
+    // is not in the stage" and reports the unthemed size -- see `inStage`
+    // below. A caller that means to tolerate this checks get_stage() first
+    // and never reaches here at all; one that does not gets caught the same
+    // way `touch()` catches a disposed actor.
+    if (!this.inStage)
+      criticals.push(`${this.kind}.get_preferred_height: not in the stage`);
     return [0, this.preferredHeight];
+  }
+
+  /**
+   * Whether Clutter would resolve a stage for this actor. Real St needs one to
+   * answer get_theme_node() -- see the `uiGroup` doc below. Defaults to `true`
+   * so every existing test, which never touches this, behaves exactly as
+   * before; a test modelling the shell unparenting chrome without destroying
+   * it (bars.ts's own comment on this) sets it to `false` directly, since
+   * addChrome()/removeChrome() below do not actually reparent into `uiGroup`.
+   */
+  inStage = true;
+
+  get_stage(): FakeActor | null {
+    this.touch('get_stage');
+    return this.inStage ? uiGroup : null;
   }
 
   /** The actor's last-set position and size, so a test can assert a move/resize without a rebuild. */
