@@ -4,10 +4,12 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import type {Colors} from '../config/model';
+import {keyToAction} from '../launcher/keys';
 import type {LauncherAction, LauncherEffect, LauncherState} from '../launcher/session';
 import {initialState, reduce} from '../launcher/session';
 import type {LauncherItem, LauncherRequest} from '../launcher/model';
 import {terminalCommand} from '../launcher/terminal';
+import {firstDrawnRow} from '../launcher/window';
 import type {AppCatalogue} from './appCatalogue';
 import {spawnShell} from './exec';
 import {log} from './log';
@@ -169,17 +171,26 @@ export class Launcher {
     }));
     actor.connect('key-press-event', guard('launcher key',
       (_source: Clutter.Actor, event: Clutter.Event) => this._onKey(event)));
-    // Spec 2.3: losing focus closes it. Deferred, because popModal() restores
-    // the previous key focus while the actor is still alive, and closing from
-    // inside that move would destroy the actor Mutter is still working on.
+    // Spec 2.3: losing focus closes it. Deferred for one specific reason:
+    // close() itself calls popModal(), which restores the previous key focus
+    // and so re-enters this very handler. Closing synchronously from here
+    // would run close() inside its own popModal().
     actor.connect('key-focus-out', guard('launcher focus-out', () => { this._deferClose(); }));
     actor.grab_key_focus();
     this._render();
   }
 
   /**
-   * Closing from inside a signal Mutter is still emitting destroys the actor
-   * under its feet, so focus-out and row clicks close on the next idle.
+   * Why focus-out closes on the next idle, when the keyboard path does not.
+   *
+   * It is NOT that closing from inside a signal is unsafe in general: the key
+   * handler destroys the actor synchronously and that is fine, because Clutter
+   * has finished with the event by the time the handler returns. The two
+   * deferred paths each have a narrower reason. Focus-out: close() calls
+   * popModal(), popModal() restores the previous key focus, and that re-enters
+   * the focus-out handler -- so closing synchronously would run close() inside
+   * its own popModal(). A row click: the handler would destroy the row that is
+   * still emitting the button-release it is handling.
    *
    * The deferral is stamped with the actor it was scheduled for: an idle that
    * outlives its actor -- because close() already ran, or because the user
@@ -243,8 +254,19 @@ export class Launcher {
     };
   }
 
+  /**
+   * The four reads below are the whole of this adapter's part in key handling.
+   * What they mean is decided by src/launcher/keys.ts, where the order of the
+   * tests is covered by test/unit/launcher/keys.test.ts -- it has to be, since
+   * getting that order wrong launches an arbitrary application and nothing in
+   * this file is reachable from the unit suite.
+   */
   private _onKey(event: Clutter.Event): boolean {
-    const action = toAction(event);
+    const action = keyToAction(
+      event.get_key_symbol(),
+      event.get_state(),
+      event.get_key_unicode(),
+      (event.get_flags() & Clutter.EventFlags.FLAG_REPEATED) !== 0);
     if (!action || !this._state) return Clutter.EVENT_PROPAGATE;
     this._dispatch(action);
     return Clutter.EVENT_STOP;
@@ -329,16 +351,28 @@ export class Launcher {
       row.set_style(`background-color: ${this._colors.focused.background}; color: ${this._colors.focused.text};`);
     // Spec 4.4: a click on a row launches it. The click selects and then goes
     // through the same reducer Enter does, so the two paths cannot disagree.
-    // Deferred for the same reason as focus-out -- the click's own emission
-    // has to return before the handler destroys the actor that is emitting it
-    // -- and stamped with the actor, so a stale idle cannot launch into a
-    // launcher that has since been closed and reopened.
+    // It is deferred because the row would otherwise be destroyed inside its
+    // own button-release emission, and stamped with the actor so a stale idle
+    // cannot launch into a launcher that has since been closed and reopened.
+    //
+    // The item is re-checked by identity, not just the index: this idle runs
+    // at PRIORITY_DEFAULT_IDLE, below Clutter's event source, so a keystroke
+    // already queued when the click landed is processed FIRST. That requeries
+    // and resets `selected` to 0, and an index-only guard would then launch
+    // whatever is now top of the list -- the wrong application, silently.
     row.connect('button-release-event', guard('launcher row', () => {
       const actor = this._actor;
       const state = this._state;
-      if (!actor || !state || index >= state.visible.length) return Clutter.EVENT_PROPAGATE;
-      this._state = {...state, selected: index};
-      this._defer(() => { if (this._actor === actor) this._dispatch({kind: 'accept'}); });
+      if (!actor || !state || state.visible[index] !== item) return Clutter.EVENT_PROPAGATE;
+      this._defer(() => {
+        const current = this._state;
+        // Re-checked, then selected, then accepted, in that order and all in
+        // the idle: selecting eagerly here and accepting later would leave a
+        // window in which a keystroke replaces the state between the two.
+        if (this._actor !== actor || !current || current.visible[index] !== item) return;
+        this._state = {...current, selected: index};
+        this._dispatch({kind: 'accept'});
+      });
       return Clutter.EVENT_STOP;
     }));
     if (item.icon)
@@ -348,16 +382,6 @@ export class Launcher {
       row.add_child(new St.Label({text: item.command, style_class: 'i3-shell-launcher-hint', y_align: Clutter.ActorAlign.CENTER}));
     return row;
   }
-}
-
-/**
- * The first row of the slice `_render` draws: `rows` rows that always contain
- * `selected`, centred on it once the list is longer than the viewport and
- * clamped so the last page is full rather than ragged.
- */
-function firstDrawnRow(count: number, selected: number, rows: number): number {
-  if (count <= rows) return 0;
-  return Math.min(Math.max(0, selected - Math.floor(rows / 2)), count - rows);
 }
 
 function launchApp(item: LauncherItem): void {
@@ -373,58 +397,4 @@ function launchApp(item: LauncherItem): void {
   } catch (error) {
     log.error(`launcher: could not launch ${item.name}`, error);
   }
-}
-
-function toAction(event: Clutter.Event): LauncherAction | null {
-  const state = event.get_state();
-
-  // Ahead of the symbol switch on purpose: with the grab held in POPUP mode
-  // i3-shell's own bindings do not fire (spec 2.4), so every $mod-modified key
-  // lands here rather than at the engine -- which is what makes `$mod+d` close
-  // the launcher without the launcher having to know which modifier the user
-  // configured as $mod, and what keeps `$mod+1` from both switching workspace
-  // and typing a `1`.
-  //
-  // If this ran AFTER the switch, `$mod+Return` would be claimed by the Return
-  // case and ACCEPT the selection -- and in an i3 config `$mod+Return` means
-  // "open a terminal", so the user would get an arbitrary application launched
-  // instead of a shell. A dismiss rule whose exceptions start processes is not
-  // a rule.
-  //
-  // Control stays below, so Ctrl+n and Ctrl+p keep navigating. Shift is not in
-  // this set: Shift+Enter is acceptInTerminal, and Shift+letter is ordinary
-  // uppercase typing.
-  //
-  // Both Super bits are tested: Mutter reports the Super key on real key
-  // events as MOD4_MASK, while SUPER_MASK is the virtual modifier, and which
-  // one arrives is not worth betting the `$mod+d` close on.
-  const modKey = (state & (Clutter.ModifierType.MOD1_MASK
-    | Clutter.ModifierType.MOD4_MASK
-    | Clutter.ModifierType.SUPER_MASK)) !== 0;
-  if (modKey) return {kind: 'dismiss'};
-
-  const symbol = event.get_key_symbol();
-  const shift = (state & Clutter.ModifierType.SHIFT_MASK) !== 0;
-  const control = (state & Clutter.ModifierType.CONTROL_MASK) !== 0;
-
-  switch (symbol) {
-    case Clutter.KEY_Escape: return {kind: 'dismiss'};
-    case Clutter.KEY_Up: return {kind: 'up'};
-    case Clutter.KEY_Down: return {kind: 'down'};
-    case Clutter.KEY_Tab: return {kind: 'complete'};
-    case Clutter.KEY_BackSpace: return {kind: 'backspace'};
-    case Clutter.KEY_Return:
-    case Clutter.KEY_KP_Enter:
-      return {kind: shift ? 'acceptInTerminal' : 'accept'};
-  }
-  if (control && (symbol === Clutter.KEY_n)) return {kind: 'down'};
-  if (control && (symbol === Clutter.KEY_p)) return {kind: 'up'};
-
-  // Control is tested here rather than with the $mod keys above, so that
-  // Ctrl+n and Ctrl+p reach their cases first. Every other Control-modified
-  // key dismisses, for the same reason those do.
-  if (control) return {kind: 'dismiss'};
-
-  const unicode = event.get_key_unicode();
-  return unicode && unicode >= ' ' ? {kind: 'type', char: unicode} : null;
 }
