@@ -15,6 +15,14 @@ export interface WindowInfo {
   rect: Rect;
   title: string;
   wmClass: string | null;
+  /** i3's `instance` criterion. Mutter: get_wm_class_instance(). */
+  instance: string | null;
+  /** i3's `app_id` criterion. Mutter: get_gtk_application_id(). */
+  appId: string | null;
+  /** i3's `window_role` criterion. Mutter: get_role(). */
+  role: string | null;
+  /** Meta.Window.urgent OR demands_attention -- a client may set either. */
+  urgent: boolean;
   minimized: boolean;
   fullscreen: boolean;
   maximizedH: boolean;

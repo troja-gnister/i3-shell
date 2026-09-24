@@ -150,6 +150,10 @@ function windowInfo(
     rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
     title: window.get_title(),
     wmClass: window.get_wm_class(),
+    instance: null, // TODO: Task 2 supplies get_wm_class_instance()
+    appId: null, // TODO: Task 2 supplies get_gtk_application_id()
+    role: null, // TODO: Task 2 supplies get_role()
+    urgent: false, // TODO: Task 2 supplies Meta.Window.urgent OR demands_attention
     minimized: window.minimized,
     fullscreen: window.is_fullscreen(),
     maximizedH: window.maximized_horizontally,
