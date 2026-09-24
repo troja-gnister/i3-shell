@@ -21,6 +21,7 @@ import {Indicator} from './shell/indicator';
 import {KeyBinder} from './shell/keys';
 import {Launcher} from './shell/launcher';
 import type {RecencyStore} from './shell/launcher';
+import {SettingsRecency} from './shell/recency';
 import {log} from './shell/log';
 import {notify} from './shell/notify';
 import {measureRowHeight} from './shell/rowHeight';
@@ -145,14 +146,7 @@ export default class I3ShellExtension extends Extension {
 
     const catalogue = new AppCatalogue();
     this._catalogue = catalogue;
-    // Task 8 replaces this with the GSettings-backed store. It is in memory
-    // for now so the launcher is complete on its own: recency orders the list
-    // correctly within a session and is forgotten at disable.
-    let recent: string[] = [];
-    const recency: RecencyStore = {
-      read: () => recent,
-      record: (id: string) => { recent = [id, ...recent.filter(other => other !== id)]; },
-    };
+    const recency: RecencyStore = new SettingsRecency(settings);
     // The same `defer` the decorations use, and for the same reason: the
     // launcher closes itself out of signals Mutter is still emitting.
     const launcher = new Launcher(catalogue, recency, callback => { defer(callback); });

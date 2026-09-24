@@ -11,5 +11,10 @@
       <summary>Snapshot of GNOME settings this extension overrode</summary>
       <description>JSON object {schema: {key: originalValue}}; restored when the extension is disabled.</description>
     </key>
+    <key name="launcher-recency" type="as">
+      <default>[]</default>
+      <summary>Recently launched launcher items, most recent first</summary>
+      <description>Desktop entry ids and absolute binary paths; used only to break ranking ties.</description>
+    </key>
   </schema>
 </schemalist>
