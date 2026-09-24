@@ -6,7 +6,7 @@ The i3 experience in GNOME 50: your `~/.config/i3/config` drives workspaces, key
 
 **Status (2026-09-23):** Phases 1, 2A and 2B are merged, pushed and live-accepted by the user. Phase 3A — window borders, a focused-container frame, tab and stack title rows, and a mirrored workspace bar on every non-primary monitor — is implemented on `phase-3a` and awaiting its whole-branch review and the user's walk. A15–A21 **live** acceptance is the user's, and no box in [docs/acceptance/phase-3.md](docs/acceptance/phase-3.md) is ticked. **Nothing in this branch has been seen on a real screen.**
 
-Verification: **527 unit tests in 48 files**, both TypeScript programs, Layer 0, tree lint, and the private nested suite — **228 integration assertions** across single-monitor (including the Phase 3A decoration geometry), two-monitor, settings-restoration and D-Bus-name-conflict scenarios. A1–A7 live acceptance passed by user report on 2026-09-21. The installed `dist/` is a release build.
+Verification: **561 unit tests in 48 files**, both TypeScript programs, Layer 0, tree lint, and the private nested suite — **254 integration assertions** across single-monitor (including the Phase 3A decoration geometry), two-monitor (including the Phase 3B membership round trip between outputs), settings-restoration and D-Bus-name-conflict scenarios. A1–A7 live acceptance passed by user report on 2026-09-21. The installed `dist/` is a release build.
 
 ## Prerequisites
 
