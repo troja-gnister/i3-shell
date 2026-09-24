@@ -332,7 +332,7 @@ describe('engine lifecycle', () => {
     f.calls.length = 0; f.applied.length = 0;
     f.engine.run([{type: 'reload'}], 0); f.flush();
     expect(moved).toHaveLength(1);
-    expect(f.calls).toEqual(['ungrabAll', 'settings.restore']);
+    expect(f.calls).toEqual(['launcher.close', 'ungrabAll', 'settings.restore']);
     expect(f.applied).toEqual([]);
   });
 

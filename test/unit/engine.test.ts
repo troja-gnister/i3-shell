@@ -14,7 +14,7 @@ describe('Engine', () => {
     const e = f.engine;
     e.start();
     // 'decorations' trails every commit — see the `decorations` describe block in lifecycle.test.ts.
-    expect(f.calls).toEqual(['settings.apply', 'grab:65', 'mode:null', 'colors', 'decorations.colors', 'decorations']);
+    expect(f.calls).toEqual(['settings.apply', 'grab:65', 'mode:null', 'colors', 'decorations.colors', 'launcher.colors', 'decorations']);
     expect(e.mode).toBe('default');
     expect(e.state()).toMatchObject({mode: 'default', activeWorkspace: 0, workspaceCount: 10, grabbed: 65, configSource: 'file', errors: 0, warnings: 0});
   });
@@ -64,10 +64,10 @@ describe('Engine', () => {
     f.calls.length = 0;
     e.onLocked();
     expect(e.mode).toBe('default');
-    expect(f.calls).toEqual(['mode:null', 'ungrabAll']);
+    expect(f.calls).toEqual(['launcher.close', 'mode:null', 'ungrabAll']);
     expect(f.ports.keys.grabbedCount).toBe(0);
     e.onUnlocked();
-    expect(f.calls.slice(2)).toEqual(['grab:65', 'decorations']);
+    expect(f.calls.slice(3)).toEqual(['grab:65', 'decorations']);
   });
 
   it('exec, kill and fullscreen reach their selected-id ports', () => {
@@ -91,6 +91,7 @@ describe('Engine', () => {
     f.setNextLoad(f.load('bindsym Mod4+q kill\nbogus 1'));
     expect(e.run([{type: 'reload'}], 1)).toBe('reload: config rejected, keeping previous');
     expect(f.calls).toEqual([
+      'launcher.close',
       'warn:config error line 2: unknown directive bogus',
       'notify:i3-shell: config rejected|line 2: unknown directive bogus',
     ]);
@@ -106,8 +107,9 @@ describe('Engine', () => {
     f.setNextLoad(f.load('bindsym Mod4+q kill\nexec --no-startup-id nm-applet'));
     expect(e.run([{type: 'reload'}], 1)).toBe('reloaded');
     expect(f.calls).toEqual([
+      'launcher.close',
       'warn:config warning line 2: exec is not supported by i3-shell yet; line skipped',
-      'settings.apply', 'grab:1', 'mode:null', 'colors', 'decorations.colors',
+      'settings.apply', 'grab:1', 'mode:null', 'colors', 'decorations.colors', 'launcher.colors',
       'notify:i3-shell|1 config warning(s) — see the shell log',
       'decorations',
     ]);

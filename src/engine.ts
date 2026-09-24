@@ -1,5 +1,5 @@
 import {Tree} from './tree/tree';
-import {descendFocused, leaves, walk, type Con, type NodeId, type Rect, type SplitCon, type WindowId} from './tree/node';
+import {descendFocused, leaves, rootOf, walk, type Con, type MonitorId, type NodeId, type Rect, type SplitCon, type WindowId} from './tree/node';
 import {layoutWithRects, stackingOrder} from './tree/layout';
 import {RectReconciler} from './runtime/reconcile';
 import {serializeTree, type TreeSnapshot, type WindowSnapshot} from './runtime/snapshot';
@@ -9,6 +9,7 @@ import {displayWorkspaceName} from './config/workspaceNames';
 import {excludedFromTree} from './runtime/classify';
 import {parseCommands} from './commands/parse';
 import type {Command, WorkspaceTarget} from './commands/model';
+import type {LauncherRequest} from './launcher/model';
 import type {Binding, Colors, Config, Diagnostic} from './config/model';
 import {effectiveColors, type Accent} from './config/colors';
 
@@ -68,6 +69,18 @@ export interface EnginePorts {
    * goes to both, so a border and the workspace pill never disagree.
    */
   decorations: {apply(plan: DecorationPlan): void; setColors(colors: Colors): void};
+  /**
+   * The launcher is told WHERE to draw; it never decides. The engine resolves
+   * the monitor from its own tree, because the only other source GNOME offers
+   * -- Main.layoutManager.currentMonitor -- is the POINTER's monitor, and a
+   * keyboard-driven user's pointer is routinely on the other screen. That is
+   * the entire defect this feature exists to fix.
+   */
+  launcher: {
+    open(request: LauncherRequest): void;
+    close(): void;
+    setColors(colors: Colors): void;
+  };
   exec(command: string): void;
   notify(title: string, body: string): void;
   log: {info(message: string): void; warn(message: string): void};
@@ -160,6 +173,7 @@ export class Engine {
     const colors = effectiveColors(this._config.colors, this._config.specifiedColors, this._ports.accent.current());
     this._ports.indicator.setColors(colors);
     this._ports.decorations.setColors(colors);
+    this._ports.launcher.setColors(colors);
   }
 
   /**
@@ -253,6 +267,15 @@ export class Engine {
   }
 
   onMonitorsChanged(): void {
+    // The fourteenth close path, and the one nobody reaches on purpose: the
+    // launcher is drawn at an absolute position on a monitor that has just
+    // stopped existing. Close the lid, or pull the cable, with the launcher
+    // open on the external display and the actor keeps that position -- now
+    // off-stage -- while its POPUP-mode grab is still held. Every i3-shell
+    // binding is dead and there is nothing on screen to explain why. `reload`
+    // and `restart` below close for the same reason; a monitor change is the
+    // only one of the three the user does not initiate.
+    this._ports.launcher.close();
     this.commit(() => { this._monitorInvalidation = true; });
   }
 
@@ -696,6 +719,7 @@ export class Engine {
 
   onLocked(): void {
     if (!this._started || this._disposed) return;
+    this._ports.launcher.close();
     this._locked = true;
     this._ports.indicator.setVisible(false);
     this._enterMode('default');
@@ -822,6 +846,43 @@ export class Engine {
       case 'back_and_forth':
         return null;
     }
+  }
+
+  /**
+   * The work area the launcher opens in: the monitor holding the focused
+   * container. WorkspaceCon.focusedCon is initialised to a monitor root when
+   * the workspace is built (src/tree/tree.ts), so a live workspace always
+   * names a monitor; the null branch is reached only before the tree exists.
+   */
+  private _launcherArea(): Rect | null {
+    const topology = this._topology;
+    if (!topology || !this._tree) return null;
+    const workspace = this._ports.workspaces.activeIndex;
+    const areas = topology.workAreas.get(workspace);
+    if (!areas) return null;
+
+    const selection = this._tree.selection(workspace);
+    let monitor: MonitorId | null = null;
+    if (selection?.kind === 'floating')
+      monitor = this._windows.get(selection.window)?.monitor ?? null;
+    else if (selection?.kind === 'tiled') {
+      const root = rootOf(selection.con);
+      for (const [id, candidate] of this._tree.workspace(workspace).monitors)
+        if (candidate === root) { monitor = id; break; }
+    }
+
+    const resolved = monitor !== null ? areas.get(monitor) : undefined;
+    if (resolved) return resolved;
+    // Falling back to the primary output is the exact symptom this feature
+    // exists to remove -- "it opened on the laptop again" -- so it never
+    // happens silently. It is reached when the workspace has no selection at
+    // all (nothing is open), or when a floating window's monitor is unknown to
+    // the topology, which is what a mid-flight monitor change looks like.
+    if (monitor !== null)
+      this._ports.log.warn(`launcher: no work area for monitor ${monitor}; opening on the primary output`);
+    else if (selection)
+      this._ports.log.warn('launcher: the focused container names no monitor; opening on the primary output');
+    return areas.get(topology.primary) ?? null;
   }
 
   private _runOne(command: Command, timestamp: number, commandFrames: Map<WindowId, Rect>): string {
@@ -1047,9 +1108,24 @@ export class Engine {
       }
       case 'mode':
         return this._enterMode(command.name) ? `mode ${command.name}` : `mode "${command.name}" is not defined`;
+      case 'launcher': {
+        if (this._locked) return 'launcher: refused while the session is locked';
+        const area = this._launcherArea();
+        if (!area) {
+          this._ports.log.warn('launcher: no work area yet; not opening');
+          return 'launcher: not ready';
+        }
+        this._ports.launcher.open({area, term: command.term});
+        return 'launcher';
+      }
       case 'reload':
+        this._ports.launcher.close();
         return this._applyLoaded(ports.loadConfig('reload')) ? 'reloaded' : 'reload: config rejected, keeping previous';
       case 'restart':
+        // Same reason as `reload` above: this rebuilds the tree and the
+        // bindings, and a modal grab that outlives that rebuild holds the
+        // keyboard with nothing listening behind it.
+        this._ports.launcher.close();
         if (!this._applyLoaded(ports.loadConfig('reload'))) return 'restart: config rejected, keeping previous';
         this.commit(() => {
           this._tree = null;

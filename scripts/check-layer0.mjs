@@ -2,7 +2,7 @@
 import {readdirSync, readFileSync, statSync} from 'node:fs';
 import {join} from 'node:path';
 
-const roots = ['src/util', 'src/config', 'src/commands', 'src/tree', 'src/runtime', 'src/engine.ts', 'src/global.d.ts'];
+const roots = ['src/util', 'src/config', 'src/commands', 'src/tree', 'src/runtime', 'src/launcher', 'src/engine.ts', 'src/global.d.ts'];
 const forbidden = [
   /from\s+['"]gi:\/\//,
   /from\s+['"]resource:\/\//,

@@ -11,6 +11,12 @@ import {log} from '../../../src/shell/log';
  */
 const theme = vi.hoisted(() => ({
   height: 26,
+  /**
+   * What an `.i3-shell-launcher-entry` reports on its own. The doubles do no
+   * layout, so the chrome measurement is asserted through the box that holds
+   * it rather than by summing a stylesheet.
+   */
+  entryHeight: 38,
   constructorThrows: false,
   tabConstructorThrows: false,
   measureThrows: false,
@@ -53,6 +59,12 @@ vi.mock('gi://St', async () => {
           return super.get_preferred_height(forWidth);
         }
       },
+      Entry: class extends fakeSt.Entry {
+        constructor(props: Record<string, unknown> = {}) {
+          super(props);
+          this.preferredHeight = theme.entryHeight;
+        }
+      },
       Button: class extends fakeSt.Button {
         constructor(props: Record<string, unknown> = {}) {
           super(props);
@@ -71,14 +83,19 @@ const {fakeSt, uiGroup, resetFakeActors, liveActors, disposedAccesses, created, 
 
 // The adapter's GNOME globals belong to the native TS program, so it is loaded
 // at runtime against the doubles above rather than imported statically.
-const {measureRowHeight, FALLBACK_ROW_HEIGHT} = await vi.importActual<{
-  measureRowHeight(): number;
-  FALLBACK_ROW_HEIGHT: number;
-}>('../../../src/shell/rowHeight');
+const {measureRowHeight, measureLauncherRowHeight, measureLauncherChrome, FALLBACK_ROW_HEIGHT} =
+  await vi.importActual<{
+    measureRowHeight(): number;
+    measureLauncherRowHeight(): number;
+    measureLauncherChrome(rowHeight: number): number;
+    FALLBACK_ROW_HEIGHT: number;
+  }>('../../../src/shell/rowHeight');
+const {CHROME_ROWS} = await import('../../../src/launcher/window');
 
 beforeEach(() => {
   resetFakeActors();
   theme.height = 26;
+  theme.entryHeight = 38;
   theme.constructorThrows = false;
   theme.tabConstructorThrows = false;
   theme.measureThrows = false;
@@ -189,6 +206,87 @@ describe('measureRowHeight', () => {
     theme.measureThrows = true;
     measureRowHeight();
     expect(disposedAccesses()).toEqual([]);
+  });
+
+  it('measures the launcher row against its OWN style class', () => {
+    // The launcher used to size its viewport as measureRowHeight() x 10 --
+    // the TITLE row's class, a different rule with different padding. The
+    // moment a theme made `.i3-shell-launcher-row` the taller of the two, the
+    // tenth row was clipped: the highlight vanished off the bottom of the
+    // viewport and Enter launched something the user could not see.
+    measureLauncherRowHeight();
+    expect(lastCreated('launcher-row').kind).toBe('St.BoxLayout');
+    expect(theme.measuredChildren[0].map(child => child.split(' ')[0])).toEqual(['St.Label']);
+  });
+
+  it('measures the launcher row without an icon in it', () => {
+    // launcherIconSize() derives the icon from this number, so measuring with
+    // an icon would make the row's height depend on its own last measurement.
+    measureLauncherRowHeight();
+    expect(theme.measuredChildren[0].some(child => child.startsWith('St.Icon'))).toBe(false);
+  });
+
+  it('measures the launcher row in the stage and leaves nothing behind', () => {
+    expect(measureLauncherRowHeight()).toBe(26);
+    expect(theme.measuredInStage).toEqual([true]);
+    expect(liveActors()).toEqual([]);
+    expect(uiGroup.children).toEqual([]);
+  });
+
+  it('falls back for the launcher row on the same three failures', () => {
+    theme.height = 0;
+    expect(measureLauncherRowHeight()).toBe(FALLBACK_ROW_HEIGHT);
+    theme.height = Number.NaN;
+    expect(measureLauncherRowHeight()).toBe(FALLBACK_ROW_HEIGHT);
+    theme.height = 26;
+    theme.measureThrows = true;
+    expect(measureLauncherRowHeight()).toBe(FALLBACK_ROW_HEIGHT);
+    expect(log.error).toHaveBeenCalled();
+    expect(uiGroup.children).toEqual([]);
+  });
+
+  it('measures the chrome as the launcher box around a launcher entry', () => {
+    // Not an estimate in row heights: `.i3-shell-launcher-row` has 2px of
+    // padding while GNOME's own StEntry has 9px, so a chrome counted in rows
+    // is short at every ordinary font -- which forced the box shorter than its
+    // own contents. The doubles do no layout, so what is asserted here is the
+    // SHAPE of the measurement: which actor is measured, what is inside it,
+    // and that the number handed back is that actor's own reported height
+    // rather than anything derived from the row.
+    theme.height = 71;
+    expect(measureLauncherChrome(26)).toBe(71);
+    expect(lastCreated('launcher').kind).toBe('St.BoxLayout');
+    expect(theme.measuredChildren[0].map(child => child.split(' ')[0])).toEqual(['St.Entry']);
+    // 71 is not a multiple of 26: a chrome that came back as one would mean
+    // the measurement had been replaced by arithmetic again.
+    expect(71 % 26).not.toBe(0);
+  });
+
+  it('measures the chrome in the stage and leaves nothing behind', () => {
+    measureLauncherChrome(26);
+    expect(theme.measuredInStage).toEqual([true]);
+    expect(liveActors()).toEqual([]);
+    expect(uiGroup.children).toEqual([]);
+  });
+
+  it('falls back to three row heights when the chrome cannot be measured', () => {
+    // Three, not two: two was the value that came out short.
+    theme.measureThrows = true;
+    expect(measureLauncherChrome(26)).toBe(26 * CHROME_ROWS);
+    expect(CHROME_ROWS).toBe(3);
+    expect(log.error).toHaveBeenCalled();
+    expect(uiGroup.children).toEqual([]);
+  });
+
+  it('falls back on a zero or non-finite chrome, and never to zero itself', () => {
+    theme.height = 0;
+    expect(measureLauncherChrome(26)).toBe(26 * CHROME_ROWS);
+    theme.height = Number.NaN;
+    expect(measureLauncherChrome(26)).toBe(26 * CHROME_ROWS);
+    // A degenerate row height must not make the chrome vanish: a zero-height
+    // box is one the user cannot see at all.
+    theme.height = 0;
+    expect(measureLauncherChrome(0)).toBeGreaterThan(0);
   });
 
   it('records a read from a disposed actor, so the assertion above is load-bearing', () => {

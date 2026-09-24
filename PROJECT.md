@@ -9,9 +9,9 @@ with directional navigation. Three things are the non-negotiable core: **workspa
 **shortcuts**, **dynamic tiling**. Phases 1 and 2 deliver that core; Phases 3 and 4 add appearance and
 fidelity.
 
-**State (2026-09-23):** Phases 1, 2A, 2B and **3A** are merged and pushed, and the user walked and passed the Phase 2 and Phase 3A acceptance checklists. Phase 3B is implemented on `phase-3b` across five reviewed tasks: `sticky` and `skipTaskbar` moved from read-once `WindowFacts` to per-commit `WindowInfo`, the two `notify::` signals that make them observable, tree membership as a per-commit predicate, and extension ownership of `org.gnome.mutter workspaces-only-on-primary`. What remains is the **whole-branch review** and the user's **live A22–A27 walk** — [docs/acceptance/phase-3b.md](docs/acceptance/phase-3b.md), 25 boxes, deliberately unchecked. Phase 4 remains unbuilt.
+**State (2026-09-24):** Phases 1, 2A, 2B and **3A** are merged and pushed, and the user walked and passed the Phase 2 and Phase 3A acceptance checklists. Phase 3B is merged and pushed too: `sticky` and `skipTaskbar` moved from read-once `WindowFacts` to per-commit `WindowInfo`, the two `notify::` signals that make them observable, tree membership as a per-commit predicate, and extension ownership of `org.gnome.mutter workspaces-only-on-primary`. What remains there is the user's **live A22–A27 walk** — [docs/acceptance/phase-3b.md](docs/acceptance/phase-3b.md), 25 boxes, deliberately unchecked. A launcher is implemented on `launcher` across ten reviewed tasks: `$mod+d` draws a dmenu-style application/binary picker in-process, on the monitor holding the **focused container** — resolved from i3-shell's own tree — rather than the primary output or the pointer. What remains there is the **whole-branch review** and the user's **live A28–A37 walk** — [docs/acceptance/launcher.md](docs/acceptance/launcher.md), deliberately unchecked. Phase 4 remains unbuilt.
 
-Latest verification: **564 tests in 48 files**, both TypeScript programs, Layer 0, tree lint, and the full private nested suite — **254 integration assertions** across single-monitor (including the Phase 3A decoration geometry), two-monitor (including the Phase 3B membership round trip between outputs and the sticky fact flipping under a live window), settings-restoration and D-Bus-name-conflict scenarios. The suite found and fixed three production defects (see §5). Phase 3A adds the decoration geometry scenarios and the per-monitor bar strut assertions.
+Latest verification: **726 tests in 58 files**, both TypeScript programs, Layer 0, tree lint, and the full private nested suite — **261 integration assertions** across single-monitor (including the Phase 3A decoration geometry), two-monitor (including the Phase 3B membership round trip between outputs, the sticky fact flipping under a live window, and the launcher's monitor-follows-focus scenario), settings-restoration and D-Bus-name-conflict scenarios. The suite found and fixed three production defects (see §5). Phase 3A adds the decoration geometry scenarios and the per-monitor bar strut assertions.
 
 ---
 
@@ -19,7 +19,7 @@ Latest verification: **564 tests in 48 files**, both TypeScript programs, Layer 
 
 | Path | What |
 |---|---|
-| `docs/superpowers/specs/2026-09-20-i3-shell-design.md` | **The design spec — the binding authority** (19 sections: acceptance criteria A1–A14, architecture, config grammar, command language, the tree algorithms, window lifecycle, workspaces, keys, indicator, decorations, GNOME overrides, D-Bus, error handling, testing, phases, toolchain, decisions log). Its §3 holds **A1–A14 only**: A15–A21 are defined in the Phase 3A design doc and A22–A27 in the Phase 3B one, so do not widen this range. |
+| `docs/superpowers/specs/2026-09-20-i3-shell-design.md` | **The design spec — the binding authority** (19 sections: acceptance criteria A1–A14, architecture, config grammar, command language, the tree algorithms, window lifecycle, workspaces, keys, indicator, decorations, GNOME overrides, D-Bus, error handling, testing, phases, toolchain, decisions log). Its §3 holds **A1–A14 only**: A15–A21 are defined in the Phase 3A design doc, A22–A27 in the Phase 3B one, and A28–A37 in `docs/superpowers/specs/2026-09-24-launcher-design.md` §8, so do not widen this range. |
 | `docs/superpowers/plans/2026-09-20-phase-1-foundation.md` | The Phase 1 implementation plan (14 TDD tasks with full code). Several of its code blocks were wrong and were fixed during execution — where plan and code differ, the code (and the carry-forward doc) wins. |
 | `docs/superpowers/plans/2026-09-21-phase-1-carry-forward.md` | Execution record: every ruling made while building Phase 1, items deferred to Phases 2/4, security note. **Read before planning Phase 2.** |
 | `docs/superpowers/plans/2026-09-21-phase-2a-tree.md` | Completed/merged Phase 2A plan, audit and execution record. Its tree/property tests are retained in Phase 2B's integration. |
@@ -32,6 +32,8 @@ Latest verification: **564 tests in 48 files**, both TypeScript programs, Layer 
 | `test/integration/` | Private nested harness (`nested.sh`, `inside.sh`), GTK4 fixture (`windows.js`), typed D-Bus client/smoke (`client.py`), Phase 1 checks (`phase1-checks.sh`), the Phase 2 A8–A14 driver (`phase2-checks.py`) and the failure-safe wrapper (`run.sh`). |
 | `docs/acceptance/phase-2.md` | The live-session checklist for A8–A14. The user **walked and passed** it; the boxes are left unticked as the record of what was walked. |
 | `docs/acceptance/phase-3.md` | The live-session checklist for A15–A21 (Phase 3A decorations), **unchecked**: the user's walk. |
+| `docs/acceptance/phase-3b.md` | The live-session checklist for A22–A27 (Phase 3B window-fact mutability and `workspaces-only-on-primary` ownership), **unchecked**: the user's walk. |
+| `docs/acceptance/launcher.md` | The live-session checklist for A28–A37 (the launcher), **unchecked**: the user's walk. |
 | `schemas/`, `metadata.json`, `stylesheet.css`, `esbuild.mjs`, `Makefile`, `tsconfig*.json` | Build and packaging. |
 
 The user's i3 config (`~/.config/i3/config`) is the source of truth for behaviour and stays outside the repo.
@@ -62,7 +64,7 @@ The user's i3 config (`~/.config/i3/config`) is the source of truth for behaviou
 
 ```sh
 npm ci                      # or npm install; .npmrc sets legacy-peer-deps
-npm test                    # vitest on Node — pure core + native adapter doubles (527 tests)
+npm test                    # vitest on Node — pure core + native adapter doubles (726 tests)
 npm run typecheck           # two programs: tsconfig.json (src, GNOME types) + tsconfig.test.json (tests + Layer 0, Node types)
 npm run check:layer0        # fails if Layer 0 imports gi:// / resource:// / src/shell (also part of `npm run build`)
 npm run build               # release bundle → dist/  (esbuild, single ESM file; schemas compiled)
@@ -153,12 +155,12 @@ Target arrangements: laptop alone (`eDP-1`) and docked with external display(s),
 
 ## 7. How to continue (process that worked)
 
-1. Phases 2B and 3A are merged, pushed and walked. Phase 3B is implemented on `phase-3b` across five reviewed tasks. What remains is the user's **live A22-A27 walk** ([docs/acceptance/phase-3b.md](docs/acceptance/phase-3b.md), 25 unchecked boxes), which needs a logout because Wayland cannot reload extension code in place. The permanent-drop fix is proven against a real compositor (`ok MB a sticky window is still tracked, under the same id`), but no user has yet moved a window between real displays with this build.
+1. Phases 1, 2A, 2B, 3A and 3B are merged and pushed; the Phase 2 and Phase 3A walks passed. What remains for Phase 3B is the user's **live A22–A27 walk** ([docs/acceptance/phase-3b.md](docs/acceptance/phase-3b.md), 25 unchecked boxes), which needs a logout because Wayland cannot reload extension code in place. The permanent-drop fix is proven against a real compositor (`ok MB a sticky window is still tracked, under the same id`), but no user has yet moved a window between real displays with this build. The launcher is implemented on the `launcher` branch across ten reviewed tasks and awaits its **whole-branch review** and the user's **live A28–A37 walk** ([docs/acceptance/launcher.md](docs/acceptance/launcher.md), 34 unchecked boxes).
 2. Phase 2A is reviewed and merged into `main`; the completed `phase-2` branch is deleted. `origin` is `git@github.com:troja-gnister/i3-shell.git`, and `main` tracks `origin/main`. The user authorized the initial push at `568855c`.
 3. Two items need a decision from the user rather than a unilateral fix, both recorded in the [carry-forward](docs/superpowers/plans/2026-09-21-phase-1-carry-forward.md): accelerators claimed by another external grabber outside spec §13's five schemas (IBus takes `<Super>semicolon` and `<Super>space`), and compositor signals still driving `commit()` during shutdown.
 4. Continue with `superpowers:subagent-driven-development`: one implementer per task, a reviewer per task, and a whole-branch review at the end. Keep the ledger and record every ruling.
 5. Verify claims before trusting them: type-check GNOME API usage against `@girs` in a scratch project, extract the shell's JS to check behaviour, and run the nested shell for anything runtime-dependent.
-6. Controller owns all native builds/runs/install and git commits; workers freeze code during those runs. Do not change the harness under a running invocation. Final whole-branch review uses `b6fe8cc..HEAD`, triages both deferred Minors, then at most one complete fix wave and scoped re-review. Keep the phase branch until the user requests integration.
+6. Controller owns all native builds/runs/install and git commits; workers freeze code during those runs. Do not change the harness under a running invocation. A whole-branch review covers the full range of commits on the branch, triages every deferred finding from the individual task reviews, then at most one complete fix wave and a scoped re-review. Keep the phase branch until the user requests integration.
 
 ## 8. People and conventions
 

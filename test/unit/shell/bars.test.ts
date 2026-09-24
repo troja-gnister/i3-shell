@@ -352,4 +352,57 @@ describe('MonitorBars', () => {
     expect(criticals).toEqual(['St.BoxLayout.set_position after dispose']);
     criticals.length = 0;
   });
+
+  it('touches no theme node, and falls back to the floor, once the shell ' +
+     'unparents a bar without destroying it', () => {
+    // Task 9's native run found the gap this closes: at shutdown the shell
+    // can unparent chrome from the stage without ever destroying it, so the
+    // per-bar 'destroy' listener above -- which is what the previous test
+    // relies on -- never fires and the bar stays in `_bars`. A workspace
+    // count change firing later (the extension's own signal handlers are
+    // still connected; disable() has not run) must not ask this bar's
+    // now-stageless actor for a theme node: doing so is what produced
+    // `St-CRITICAL: ... which is not in the stage` and, by the same query
+    // resolving a scale-aware property, `libmutter-CRITICAL:
+    // meta_display_get_monitor_scale: assertion ... failed` against the
+    // native compositor.
+    const monitorBars = new MonitorBars(() => {});
+    monitorBars.setPills(pills);
+    contentBoxOf(bars()[0]).preferredHeight = 44;
+    // _resize() asks the inner content box, not the outer chrome actor, for
+    // its preferred height -- real Clutter's get_stage() walks the parent
+    // chain, so a child is never "in the stage" once its parent is not, but
+    // this fake tracks the flag per actor rather than deriving it. Both have
+    // to be set, or this test's `criticals` assertion below could not fail
+    // even with the guard in _resize() deleted.
+    bars()[0].inStage = false;
+    contentBoxOf(bars()[0]).inStage = false;
+    criticals.length = 0;
+
+    monitorBars.setPills([{name: '9', active: true, occupied: true}]);
+    monitorBars.setColors(DEFAULT_COLORS);
+    monitorBars.setMode('resize');
+    monitorBars.setMode(null);
+    monitorBars.setVisible(false);
+    monitorBars.setVisible(true);
+
+    expect(criticals).toEqual([]);
+    // The floor, not 44: with no stage to ask, _resize() never calls
+    // get_preferred_height() at all, exactly as it never calls it on a
+    // destroyed actor.
+    expect(bars()[0].geometry.height).toBe(28);
+  });
+
+  it('records a call to an unparented bar, so the assertion above can fail', () => {
+    // Same reasoning as the disposed-bar recorder above, for the other half
+    // of the hazard this task closes.
+    new MonitorBars(() => {});
+    const actor = bars()[0];
+    actor.inStage = false;
+
+    actor.get_preferred_height(-1);
+
+    expect(criticals).toEqual(['St.BoxLayout.get_preferred_height: not in the stage']);
+    criticals.length = 0;
+  });
 });

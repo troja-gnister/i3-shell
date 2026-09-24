@@ -5,6 +5,7 @@ import type {Accent} from '../../../src/config/colors';
 import type {PillState, Topology, WindowEvent, WindowInfo} from '../../../src/runtime/model';
 import type {DecorationPlan} from '../../../src/runtime/decoration';
 import type {Rect, WindowId} from '../../../src/tree/node';
+import type {LauncherRequest} from '../../../src/launcher/model';
 
 export function windowInfo(id: number, patch: Partial<WindowInfo> = {}): WindowInfo {
   return {id, workspace: 0, monitor: 10, kind: 'tiled', rect: {x: 20, y: 40, width: 300, height: 200},
@@ -14,6 +15,19 @@ export function windowInfo(id: number, patch: Partial<WindowInfo> = {}): WindowI
 export function topology(count = 10): Topology {
   return {primary: 10, monitors: [{id: 10, index: 0, connectors: ['fixture']}],
     workAreas: new Map(Array.from({length: count}, (_, i) => [i, new Map([[10, {x: 0, y: 30, width: 1000, height: 700}]])]))};
+}
+
+export const PRIMARY_AREA = {x: 0, y: 30, width: 1000, height: 700};
+export const SECOND_AREA = {x: 1000, y: 0, width: 1920, height: 1050};
+
+/** Two monitors: 10 is primary at the origin, 11 sits to its right. */
+export function twoMonitorTopology(count = 10): Topology {
+  return {
+    primary: 10,
+    monitors: [{id: 10, index: 0, connectors: ['fixture']}, {id: 11, index: 1, connectors: ['second']}],
+    workAreas: new Map(Array.from({length: count}, (_, i) =>
+      [i, new Map([[10, {...PRIMARY_AREA}], [11, {...SECOND_AREA}]])])),
+  };
 }
 export function fakeEngine(initialText = 'bindsym Mod4+q kill') {
   const calls: string[] = [];
@@ -77,6 +91,11 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill') {
       apply: plan => { f.plan = plan; calls.push('decorations'); },
       setColors: colors => { f.decorationColors = colors; calls.push('decorations.colors'); },
     },
+    launcher: {
+      open: request => { f.launcherRequest = request; calls.push('launcher.open'); },
+      close: () => { calls.push('launcher.close'); },
+      setColors: colors => { f.launcherColors = colors; calls.push('launcher.colors'); },
+    },
     now: () => 123456789,
     exec: command => { calls.push(`exec:${command}`); },
     notify: (title, body) => { calls.push(`notify:${title}|${body}`); },
@@ -90,6 +109,9 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill') {
     visible: true, refuseGeometry: false, emitFrames: true, activationFails: false,
     onApply: null as ((id: WindowId) => void) | null,
     plan: null as DecorationPlan | null,
+    launcherRequest: null as LauncherRequest | null,
+    launcherColors: null as Colors | null,
+    get topology() { return currentTopology; },
     add(id: WindowId, patch: Partial<WindowInfo> = {}) { windows.set(id, windowInfo(id, patch)); engine.onWindowEvent({type: 'added', id}); },
     change(id: WindowId, patch: Partial<WindowInfo>, eventType: Exclude<WindowEvent['type'], 'added' | 'removed' | 'focused'>) {
       const old = windows.get(id); if (!old) return;

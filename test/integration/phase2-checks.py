@@ -1483,6 +1483,94 @@ def scenario_membership():
     print('ok phase 3B membership on two outputs', flush=True)
 
 
+def launcher_state():
+    return json.loads(call('org.i3shell.Debug', 'LauncherState')[0])
+
+
+def check_inside(box, area, label):
+    check(label,
+          [box['x'] >= area['x'],
+           box['y'] >= area['y'],
+           box['x'] + box['width'] <= area['x'] + area['width'],
+           box['y'] + box['height'] <= area['y'] + area['height']],
+          [True, True, True, True])
+
+
+def scenario_launcher(primary_id, second_id, primary_area, second_area):
+    """The launcher opens where FOCUS is, not where the pointer is.
+
+    This is the whole reason the launcher exists in-process. ArcMenu anchors
+    its menu to a panel button that exists only on the primary monitor, and its
+    Runner resolves the monitor through Mutter's POINTER monitor. Neither is
+    checkable without a second output, so it is checked here.
+    """
+    reset_windows()
+    create('LA primary')
+    wait_until(lambda: window_by_title('LA primary')['monitor'] == primary_id,
+               'LA the first window lands on the primary output')
+
+    run('launcher')
+    wait_until(lambda: launcher_state()['open'], 'LA the launcher opens')
+    box = launcher_state()
+    check_inside(box, primary_area, 'LA the launcher opens inside the primary work area')
+    run('launcher')
+    wait_until(lambda: not launcher_state()['open'], 'LA the same command closes it')
+
+    # Move focus to the second output and open again. The pointer is never
+    # moved, so a pointer-based implementation would still answer "primary".
+    run('floating enable')
+    run(f'move position {second_area["x"] + 40} {second_area["y"] + 40}')
+    wait_until(lambda: window_by_title('LA primary')['monitor'] == second_id,
+               'LA the window reports the second output')
+    run('floating disable')
+
+    run('launcher')
+    wait_until(lambda: launcher_state()['open'], 'LA the launcher opens with focus on the second output')
+    box = launcher_state()
+    check_inside(box, second_area, 'LA the launcher follows focus to the second output')
+    check('LA the launcher is not on the primary output',
+          box['x'] + box['width'] <= primary_area['x'] + primary_area['width']
+          and box['x'] >= primary_area['x'],
+          False)
+
+    # A binding must not fire while the launcher holds the grab. <Super>2
+    # targets workspace index 1, and the session is on index 0 here -- pressing
+    # a binding for the workspace you are already on is a no-op either way and
+    # would pass with the grab leaking. The grab-release proof below presses the
+    # SAME key: it must do nothing now and something once the launcher closes.
+    before = json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace']
+    check('LA the session has not left the boot workspace yet', before, 0)
+    press('<Super>2')
+    after = json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace']
+    check('LA a workspace binding does not fire while the launcher is open', after, before)
+
+    press('Escape')
+    wait_until(lambda: not launcher_state()['open'], 'LA Escape closes the launcher')
+
+    # Spec 2.3: closing returns focus to the window that had it. Checked here,
+    # before anything else moves focus -- the grab-release proof below switches
+    # workspace twice, and a focus check after that would be testing whether
+    # focus survives a workspace round trip, which is a different claim.
+    # GetWindows reports no focus field (WindowSnapshot spreads WindowInfo,
+    # which has none), so focus is proved the way the rest of this file proves
+    # it: a bare key reaches only the natively focused client's Entry.
+    type_key('z', 'LA primary', {})
+    ok('LA focus returned to the window that had it')
+
+    # Only now the grab-release proof. Asserting "not open" alone would pass
+    # with the keyboard still captured, which is the failure that costs the
+    # user their session.
+    workspace_before = json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace']
+    press('<Super>2')
+    wait_until(
+        lambda: json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace'] != workspace_before,
+        'LA bindings work again once the launcher has closed')
+    ok('LA the launcher released its grab')
+    run(f'workspace number {workspace_before + 1}')
+
+    reset_windows()
+
+
 def two_monitor_scenario():
     isolated()
     ready_normal()
@@ -1510,6 +1598,10 @@ def two_monitor_scenario():
     check('MM the secondary work area keeps the monitor full width',
           [second_area['x'], second_area['width']],
           [second_monitor['x'], second_monitor['width']])
+
+    # While both outputs still exist: the launcher-follows-focus scenario
+    # (Task 9), reusing the ids and work areas already established above.
+    scenario_launcher(primary_id, second_id, first_area, second_area)
 
     reset_windows()
     create('MM stay')

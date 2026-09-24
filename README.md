@@ -4,9 +4,9 @@ The i3 experience in GNOME 50: your `~/.config/i3/config` drives workspaces, key
 
 **Start with [PROJECT.md](PROJECT.md)** — the handbook for anyone picking this project up.
 
-**Status (2026-09-23):** Phases 1, 2A, 2B and 3A are merged, pushed and live-accepted by the user — the Phase 3A walk passed on the merged build. Phase 3B — `sticky` and `skipTaskbar` read per commit instead of cached, so a window moved to a secondary output leaves the tiling and rejoins it instead of being dropped permanently, plus extension ownership of `org.gnome.mutter workspaces-only-on-primary` — is implemented on `phase-3b` and awaiting its whole-branch review and the user's walk. A22–A27 **live** acceptance is the user's, and no box in [docs/acceptance/phase-3b.md](docs/acceptance/phase-3b.md) is ticked.
+**Status (2026-09-24):** Phases 1, 2A, 2B, 3A and 3B are merged and pushed — the Phase 3A walk passed on the merged build. Phase 3B moved `sticky` and `skipTaskbar` from the read-once `WindowFacts` to the per-commit `WindowInfo`, so a window moved to a secondary output leaves the tiling and rejoins it instead of being dropped permanently, and gave the extension ownership of `org.gnome.mutter workspaces-only-on-primary`; its A22–A27 **live** acceptance is still the user's walk, and no box in [docs/acceptance/phase-3b.md](docs/acceptance/phase-3b.md) is ticked. A launcher — `$mod+d` opens a dmenu-style application/binary picker on the monitor holding the **focused container**, resolved from i3-shell's own tree, never the primary output or the pointer — is implemented on `launcher` (ten tasks) and awaiting its whole-branch review and the user's walk. A28–A37 **live** acceptance is the user's, and no box in [docs/acceptance/launcher.md](docs/acceptance/launcher.md) is ticked.
 
-Verification: **564 unit tests in 48 files**, both TypeScript programs, Layer 0, tree lint, and the private nested suite — **254 integration assertions** across single-monitor (including the Phase 3A decoration geometry), two-monitor (including the Phase 3B membership round trip between outputs), settings-restoration and D-Bus-name-conflict scenarios. A1–A7 live acceptance passed by user report on 2026-09-21. The installed `dist/` is a release build.
+Verification: **726 unit tests in 58 files**, both TypeScript programs, Layer 0, tree lint, and the private nested suite — **261 integration assertions** across single-monitor (including the Phase 3A decoration geometry), two-monitor (including the Phase 3B membership round trip between outputs and the launcher's monitor-follows-focus scenario), settings-restoration and D-Bus-name-conflict scenarios. A1–A7 live acceptance passed by user report on 2026-09-21. The installed `dist/` is a release build.
 
 ## Prerequisites
 
@@ -54,6 +54,18 @@ GSETTINGS_SCHEMA_DIR=~/.local/share/gnome-shell/extensions/i3-shell@troja/schema
 Config errors keep the previous config running and show a notification. GNOME bindings that collide with the config are cleared while the extension is enabled and restored when it is disabled.
 
 If the extension was removed without being disabled, reinstall the same UUID and schema, enable it so it can load the saved originals, then disable it to restore them. A Wayland session may need logout/login after reinstalling code. Do not clear `overridden-settings` before restoration; failed restores retain their saved values for another attempt.
+
+### Launcher
+
+`bindsym $mod+d launcher --term $term` in the config opens a dmenu-style launcher drawn in-process,
+so it always appears on the monitor holding the **focused container** — resolved from i3-shell's own
+tree — rather than the primary output or the pointer's monitor. Typing narrows a merged list of
+installed applications (`Shell.AppSystem`, Flatpak included) and `$PATH` binaries; `Enter` launches
+the selected item, `Shift+Enter` runs it inside `--term`, and a query matching nothing runs the typed
+text verbatim, the way `dmenu_run` does. `Tab` completes to the highlighted item; `Ctrl+n`/`Ctrl+p`
+and `Up`/`Down` move the selection; `Escape` or the opening binding again closes it without launching
+anything, and i3-shell's own bindings do not fire while it is open. `--term` is optional; without it
+the terminal action logs once and does nothing.
 
 ## Control it like i3-msg
 

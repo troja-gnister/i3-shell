@@ -28,6 +28,13 @@ export type Command =
   | {type: 'reload'}
   | {type: 'restart'}
   | {type: 'nop'; text: string}
+  /**
+   * i3-shell's own launcher. NOT an i3 command -- real i3 rejects this line.
+   * The divergence is deliberate; see the launcher spec §2.1. `term` is the
+   * command Shift+Enter runs the choice inside, or null when the binding did
+   * not supply --term.
+   */
+  | {type: 'launcher'; term: string | null}
   | {type: 'unknown'; text: string};
 
 export interface CommandParseResult {

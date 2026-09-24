@@ -86,3 +86,29 @@ describe('parseCommands', () => {
     expect(bad.diagnostics).toEqual(["unknown command 'frobnicate'"]);
   });
 });
+
+describe('launcher', () => {
+  it('parses with no terminal', () => {
+    expect(parseCommands('launcher').commands).toEqual([{type: 'launcher', term: null}]);
+  });
+
+  it('parses --term with its command', () => {
+    expect(parseCommands('launcher --term kitty').commands).toEqual([{type: 'launcher', term: 'kitty'}]);
+  });
+
+  it('keeps a quoted multi-word terminal whole', () => {
+    expect(parseCommands('launcher --term "flatpak run org.wezfurlong.wezterm"').commands)
+      .toEqual([{type: 'launcher', term: 'flatpak run org.wezfurlong.wezterm'}]);
+  });
+
+  it('rejects --term with no value', () => {
+    const r = parseCommands('launcher --term');
+    expect(r.diagnostics).toEqual(['launcher: --term needs a command']);
+    expect(r.commands).toEqual([{type: 'unknown', text: 'launcher --term'}]);
+  });
+
+  it('rejects an unknown flag rather than treating it as a terminal', () => {
+    const r = parseCommands('launcher --bogus');
+    expect(r.diagnostics).toEqual(["launcher: unknown option '--bogus'"]);
+  });
+});

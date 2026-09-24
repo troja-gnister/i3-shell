@@ -180,9 +180,17 @@ export class MonitorBars {
 
   /** Spans the monitor's width; takes its height from the themed content, never less than the floor. */
   private _resize(bar: Bar): void {
-    const [, natural] = bar.box.get_preferred_height(-1);
-    // An actor with no theme attached yet reports nothing useful; the floor
-    // is the answer then, not NaN.
+    // The shell can unparent chrome from the stage without destroying it --
+    // notably at shutdown, before disable() runs (the _destroyed guard above
+    // only catches the actor being destroyed outright, which is a different
+    // event). A widget outside the stage has no theme node: asking for one
+    // warns, and resolving a scale-aware property through it can ask Meta for
+    // a monitor index the backend has already invalidated. The floor below
+    // already covers "no theme yet" (a non-finite natural height, when the
+    // actor is in the stage but not yet styled); this covers "no stage any
+    // more" the same way, by never asking in the first place.
+    const inStage = (bar.actor.get_stage() as Clutter.Stage | null) !== null;
+    const [, natural] = inStage ? bar.box.get_preferred_height(-1) : [0, NaN];
     const height = Number.isFinite(natural) ? Math.max(BAR_HEIGHT, Math.ceil(natural)) : BAR_HEIGHT;
     bar.actor.set_size(bar.monitor.width, height);
   }
