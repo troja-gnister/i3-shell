@@ -267,6 +267,15 @@ export class Engine {
   }
 
   onMonitorsChanged(): void {
+    // The fourteenth close path, and the one nobody reaches on purpose: the
+    // launcher is drawn at an absolute position on a monitor that has just
+    // stopped existing. Close the lid, or pull the cable, with the launcher
+    // open on the external display and the actor keeps that position -- now
+    // off-stage -- while its POPUP-mode grab is still held. Every i3-shell
+    // binding is dead and there is nothing on screen to explain why. `reload`
+    // and `restart` below close for the same reason; a monitor change is the
+    // only one of the three the user does not initiate.
+    this._ports.launcher.close();
     this.commit(() => { this._monitorInvalidation = true; });
   }
 
@@ -862,7 +871,18 @@ export class Engine {
         if (candidate === root) { monitor = id; break; }
     }
 
-    return areas.get(monitor ?? topology.primary) ?? areas.get(topology.primary) ?? null;
+    const resolved = monitor !== null ? areas.get(monitor) : undefined;
+    if (resolved) return resolved;
+    // Falling back to the primary output is the exact symptom this feature
+    // exists to remove -- "it opened on the laptop again" -- so it never
+    // happens silently. It is reached when the workspace has no selection at
+    // all (nothing is open), or when a floating window's monitor is unknown to
+    // the topology, which is what a mid-flight monitor change looks like.
+    if (monitor !== null)
+      this._ports.log.warn(`launcher: no work area for monitor ${monitor}; opening on the primary output`);
+    else if (selection)
+      this._ports.log.warn('launcher: the focused container names no monitor; opening on the primary output');
+    return areas.get(topology.primary) ?? null;
   }
 
   private _runOne(command: Command, timestamp: number, commandFrames: Map<WindowId, Rect>): string {
