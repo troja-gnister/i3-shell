@@ -1047,6 +1047,12 @@ export class Engine {
       }
       case 'mode':
         return this._enterMode(command.name) ? `mode ${command.name}` : `mode "${command.name}" is not defined`;
+      case 'launcher':
+        // Parsed and accepted, but not yet wired: the next task replaces this
+        // with the real implementation, which resolves the target monitor and
+        // opens the launcher. It exists now only because _runOne's switch has
+        // no default arm and must stay exhaustive over the Command union.
+        return 'launcher: not implemented yet';
       case 'reload':
         return this._applyLoaded(ports.loadConfig('reload')) ? 'reloaded' : 'reload: config rejected, keeping previous';
       case 'restart':
