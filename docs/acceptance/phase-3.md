@@ -126,6 +126,14 @@ below are the ones in `examples/i3-shell.config`: `$mod+a` focus parent, `$mod+w
 > Set `gsettings set org.gnome.mutter workspaces-only-on-primary false` first, for the same reason
 > as Phase 2's A14: with GNOME's default, windows on a secondary output are sticky and i3-shell
 > does not tile sticky windows. Revert it with `gsettings reset` when you are done.
+>
+> **Superseded by Phase 3B (2026-09-23).** The extension now sets
+> `workspaces-only-on-primary = false` itself on enable and restores it on disable, and a sticky
+> window is tracked — it is only kept out of the tiling tree while the fact holds, and rejoins when
+> it clears. So the `gsettings set` above is no longer needed for the boxes below — A27 in
+> `docs/acceptance/phase-3b.md` is the box that denies exactly that need, and hand-writing the key
+> is a defect for that walk rather than its setup. `docs/acceptance/phase-3b.md` is the current
+> guidance. This paragraph is kept as the record of what the Phase 3A walk was run against.
 
 - [ ] Dock an external display: a bar appears at the top of **that** monitor showing the same
       workspace pills as the panel on the primary, with the same active workspace highlighted.

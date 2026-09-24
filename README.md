@@ -6,7 +6,7 @@ The i3 experience in GNOME 50: your `~/.config/i3/config` drives workspaces, key
 
 **Status (2026-09-23):** Phases 1, 2A, 2B and 3A are merged, pushed and live-accepted by the user — the Phase 3A walk passed on the merged build. Phase 3B — `sticky` and `skipTaskbar` read per commit instead of cached, so a window moved to a secondary output leaves the tiling and rejoins it instead of being dropped permanently, plus extension ownership of `org.gnome.mutter workspaces-only-on-primary` — is implemented on `phase-3b` and awaiting its whole-branch review and the user's walk. A22–A27 **live** acceptance is the user's, and no box in [docs/acceptance/phase-3b.md](docs/acceptance/phase-3b.md) is ticked.
 
-Verification: **561 unit tests in 48 files**, both TypeScript programs, Layer 0, tree lint, and the private nested suite — **254 integration assertions** across single-monitor (including the Phase 3A decoration geometry), two-monitor (including the Phase 3B membership round trip between outputs), settings-restoration and D-Bus-name-conflict scenarios. A1–A7 live acceptance passed by user report on 2026-09-21. The installed `dist/` is a release build.
+Verification: **564 unit tests in 48 files**, both TypeScript programs, Layer 0, tree lint, and the private nested suite — **254 integration assertions** across single-monitor (including the Phase 3A decoration geometry), two-monitor (including the Phase 3B membership round trip between outputs), settings-restoration and D-Bus-name-conflict scenarios. A1–A7 live acceptance passed by user report on 2026-09-21. The installed `dist/` is a release build.
 
 ## Prerequisites
 

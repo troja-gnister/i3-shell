@@ -74,7 +74,11 @@ to all workspaces, press **`Alt+Space`** for GNOME's own window menu (i3-shell d
 accelerator; the reference config binds `$mod+space`) and choose **Always on Visible Workspace**, or
 right-click the window's title bar for the same menu. If your GNOME build does not offer that item
 at all, do not treat A26 as failed on that account — reach the same fact the long way round, with
-the `gsettings set … true` in A22's last box, and say in your report which route you used.
+the `gsettings set … true` in A22's last box, and say in your report which route you used. That
+route is not a per-window substitute, though: it makes **every** window on the secondary output
+sticky at once, not the one you chose, so A26's first, fourth and fifth boxes — pin one of two
+tiles, pin/switch workspaces/un-pin there, and the pin-plus-minimize composition — cannot be walked
+that way. Report those three as unreachable rather than passed.
 
 Reading a GSetting is fine anywhere below. **Writing one is a defect for this phase** — except for
 the `gsettings reset` above, which sets up A22, and the `gsettings set` in A22's own last box.
@@ -143,8 +147,14 @@ the `gsettings reset` above, which sets up A22, and the `gsettings set` in A22's
       deliberate.
 - [ ] Pin it, switch workspaces, un-pin it there: it joins *that* workspace's tiling beside the
       focused window.
-- [ ] Minimize a window, then pin it, then un-minimize and un-pin in either order: it comes back
-      only once both are cleared, and exactly once — no duplicate leaf, no empty slot left behind.
+- [ ] Pin a window, **then** minimize it: it is out of the tiling and the other tile keeps the whole
+      work area. Un-minimize it (from the overview or `Alt+Tab`): it is back on screen and **still**
+      out of the tiling, because it is still pinned. Now un-pin it: only now does it rejoin, beside
+      the focused window, exactly once — no duplicate leaf, no empty slot left behind.
+      (The order is forced by GNOME, not by i3-shell: a minimized window has no title bar and cannot
+      be focused, so neither `Alt+Space` nor a title-bar menu can reach *Always on Visible Workspace*
+      while it is minimized — hence pin first and un-pin last. This is the only box that walks two
+      exclusion reasons at once, which is what the OR in the membership predicate exists for.)
 - [ ] Do the pin/un-pin cycle five or six times on the same window: it lands in the tiling every
       time, and the journal shows no repeated `i3-shell` warning building up.
 
@@ -206,14 +216,27 @@ native criticals, and no `LIMITATION` line: every scenario reached the state it 
 
 Assertions by group in that run: DC 18, MX 8, FS 8, TS 10, GS 11, MM 13, **MB 8**, ST 1.
 
-Unit suite alongside it: **561 tests in 48 files**, both TypeScript programs clean, Layer 0 import
-gate and tree lint. Among them: `classifyWindow` returns `'tiled'` for a sticky and for a
-skip-taskbar window and `null` only for an ignored type; the tracker allocates an id and **keeps the
-watch** for a window that used to classify `null` (the permanent drop, written as an assertion);
-`windowFacts()` no longer reads `is_on_all_workspaces()` or `is_skip_taskbar()`; the lifecycle
-backend emits `'membership'` on both signals and the existing `disposeWatch` disposes both handlers;
-and the engine composes the three exclusion reasons, returning a window beside the focused one when
-the last of them clears.
+Unit suite alongside it: **564 tests in 48 files**, both TypeScript programs clean, Layer 0 import
+gate and tree lint. What they pin, layer by layer, stated exactly:
+
+- `classifyWindow` returns `null` for **one** reason only, an ignored window type. It cannot be
+  asked about a sticky window at all any more: `sticky` left `WindowFacts`, so no test at that
+  signature can even express one, and none claims to.
+- The tracker allocates an id and **keeps the change watch** for every admitted type — `normal`,
+  `dialog`, `modal-dialog`, `utility` — and disposes both watches with no id only for `'ignored'`.
+  That is the narrowed contract: the drop path now has exactly one entrance.
+- `WindowInfo` is re-read live. The adapter test flips `on_all_workspaces` and `skip_taskbar` on a
+  fake window and reads the new values straight back **with no signal emitted at all**, which is
+  what "per commit, never cached" means; separately, the two `notify::` handlers emit `'membership'`
+  and are disposed with the rest of the window's handlers.
+- `windowFacts()` no longer reads `is_on_all_workspaces()` or `is_skip_taskbar()`.
+- The engine composes the three exclusion reasons: each alone, two together, rejoining only when the
+  last clears, returning the window beside the focused one — and now also *not* unmaximizing and not
+  rect-correcting a window that any reason excludes.
+
+No unit test proves that Mutter really re-marks a live window `on_all_workspaces`, or that a window
+dragged between displays survives it. The native scenario above is the only automated evidence for
+either, and A23–A26 are the only evidence on real hardware.
 
 **What the automation deliberately does not cover:**
 
