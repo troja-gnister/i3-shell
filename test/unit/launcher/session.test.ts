@@ -75,6 +75,14 @@ describe('launcher reducer', () => {
     expect(effect).toEqual({kind: 'exec', command: 'mycmd', inTerminal: true});
   });
 
+  it('accepts a query with surrounding whitespace as the trimmed command', () => {
+    // The fallthrough command is `state.query.trim()`, and the untrimmed text
+    // reaches /bin/sh -c: `  htop  ` would be a leading-space command, which
+    // some shells and every `<term> -e` wrapper handle differently.
+    const {effect} = run([...type('  mycmd  '), {kind: 'accept'}]);
+    expect(effect).toEqual({kind: 'exec', command: 'mycmd', inTerminal: false});
+  });
+
   it('does nothing when accepting an empty query with no items', () => {
     const {effect} = run([{kind: 'accept'}], []);
     expect(effect).toEqual({kind: 'dismiss'});

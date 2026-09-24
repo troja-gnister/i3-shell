@@ -125,9 +125,12 @@ function dismissUnlessRepeating(repeated: boolean): LauncherAction | null {
  * bare `>= ' '` test lets it through. It draws as nothing, so pressing Delete
  * mid-query appears to do nothing at all -- and then the query matches
  * nothing, `session.ts` takes dmenu's fallthrough, and the launcher spawns
- * `fire\u007f` as a shell command. The second half of this test is not
- * redundant with the first; do not simplify it away.
+ * `fire\u007f` as a shell command. The `\u007f` half of this test is not
+ * redundant with the range test; do not simplify it away.
+ *
+ * The empty string needs no clause of its own: `'' >= ' '` is already false,
+ * because the empty string sorts before every non-empty one.
  */
 function isTypable(unicode: string): boolean {
-  return unicode !== '' && unicode >= ' ' && unicode !== '\u007f';
+  return unicode >= ' ' && unicode !== '\u007f';
 }

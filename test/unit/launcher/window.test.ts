@@ -1,5 +1,8 @@
 import {describe, it, expect} from 'vitest';
-import {firstDrawnRow} from '../../../src/launcher/window';
+import fc from 'fast-check';
+import {
+  CHROME_ROWS, firstDrawnRow, launcherBox, launcherIconSize, launcherWidth, visibleRowCount,
+} from '../../../src/launcher/window';
 
 const ROWS = 10;
 
@@ -94,5 +97,186 @@ describe('firstDrawnRow', () => {
       expect(selected).toBeGreaterThanOrEqual(first);
       expect(selected).toBeLessThan(last);
     }
+  });
+});
+
+describe('launcherWidth', () => {
+  it('takes the configured fraction of an ordinary work area', () => {
+    expect(launcherWidth(1920)).toBe(806);   // 0.42 * 1920
+    expect(launcherWidth(1728)).toBe(726);
+  });
+
+  it('is clamped up to the readable minimum on a narrow-but-not-tiny area', () => {
+    expect(launcherWidth(800)).toBe(360);    // 0.42 * 800 = 336
+  });
+
+  it('is clamped down on a very wide area', () => {
+    expect(launcherWidth(5120)).toBe(900);
+  });
+
+  it('never beats the work area itself', () => {
+    // The defect: MIN_WIDTH used to win outright, so a 320px-wide output got a
+    // 360px box, the centring subtraction went negative, and the launcher hung
+    // off the monitor's left edge -- a variant of the very bug this feature
+    // exists to fix.
+    expect(launcherWidth(320)).toBe(320);
+    expect(launcherWidth(100)).toBe(100);
+    expect(launcherWidth(0)).toBe(0);
+  });
+});
+
+describe('visibleRowCount', () => {
+  it('gives the full ten rows on an ordinary work area', () => {
+    expect(visibleRowCount(1048, 26, 10)).toBe(10);
+  });
+
+  it('never exceeds the rows asked for', () => {
+    expect(visibleRowCount(4000, 26, 10)).toBe(10);
+  });
+
+  it('reduces the rows when the work area cannot hold them', () => {
+    // 300px high, 12% of it above the box, two rows of chrome: four rows fit.
+    expect(visibleRowCount(300, 40, 10)).toBe(4);
+  });
+
+  it('is zero when not even the chrome fits', () => {
+    expect(visibleRowCount(60, 40, 10)).toBe(0);
+    expect(visibleRowCount(0, 26, 10)).toBe(0);
+  });
+
+  it('is zero for a degenerate row height or row count', () => {
+    expect(visibleRowCount(1048, 0, 10)).toBe(0);
+    expect(visibleRowCount(1048, -5, 10)).toBe(0);
+    expect(visibleRowCount(1048, 26, 0)).toBe(0);
+  });
+});
+
+describe('launcherBox', () => {
+  const AREA = {x: 1728, y: 27, width: 1920, height: 1053};
+
+  it('centres the box horizontally in the work area it was given', () => {
+    const box = launcherBox(AREA, 26, 10);
+    expect(box.width).toBe(806);
+    expect(box.x).toBe(1728 + Math.round((1920 - 806) / 2));
+  });
+
+  it('places the top edge an eighth of the way down', () => {
+    const box = launcherBox(AREA, 26, 10);
+    expect(box.y).toBe(27 + Math.round(1053 * 0.12));
+  });
+
+  it('is offset by the work area origin, not the screen origin', () => {
+    // The whole feature: the box belongs to the monitor holding focus, and a
+    // second monitor's work area does not start at 0,0.
+    const primary = launcherBox({x: 0, y: 27, width: 1920, height: 1053}, 26, 10);
+    const second = launcherBox(AREA, 26, 10);
+    expect(second.x - primary.x).toBe(1728);
+    expect(second.y).toBe(primary.y);
+  });
+
+  it('reserves the drawn rows plus the chrome', () => {
+    expect(launcherBox(AREA, 26, 10).height).toBe(26 * (10 + CHROME_ROWS));
+  });
+
+  it('shrinks rather than overflowing a short work area', () => {
+    const box = launcherBox({x: 0, y: 0, width: 1920, height: 300}, 40, 10);
+    expect(box.height).toBe(40 * (4 + CHROME_ROWS));
+    expect(box.y + box.height).toBeLessThanOrEqual(300);
+  });
+
+  it('pulls the box up rather than off the bottom edge', () => {
+    // Nothing clamped the bottom before: a box taller than the space below
+    // TOP_FRACTION simply ran off the work area.
+    const area = {x: 0, y: 0, width: 1920, height: 200};
+    const box = launcherBox(area, 60, 10);
+    expect(box.y + box.height).toBeLessThanOrEqual(area.height);
+  });
+
+  it('stays inside a work area narrower than the minimum width', () => {
+    const area = {x: 0, y: 0, width: 320, height: 800};
+    const box = launcherBox(area, 26, 10);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(320);
+  });
+
+  it('always returns a rect inside the work area', () => {
+    // The contract, swept rather than sampled: every combination below is a
+    // work area some real or virtual output could hand us, including the
+    // degenerate ones a monitor change produces mid-flight.
+    const origins = [{x: 0, y: 0}, {x: 1728, y: 27}, {x: -1920, y: -1080}];
+    const sizes = [0, 1, 100, 320, 360, 640, 800, 1280, 1920, 3840, 5120];
+    const heights = [0, 1, 60, 200, 300, 768, 1048, 1440, 2160];
+    const rowHeights = [0, 1, 8, 24, 26, 40, 60, 120];
+    for (const origin of origins)
+      for (const width of sizes)
+        for (const height of heights)
+          for (const rowHeight of rowHeights) {
+            const area = {...origin, width, height};
+            const box = launcherBox(area, rowHeight, 10);
+            expect(box.width).toBeGreaterThanOrEqual(0);
+            expect(box.height).toBeGreaterThanOrEqual(0);
+            expect(box.x).toBeGreaterThanOrEqual(area.x);
+            expect(box.y).toBeGreaterThanOrEqual(area.y);
+            expect(box.x + box.width).toBeLessThanOrEqual(area.x + area.width);
+            expect(box.y + box.height).toBeLessThanOrEqual(area.y + area.height);
+          }
+  });
+
+  it('holds containment for arbitrary areas and row heights', () => {
+    fc.assert(fc.property(
+      fc.integer({min: -4000, max: 4000}),
+      fc.integer({min: -4000, max: 4000}),
+      fc.integer({min: 0, max: 6000}),
+      fc.integer({min: 0, max: 4000}),
+      fc.integer({min: 0, max: 200}),
+      fc.integer({min: 0, max: 40}),
+      (x, y, width, height, rowHeight, rows) => {
+        const area = {x, y, width, height};
+        const box = launcherBox(area, rowHeight, rows);
+        return box.x >= area.x
+          && box.y >= area.y
+          && box.width >= 0
+          && box.height >= 0
+          && box.x + box.width <= area.x + area.width
+          && box.y + box.height <= area.y + area.height;
+      }), {numRuns: 2000});
+  });
+
+  it('always reserves room for every row it says to draw', () => {
+    // The two have to agree: a viewport shorter than the rows the renderer
+    // builds clips the last one, and the selection can be on it.
+    fc.assert(fc.property(
+      fc.integer({min: 0, max: 4000}),
+      fc.integer({min: 1, max: 200}),
+      fc.integer({min: 0, max: 40}),
+      (height, rowHeight, rows) => {
+        const area = {x: 0, y: 0, width: 1920, height};
+        const drawn = visibleRowCount(height, rowHeight, rows);
+        return launcherBox(area, rowHeight, rows).height >= drawn * rowHeight;
+      }), {numRuns: 1000});
+  });
+});
+
+describe('launcherIconSize', () => {
+  it('follows the measured row height', () => {
+    expect(launcherIconSize(24)).toBe(17);
+    expect(launcherIconSize(40)).toBe(28);
+    expect(launcherIconSize(60)).toBe(42);
+  });
+
+  it('is not the hardcoded 16 that spec 5 forbids', () => {
+    expect(launcherIconSize(48)).not.toBe(16);
+  });
+
+  it('never goes below a visible minimum', () => {
+    expect(launcherIconSize(0)).toBe(8);
+    expect(launcherIconSize(-10)).toBe(8);
+  });
+
+  it('always leaves the row taller than its icon', () => {
+    // Otherwise the icon drives the row height, and the measurement that
+    // produced the icon size was wrong the moment it was used.
+    for (let rowHeight = 16; rowHeight <= 200; rowHeight++)
+      expect(launcherIconSize(rowHeight)).toBeLessThan(rowHeight);
   });
 });

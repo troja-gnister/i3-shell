@@ -71,8 +71,9 @@ const {fakeSt, uiGroup, resetFakeActors, liveActors, disposedAccesses, created, 
 
 // The adapter's GNOME globals belong to the native TS program, so it is loaded
 // at runtime against the doubles above rather than imported statically.
-const {measureRowHeight, FALLBACK_ROW_HEIGHT} = await vi.importActual<{
+const {measureRowHeight, measureLauncherRowHeight, FALLBACK_ROW_HEIGHT} = await vi.importActual<{
   measureRowHeight(): number;
+  measureLauncherRowHeight(): number;
   FALLBACK_ROW_HEIGHT: number;
 }>('../../../src/shell/rowHeight');
 
@@ -189,6 +190,43 @@ describe('measureRowHeight', () => {
     theme.measureThrows = true;
     measureRowHeight();
     expect(disposedAccesses()).toEqual([]);
+  });
+
+  it('measures the launcher row against its OWN style class', () => {
+    // The launcher used to size its viewport as measureRowHeight() x 10 --
+    // the TITLE row's class, a different rule with different padding. The
+    // moment a theme made `.i3-shell-launcher-row` the taller of the two, the
+    // tenth row was clipped: the highlight vanished off the bottom of the
+    // viewport and Enter launched something the user could not see.
+    measureLauncherRowHeight();
+    expect(lastCreated('launcher-row').kind).toBe('St.BoxLayout');
+    expect(theme.measuredChildren[0].map(child => child.split(' ')[0])).toEqual(['St.Label']);
+  });
+
+  it('measures the launcher row without an icon in it', () => {
+    // launcherIconSize() derives the icon from this number, so measuring with
+    // an icon would make the row's height depend on its own last measurement.
+    measureLauncherRowHeight();
+    expect(theme.measuredChildren[0].some(child => child.startsWith('St.Icon'))).toBe(false);
+  });
+
+  it('measures the launcher row in the stage and leaves nothing behind', () => {
+    expect(measureLauncherRowHeight()).toBe(26);
+    expect(theme.measuredInStage).toEqual([true]);
+    expect(liveActors()).toEqual([]);
+    expect(uiGroup.children).toEqual([]);
+  });
+
+  it('falls back for the launcher row on the same three failures', () => {
+    theme.height = 0;
+    expect(measureLauncherRowHeight()).toBe(FALLBACK_ROW_HEIGHT);
+    theme.height = Number.NaN;
+    expect(measureLauncherRowHeight()).toBe(FALLBACK_ROW_HEIGHT);
+    theme.height = 26;
+    theme.measureThrows = true;
+    expect(measureLauncherRowHeight()).toBe(FALLBACK_ROW_HEIGHT);
+    expect(log.error).toHaveBeenCalled();
+    expect(uiGroup.children).toEqual([]);
   });
 
   it('records a read from a disposed actor, so the assertion above is load-bearing', () => {

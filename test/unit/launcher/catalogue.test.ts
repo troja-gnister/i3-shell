@@ -28,10 +28,17 @@ describe('buildCatalogue', () => {
     expect(items.map(i => i.name)).toEqual(['GNU Image Manipulation Program', 'gimp']);
   });
 
-  it('does not hide the flatpak binary behind a flatpak-exported application', () => {
-    // An exported Flatpak's Exec is `/usr/bin/flatpak run com.valvesoftware.Steam`.
-    // Deduping by Exec basename would delete the real `flatpak` binary; dedup is
-    // by display name precisely so this cannot happen.
+  it('keeps both a flatpak-exported application and the flatpak binary', () => {
+    // Named for what it asserts, because its stated reason is unfalsifiable
+    // from here: dedup is by display name, so an Exec-basename rule is not a
+    // thing this code could do and no edit to buildCatalogue() makes "the
+    // flatpak binary was hidden behind Steam" the failure. What IS falsifiable
+    // is the assertion below -- both entries survive -- which is what breaks
+    // the day someone keys dedup on anything the two share.
+    //
+    // (For the record, the reason the rule is what it is: an exported
+    // Flatpak's Exec is `/usr/bin/flatpak run com.valvesoftware.Steam`, so
+    // deduping by Exec basename would delete the real `flatpak` binary.)
     const items = buildCatalogue(
       [app('com.valvesoftware.Steam.desktop', 'Steam')],
       [dir('/usr/bin', ['flatpak'])],

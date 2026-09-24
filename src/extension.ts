@@ -149,7 +149,7 @@ export default class I3ShellExtension extends Extension {
     const recency: RecencyStore = new SettingsRecency(settings);
     // The same `defer` the decorations use, and for the same reason: the
     // launcher closes itself out of signals Mutter is still emitting.
-    const launcher = new Launcher(catalogue, recency, callback => { defer(callback); });
+    const launcher = new Launcher(catalogue, recency, callback => { defer(callback); }, notify);
     this._launcher = launcher;
 
     const accent = new ShellAccent();

@@ -152,6 +152,14 @@ describe('keyToAction: Delete is not typable', () => {
   it('a key that produces no character at all is ignored', () => {
     expect(press(0xffc0, '')).toBe(null);
   });
+
+  it('types nothing for a key that produced no character at all', () => {
+    // isTypable() has no `unicode !== ''` clause: the empty string sorts
+    // before every non-empty one, so `'' >= ' '` is already false. This pins
+    // the behaviour the deleted clause used to state twice.
+    expect(press(0x0000, '')).toBe(null);
+    expect(press(KEY.n, '')).toBe(null);
+  });
 });
 
 describe('keyToAction: auto-repeat never dismisses', () => {
