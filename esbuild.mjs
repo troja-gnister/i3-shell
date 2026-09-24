@@ -22,5 +22,5 @@ await esbuild.build({
 cpSync('metadata.json', 'dist/metadata.json');
 cpSync('stylesheet.css', 'dist/stylesheet.css');
 cpSync('schemas', 'dist/schemas', {recursive: true});
-execFileSync('glib-compile-schemas', ['dist/schemas']);
+execFileSync('glib-compile-schemas', ['--strict', 'dist/schemas']);
 console.log(`built dist/ (${test ? 'TEST build with org.i3shell.Debug' : 'release build'})`);
