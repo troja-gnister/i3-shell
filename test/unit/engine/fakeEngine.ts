@@ -9,7 +9,7 @@ import type {Rect, WindowId} from '../../../src/tree/node';
 export function windowInfo(id: number, patch: Partial<WindowInfo> = {}): WindowInfo {
   return {id, workspace: 0, monitor: 10, kind: 'tiled', rect: {x: 20, y: 40, width: 300, height: 200},
     title: `Window ${id}`, wmClass: 'fixture', minimized: false, fullscreen: false,
-    maximizedH: false, maximizedV: false, ...patch};
+    maximizedH: false, maximizedV: false, sticky: false, skipTaskbar: false, ...patch};
 }
 export function topology(count = 10): Topology {
   return {primary: 10, monitors: [{id: 10, index: 0, connectors: ['fixture']}],

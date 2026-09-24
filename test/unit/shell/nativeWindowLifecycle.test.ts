@@ -50,13 +50,18 @@ class NativeWindow extends Signals {
   fullscreenState = false;
   minSize: [boolean, number, number] = [false, 0, 0];
   maxSize: [boolean, number, number] = [false, 0, 0];
+  // Read live on every snapshot, unlike the fixed-at-classification facts
+  // above: a window can move onto every workspace, or gain/lose its taskbar
+  // hint, long after its first frame.
+  onAllWorkspaces = false;
+  skipTaskbar = false;
   private read(): void { if (this.retiring) throw new Error('native read on retiring window'); }
   get_compositor_private(): Signals { this.read(); return this.actor; }
   get_window_type(): number { this.read(); return 0; }
-  is_skip_taskbar(): boolean { this.read(); return false; }
+  is_skip_taskbar(): boolean { this.read(); return this.skipTaskbar; }
   get_transient_for(): null { this.read(); return null; }
   is_attached_dialog(): boolean { this.read(); return false; }
-  is_on_all_workspaces(): boolean { this.read(); return false; }
+  is_on_all_workspaces(): boolean { this.read(); return this.onAllWorkspaces; }
   get resizeable(): boolean { this.read(); return this.resizeFunction; }
   get_min_size(): [boolean, number, number] { this.read(); return this.minSize; }
   get_max_size(): [boolean, number, number] { this.read(); return this.maxSize; }
@@ -226,5 +231,53 @@ describe('native window lifetime', () => {
     expect(f.display.handlers.size).toBe(0);
     expect(() => f.finish(pending)).not.toThrow();
     expect(f.events).toEqual([]);
+  });
+
+  // Phase 3B: sticky and skip-taskbar moved off the cached facts and onto the
+  // per-commit info, so a window that is dragged onto every workspace, or
+  // whose skip-taskbar hint flips, must be re-read live rather than frozen
+  // at first-frame classification.
+  it('reads sticky and skip-taskbar live per commit rather than caching them at classification', () => {
+    const f = setup();
+    const window = f.create();
+    const [id] = f.tracker.list().map(w => w.id);
+    expect(f.tracker.get(id)?.sticky).toBe(false);
+    expect(f.tracker.get(id)?.skipTaskbar).toBe(false);
+    window.onAllWorkspaces = true;
+    window.skipTaskbar = true;
+    expect(f.tracker.get(id)?.sticky).toBe(true);
+    expect(f.tracker.get(id)?.skipTaskbar).toBe(true);
+    f.tracker.destroy();
+  });
+
+  it('emits a membership event when a window is put on all workspaces', () => {
+    const f = setup();
+    const window = f.create();
+    const [id] = f.tracker.list().map(w => w.id);
+    window.emit('notify::on-all-workspaces');
+    expect(f.events.filter(e => e.type === 'membership')).toEqual([{type: 'membership', id}]);
+    f.tracker.destroy();
+  });
+
+  it('emits a membership event when the skip-taskbar hint changes', () => {
+    const f = setup();
+    const window = f.create();
+    const [id] = f.tracker.list().map(w => w.id);
+    window.emit('notify::skip-taskbar');
+    expect(f.events.filter(e => e.type === 'membership')).toEqual([{type: 'membership', id}]);
+    f.tracker.destroy();
+  });
+
+  it('connects and disposes the on-all-workspaces and skip-taskbar watches with the rest of the window handlers', () => {
+    // Review Focus: a handler that survives its window is the defect class
+    // this project has already shipped. Both new watches must go through the
+    // existing connectWindow/dispose array, not a second teardown path.
+    const f = setup();
+    const window = f.create();
+    const signals = [...window.handlers.values()].map(h => h.signal);
+    expect(signals).toContain('notify::on-all-workspaces');
+    expect(signals).toContain('notify::skip-taskbar');
+    f.tracker.destroy();
+    expect(window.handlers.size).toBe(0);
   });
 });

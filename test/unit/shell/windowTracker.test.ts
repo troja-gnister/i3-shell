@@ -3,8 +3,7 @@ import type {WindowFacts, WindowInfo, WindowEvent} from '../../../src/runtime/mo
 import {WindowTracker, type WindowBackend} from '../../../src/shell/windowTracker';
 
 const normal: WindowFacts = {
-  type: 'normal', skipTaskbar: false, transient: false,
-  attached: false, sticky: false, resizable: true,
+  type: 'normal', transient: false, attached: false, resizable: true,
 };
 
 type NativeWindow = object;
@@ -76,6 +75,8 @@ function fakeWindowBackend() {
       fullscreen: false,
       maximizedH: false,
       maximizedV: false,
+      sticky: false,
+      skipTaskbar: false,
     });
     order.push(window);
     for (const callback of [...createdCallbacks]) callback(window);
@@ -282,5 +283,46 @@ describe('WindowTracker', () => {
     expect(tracker.list()).toEqual([]);
     expect(tracker.get(id)).toBeUndefined();
     expect(tracker.focused()).toBeNull();
+  });
+
+  // classifyWindow returns null for exactly one reason now: type === 'ignored'.
+  // `sticky` used to be able to produce null too, which made `_makeReady` call
+  // `pending.disposeWatch()` and return, dropping the window forever with no
+  // subscription left to notice it coming back. Pin the narrowed contract:
+  // every admitted type keeps its watch and gets an id; only 'ignored' is
+  // disposed of with none.
+  it.each([
+    ['normal', normal],
+    ['dialog', {...normal, type: 'dialog'}],
+    ['modal dialog', {...normal, type: 'modal-dialog'}],
+    ['utility', {...normal, type: 'utility'}],
+  ] satisfies Array<[string, WindowFacts]>)('allocates an id and keeps the watch for an admitted %s window', (_name, facts) => {
+    const f = fakeWindowBackend();
+    const events: WindowEvent[] = [];
+    const tracker = new WindowTracker(f.backend, event => events.push(event));
+    tracker.start();
+    const baseline = f.subscriptionCount();
+
+    const window = f.create(facts);
+    f.draw(window);
+
+    expect(events).toEqual([{type: 'added', id: 1}]);
+    expect(f.subscriptionCount()).toBe(baseline + 1); // frame watch disposed, change watch kept
+    tracker.destroy();
+  });
+
+  it('disposes the watch and allocates no id for an ignored window', () => {
+    const f = fakeWindowBackend();
+    const events: WindowEvent[] = [];
+    const tracker = new WindowTracker(f.backend, event => events.push(event));
+    tracker.start();
+    const baseline = f.subscriptionCount();
+
+    const window = f.create({...normal, type: 'ignored'});
+    f.draw(window);
+
+    expect(events).toEqual([]);
+    expect(f.subscriptionCount()).toBe(baseline); // both frame and change watch disposed
+    tracker.destroy();
   });
 });

@@ -1300,6 +1300,189 @@ def secondary_monitor_rect():
     return rects[0]
 
 
+# --------------------------------------------------------------------------
+# --monitors, phase 3B: membership is re-read every commit (A22-A24, A27)
+# --------------------------------------------------------------------------
+
+WORKSPACES_ONLY_ON_PRIMARY = ('org.gnome.mutter', 'workspaces-only-on-primary')
+
+SETTING_SCRIPT = """
+import json
+import sys
+from gi.repository import Gio
+schema_id, key = sys.argv[1], sys.argv[2]
+schema = Gio.SettingsSchemaSource.get_default().lookup(schema_id, True)
+assert schema is not None, schema_id
+settings = Gio.Settings(settings_schema=schema)
+if len(sys.argv) > 3:
+    assert settings.is_writable(key), key
+    settings.set_boolean(key, sys.argv[3] == 'true')
+    Gio.Settings.sync()
+print(json.dumps(settings.get_value(key).unpack()))
+"""
+
+
+def _setting(schema_id, key, *write):
+    """One fresh process per access, for the reason settings_snapshot() gives:
+    this python runs no main loop, so an in-process GSettings would neither see
+    what the shell wrote to the private keyfile nor flush what it wrote back."""
+    import subprocess
+    done = subprocess.run([sys.executable, '-c', SETTING_SCRIPT, schema_id, key, *write],
+                          capture_output=True, text=True, env=os.environ, check=True)
+    return json.loads(done.stdout)
+
+
+def setting_value(schema_id, key):
+    return _setting(schema_id, key)
+
+
+def set_setting_boolean(schema_id, key, value):
+    return _setting(schema_id, key, 'true' if value else 'false')
+
+
+def tiled_leaf(title):
+    """(monitor id, leaf) for a tiled window, searched across every output:
+    monitor_snapshot() refuses to default while two monitors exist."""
+    for monitor in monitor_ids():
+        found = leaf_node(title, monitor=monitor)
+        if found is not None:
+            return monitor, found
+    return None, None
+
+
+def inside(rect, area):
+    return (rect['x'] >= area['x'] and rect['y'] >= area['y']
+            and rect['x'] + rect['width'] <= area['x'] + area['width']
+            and rect['y'] + rect['height'] <= area['y'] + area['height'])
+
+
+def move_between_outputs(title, area, target, label):
+    """Put a tiled window on the output that owns `area`, the only way a client
+    can change output here: float it, move it natively, tile it again -- the
+    mechanism two_monitor_scenario already uses. A Wayland toplevel cannot ask
+    to be mapped on a chosen output at all, so this is also the closest the
+    harness gets to a window *created* on the secondary display; A23's live box
+    covers the real thing.
+    """
+    def selected():
+        _monitor, found = tiled_leaf(title)
+        return found is not None and selection() == {'kind': 'tiled', 'nodeId': found['id']}
+
+    wait_until(selected, f'{title} is the selection before moving it to {target}')
+    run('floating enable')
+    wait_until(lambda: window_by_title(title)['state'] == 'floating', f'{title} floats')
+    # 400x300 first: a tile is as wide as the output it came from, and Mutter's
+    # own constraints would fight a frame wider than the monitor it is moved to.
+    run(f'resize set 400 300, move position {area["x"] + 40} {area["y"] + 40}')
+    wait_until(lambda: window_by_title(title)['monitor'] == target,
+               f'{title} reports output {target} natively')
+    run('floating disable')
+    ok(label)
+
+
+def scenario_membership():
+    """`sticky` and `skipTaskbar` are per-commit facts (phase 3B design 3.1),
+    and the extension owns workspaces-only-on-primary (4), so an external
+    display tiles with no hand-edited GSetting and a window that leaves the
+    tree can come back. Before this phase the fact was read once at the first
+    frame and nothing watched it: a window that was on all workspaces when the
+    shell first saw it was given no id at all, and its watch was disposed, so
+    the return trip could not even be observed.
+    """
+    ids = monitor_ids()
+    primary_id, second_id = ids[0], ids[1]
+    primary_area, second_area = work_area(monitor=primary_id), work_area(monitor=second_id)
+    print('membership work areas:',
+          json.dumps({'primary': primary_area, 'second': second_area}), flush=True)
+
+    # A22/A27. nested.sh no longer seeds this key for multi-output runs, so a
+    # false here was written by the extension's own enable(), against the real
+    # schema, with GNOME's default (true) snapshotted for restore.
+    # Polled, not read once: the keyfile backend flushes asynchronously, which is
+    # why wait_snapshot() exists below. enable() ran long before this scenario
+    # connected, so the gap is generous -- but a single read is a latent flake.
+    settled(lambda: setting_value(*WORKSPACES_ONLY_ON_PRIMARY) is False, 10.0)
+    check('A22 the extension cleared workspaces-only-on-primary',
+          setting_value(*WORKSPACES_ONLY_ON_PRIMARY), False)
+
+    reset_windows()
+    create('MB win')
+    tracked = window_by_title('MB win')['id']
+    alone = node('splith', [leaf('MB win')], [1.0])
+    empty = ('splith', [])
+
+    move_between_outputs('MB win', second_area, second_id,
+                         'MB the window reaches the secondary output')
+    check_tiling(alone, 'A23 a window on the secondary output tiles there', monitor=second_id)
+    check('A23 it is still tracked, under the id it was given',
+          window_by_title('MB win')['id'], tracked)
+    check('A23 the primary root is empty',
+          shape_of(monitor_snapshot(monitor=primary_id)['root']), empty)
+    rect = window_by_title('MB win')['rect']
+    assert inside(rect, second_area), (rect, second_area)
+    ok('A23 its frame lies inside the secondary work area', json.dumps(rect))
+    check('A23 Mutter does not mark it on all workspaces while the setting is false',
+          window_by_title('MB win')['sticky'], False)
+
+    move_between_outputs('MB win', primary_area, primary_id,
+                         'MB the window returns to the primary output')
+    check_tiling(alone, 'A24 moving it to the primary output tiles it there', monitor=primary_id)
+    check('A24 the move keeps it tracked', window_by_title('MB win')['id'], tracked)
+    check('A24 the secondary root is empty again',
+          shape_of(monitor_snapshot(monitor=second_id)['root']), empty)
+
+    move_between_outputs('MB win', second_area, second_id,
+                         'MB the window goes back out to the secondary output')
+    check_tiling(alone, 'A23 moving it back tiles it on the secondary again', monitor=second_id)
+    check('A23 the round trip never dropped it', window_by_title('MB win')['id'], tracked)
+
+    # The fact itself, through Mutter. Putting GNOME's default back by hand is
+    # the only way to get a genuinely on_all_workspaces window in here, and it
+    # is exactly the state this phase had to survive: the engine must see the
+    # fact move in *both* directions, which needs the notify::on-all-workspaces
+    # subscription that did not exist before (design 3.3.1).
+    became_sticky = False
+    set_setting_boolean(*WORKSPACES_ONLY_ON_PRIMARY, True)
+    try:
+        became_sticky = settled(lambda: window_by_title('MB win')['sticky'], 15.0)
+        if became_sticky:
+            ok('MB Mutter marks a window on a secondary output on_all_workspaces '
+               'while workspaces-only-on-primary is true')
+            wait_until(lambda: tiled_leaf('MB win')[1] is None,
+                       'MB the sticky window leaves the tiling')
+            check('MB a sticky window is still tracked, under the same id',
+                  window_by_title('MB win')['id'], tracked)
+            # Unlike a skip-taskbar dialog, a sticky window leaves both lists:
+            # the branch that would add it to `floating` is the one being
+            # skipped (design 3.3).
+            check('MB and it is in no workspace floating list either',
+                  tracked in workspace_snapshot()['floating'], False)
+        else:
+            print('LIMITATION: this backend never marked the window on all workspaces '
+                  'after workspaces-only-on-primary was set back to true; the sticky '
+                  'round trip stays unchecked here and belongs to the live walk (A26).',
+                  flush=True)
+    finally:
+        set_setting_boolean(*WORKSPACES_ONLY_ON_PRIMARY, False)
+    # Only if the fact really moved. On the limitation path the window never
+    # left the tiling, so `not sticky` would be trivially true and the two
+    # assertions below would restate a transition that did not happen -- and the
+    # rejoin one is what docs/acceptance/phase-3b.md quotes as this phase's
+    # proof. A missing assertion, and the count that drops with it, is the
+    # correct signal there; a passing one is a false green.
+    if became_sticky:
+        wait_until(lambda: not window_by_title('MB win')['sticky'],
+                   'MB the sticky fact clears with the setting')
+        check_tiling(alone, 'MB the window rejoins the secondary tiling when sticky clears',
+                     monitor=second_id)
+        check('MB it kept one id across the whole round trip',
+              window_by_title('MB win')['id'], tracked)
+    check('A22 the scenario leaves the extension\'s value in place',
+          setting_value(*WORKSPACES_ONLY_ON_PRIMARY), False)
+    reset_windows()
+    print('ok phase 3B membership on two outputs', flush=True)
+
+
 def two_monitor_scenario():
     isolated()
     ready_normal()
@@ -1440,6 +1623,10 @@ SCHEMAS = ['org.gnome.desktop.wm.keybindings', 'org.gnome.shell.keybindings',
            'org.gnome.mutter.keybindings', 'org.gnome.mutter.wayland.keybindings',
            'org.gnome.settings-daemon.plugins.media-keys']
 EXTRA = [('org.gnome.mutter', 'dynamic-workspaces'),
+         # Phase 3B: the extension owns this one. A window on a secondary output
+         # is on_all_workspaces while it is true, and such a window is kept out
+         # of the tree, so the external display could never tile.
+         ('org.gnome.mutter', 'workspaces-only-on-primary'),
          ('org.gnome.desktop.wm.preferences', 'num-workspaces'),
          ('org.gnome.desktop.wm.preferences', 'workspace-names'),
          ('org.gnome.desktop.wm.preferences', 'mouse-button-modifier'),
@@ -1507,6 +1694,7 @@ def extension_disable():
 
 PREFERENCE_KEYS = {
     'org.gnome.mutter dynamic-workspaces',
+    'org.gnome.mutter workspaces-only-on-primary',
     'org.gnome.desktop.wm.preferences num-workspaces',
     'org.gnome.desktop.wm.preferences workspace-names',
     'org.gnome.desktop.wm.preferences mouse-button-modifier',
@@ -1545,6 +1733,20 @@ EXPECTED_CLEARINGS = {
 }
 
 
+# Values the extension writes outright instead of filtering an accelerator out
+# of, asserted by exact value: cleared_summary() only diffs, so nothing else
+# here would notice if one of these stopped being applied.
+EXPECTED_VALUES = {
+    'org.gnome.mutter workspaces-only-on-primary': False,
+}
+
+
+def overrides_applied(original, snap):
+    return (all(snap.get(key) == [a for a in original[key] if a not in accels]
+                for key, accels in EXPECTED_CLEARINGS.items())
+            and all(snap.get(key) == value for key, value in EXPECTED_VALUES.items()))
+
+
 def settings_scenario():
     isolated()
     check('the session starts with the extension disabled', control_alive(), False)
@@ -1555,10 +1757,8 @@ def settings_scenario():
     extension_enable()
     wait_until(control_alive, 'control service after the first enable', timeout=30)
     ready_normal()
-    cleared = wait_snapshot(
-        lambda snap: all(snap.get(key) == [a for a in original[key] if a not in accels]
-                         for key, accels in EXPECTED_CLEARINGS.items()),
-        'colliding accelerators cleared')
+    cleared = wait_snapshot(lambda snap: overrides_applied(original, snap),
+                            'colliding accelerators cleared and owned values applied')
     removed, added, preferences = cleared_summary(original, cleared)
     assert removed, 'enabling cleared nothing'
     for key, accels in EXPECTED_CLEARINGS.items():
@@ -1569,6 +1769,13 @@ def settings_scenario():
           cleared['org.freedesktop.ibus.panel.emoji unicode-hotkey'], ['<Control><Shift>u'])
     check('static workspaces applied',
           cleared['org.gnome.desktop.wm.preferences num-workspaces'], 10)
+    # A22. The `original` half is the point of the pair: it proves the write is
+    # not a no-op agreeing with what GNOME already had, which is what makes A27
+    # ("no hand-edited GSetting") an assertion rather than a claim.
+    check('A22 GNOME still had its own default for workspaces-only-on-primary',
+          original['org.gnome.mutter workspaces-only-on-primary'], True)
+    check('A22 enabling clears workspaces-only-on-primary',
+          cleared['org.gnome.mutter workspaces-only-on-primary'], False)
     print('workspace/mouse preferences changed:', json.dumps(preferences), flush=True)
     ok('A6 colliding GNOME bindings cleared', f'{len(removed)} key(s)')
 
@@ -1583,18 +1790,21 @@ def settings_scenario():
     wait_until(lambda: not control_alive(), 'control service released on disable', timeout=20)
     restored = wait_snapshot(lambda snap: snap == original, 'originals restored')
     check_snapshot('A6 disable restores every original value', restored, original)
+    check('A22 disable restores workspaces-only-on-primary',
+          restored['org.gnome.mutter workspaces-only-on-primary'],
+          original['org.gnome.mutter workspaces-only-on-primary'])
     check('disable leaves the actual window frames alone',
           {title: fixture('Size', '(s)', (title,)) for title in sizes}, sizes)
 
     extension_enable()
     wait_until(control_alive, 'control service after re-enabling', timeout=30)
     wait_until(lambda: state()['grabbed'] == DEFAULT_GRABS, 'A6 re-enable returns to 65 grabs')
-    again = wait_snapshot(
-        lambda snap: all(snap.get(key) == [a for a in original[key] if a not in accels]
-                         for key, accels in EXPECTED_CLEARINGS.items()),
-        'colliding accelerators cleared again')
+    again = wait_snapshot(lambda snap: overrides_applied(original, snap),
+                          'colliding accelerators cleared and owned values applied again')
     repeat_removed, _, _ = cleared_summary(original, again)
     check('A6 re-enable clears the same bindings again', repeat_removed, removed)
+    check('A22 re-enable clears workspaces-only-on-primary again',
+          again['org.gnome.mutter workspaces-only-on-primary'], False)
     check_tiling(halves, 'A6 re-enable adopts the live windows and retiles them')
 
     reset_windows()
@@ -1713,9 +1923,19 @@ def single_monitor():
     print('ok phase 2 single-monitor scenarios', flush=True)
 
 
+def two_outputs():
+    isolated()
+    ready_normal()
+    wait_until(lambda: len(monitor_ids()) == 2, 'two virtual outputs in the topology')
+    # Membership first: two_monitor_scenario ends by removing an output, and a
+    # backend that cannot bring it back would leave nothing to tile on.
+    scenario_membership()
+    two_monitor_scenario()
+
+
 MODES = {
     (): single_monitor,
-    ('--monitors',): two_monitor_scenario,
+    ('--monitors',): two_outputs,
     ('--settings',): settings_scenario,
     ('--name-conflict',): name_conflict_scenario,
 }

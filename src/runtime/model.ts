@@ -3,10 +3,8 @@ import type {WindowId, MonitorId, Rect} from '../tree/node';
 export type WindowKind = 'tiled' | 'floating';
 export interface WindowFacts {
   type: 'normal' | 'dialog' | 'modal-dialog' | 'utility' | 'ignored';
-  skipTaskbar: boolean;
   transient: boolean;
   attached: boolean;
-  sticky: boolean;
   resizable: boolean;
 }
 export interface WindowInfo {
@@ -21,12 +19,14 @@ export interface WindowInfo {
   fullscreen: boolean;
   maximizedH: boolean;
   maximizedV: boolean;
+  sticky: boolean;
+  skipTaskbar: boolean;
 }
 export type WindowEvent =
   | {type: 'added'; id: WindowId}
   | {type: 'removed'; id: WindowId}
   | {type: 'focused'; id: WindowId | null}
-  | {type: 'frame' | 'workspace' | 'minimized' | 'fullscreen' | 'maximized'; id: WindowId};
+  | {type: 'frame' | 'workspace' | 'minimized' | 'fullscreen' | 'maximized' | 'membership'; id: WindowId};
 
 export interface WindowsPort {
   list(): readonly WindowInfo[];

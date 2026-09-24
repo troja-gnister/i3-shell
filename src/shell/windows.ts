@@ -105,10 +105,8 @@ function windowFacts(window: Meta.Window): WindowFacts {
   const [maxKnown, maxWidth, maxHeight] = window.get_max_size();
   return {
     type: windowType(window.get_window_type()),
-    skipTaskbar: window.is_skip_taskbar(),
     transient: window.get_transient_for() !== null,
     attached: window.is_attached_dialog(),
-    sticky: window.is_on_all_workspaces(),
     resizable: isResizable({
       resizeable: window.resizeable,   // Mutter spells the property this way.
       fullscreen: window.is_fullscreen(),
@@ -156,6 +154,8 @@ function windowInfo(
     fullscreen: window.is_fullscreen(),
     maximizedH: window.maximized_horizontally,
     maximizedV: window.maximized_vertically,
+    sticky: window.is_on_all_workspaces(),
+    skipTaskbar: window.is_skip_taskbar(),
   };
 }
 
@@ -178,6 +178,8 @@ function watchWindow(
   connectWindow('workspace-changed', 'workspace');
   connectWindow('notify::minimized', 'minimized');
   connectWindow('notify::fullscreen', 'fullscreen');
+  connectWindow('notify::on-all-workspaces', 'membership');
+  connectWindow('notify::skip-taskbar', 'membership');
   connectWindow('notify::appears-focused', 'focused');
   const focusId = global.display.connect('notify::focus-window',
     guard('notify::focus-window', () => callback('focused')));

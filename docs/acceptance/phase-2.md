@@ -84,7 +84,15 @@ Arrange `A | (B over C)` as in A9 and focus `C`.
 > ```sh
 > gsettings set org.gnome.mutter workspaces-only-on-primary false   # revert with: reset
 > ```
-> The automated two-output scenario sets exactly this key for the same reason.
+> The automated two-output scenario set exactly this key for the same reason.
+>
+> **Superseded by Phase 3B (2026-09-23).** The extension now sets
+> `workspaces-only-on-primary = false` itself on enable and restores it on disable, sticky
+> windows are tracked (they are only kept out of the tiling tree while the fact holds), and the
+> harness no longer seeds the key — it asserts that the extension cleared it. The `gsettings set`
+> above is no longer needed for the boxes below, and `docs/acceptance/phase-3b.md` is the current
+> guidance. This paragraph is kept as the record of what the Phase 2 walk was actually run
+> against.
 
 - [ ] **Dock with an external display, with `workspaces-only-on-primary=false` set:** windows already
       open stay on their displays, both outputs tile independently, and `$mod+1..0` switches

@@ -83,16 +83,12 @@ enabled-extensions=$ENABLED
 disable-user-extensions=false
 welcome-dialog-last-shown-version='999.0'
 SETTINGS
-if [[ ${#MONITORS[@]} -gt 1 ]]; then
-  # With the default (true), Mutter makes every window on a secondary output
-  # sticky, and sticky windows are deliberately not tracked. Only the private
-  # multi-output scenario needs this key.
-  cat >> "$SANDBOX/config/glib-2.0/settings/keyfile" <<'SETTINGS'
-
-[org/gnome/mutter]
-workspaces-only-on-primary=false
-SETTINGS
-fi
+# No [org/gnome/mutter] group is seeded. Until phase 3B the multi-output run
+# needed workspaces-only-on-primary=false here, because Mutter marks every
+# window on a secondary output sticky while it is true and sticky windows were
+# dropped. The extension now owns that key (spec 9), so the private session
+# starts from GNOME's own default and phase2-checks.py asserts that the
+# extension itself cleared it -- seeding it would make that assertion vacuous.
 
 # GNOME Shell spawns `ibus-daemon --panel disable` through SEARCH_PATH and never
 # respawns it, so a stub that exits leaves the private session without IBus.

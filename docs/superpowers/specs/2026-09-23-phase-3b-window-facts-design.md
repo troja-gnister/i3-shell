@@ -68,19 +68,90 @@ export function classifyWindow(f: WindowFacts): WindowKind | null {
 `null` now means exactly one thing: **this window type is not ours.** The tracker therefore always
 allocates an id and keeps its watch for any window it admits.
 
-### 3.3 One exclusion gate, two call sites
+**The guarantee is conditional, and the condition is `type`.** The permanent drop is closed because
+the one fact that can still return `null` happens not to change in practice — not because the
+construction makes the drop impossible. `type` is read once, at first frame, and it *is* mutable:
+X11 clients may rewrite `_NET_WM_WINDOW_TYPE` after mapping, and this project's own Phase 1
+carry-forward records exactly that ("`type` can change too … but rarely enough to accept for v1",
+`docs/superpowers/plans/2026-09-21-phase-1-carry-forward.md:107-108`). If an `'ignored'`-typed window
+were promoted to `NORMAL` after its first frame, `_makeReady` would already have called
+`pending.disposeWatch()` and allocated no id, and that window would be dropped permanently and
+silently — the same failure this phase exists to remove, through the one entrance it leaves open.
+
+Phase 3B deliberately does **not** fix this: the risk was assessed and accepted before this phase,
+the class is narrow (docks, desktops, toolbars, menus, splashes — §3.5), and closing it means either
+watching windows the tracker refused or re-reading `type` per commit, which is Phase 4's
+reclassification work (§3.4). It is written down here so the next phase inherits a known hole rather
+than rediscovering it: **"null means exactly one thing" is a statement about `classifyWindow`, not a
+proof that no window can be dropped.**
+
+### 3.3 One exclusion gate, every site that asks whether a window is ours
 
 A pure predicate in Layer 0:
 
 ```ts
 export function excludedFromTree(info: WindowInfo): boolean {
-  return info.minimized || info.sticky || info.skipTaskbar;
+  return info.minimized || info.sticky || (info.skipTaskbar && info.kind === 'tiled');
 }
 ```
 
-It replaces the bare `info.minimized` at `engine.ts:485` and the `!w.minimized` filter in the
-`tree.normalize(...)` live set at `engine.ts:391`. Both sites exist today; both consult a predicate
+**Amendment (post-implementation, native scenario A13):** the first draft of this section wrote the
+predicate flatly, as `info.minimized || info.sticky || info.skipTaskbar`, with no `kind` term. That
+was wrong, and the `kind` term is not a new rule — it restores one this phase silently dropped.
+
+Before this phase, `classifyWindow` read `skipTaskbar` itself, on the line that already assumed the
+window had survived every other reason to float:
+
+```ts
+if (f.type !== 'normal' || f.transient || f.attached || !f.resizable) return 'floating';
+return f.skipTaskbar || f.sticky ? null : 'tiled';
+```
+
+A window that floats for type, transience, attachment, or fixed size never reached that line, so
+`skipTaskbar` never applied to it. §3.1 moved `skipTaskbar` out of `WindowFacts` and into `WindowInfo`
+precisely so it could be read per-commit instead of cached — but the flat OR above applies it to
+*every* window, floating or not, because `WindowFacts`'s type/transient/attached distinction is gone
+from this predicate's inputs. Mutter reports `is_skip_taskbar()` true for a modal dialog (confirmed by
+scenario A13: `'A13 dialog'`, a plain transient with no `set_modal()`, passed; `'A13 modal'`, differing
+only in that call, failed) — a window that was always meant to float regardless. Under the flat OR it
+is excluded from the tree *and*, because `_syncWindow`'s else-branch (the only place that calls
+`tree.addFloating`) is skipped while excluded, from the floating list too: `assert window['id'] in
+workspace_snapshot()['floating']` failed with the modal absent from both.
+
+`info.kind` is exactly the type/transient/attached/fixed-size verdict, carried forward from
+classification into `WindowInfo` (§3.1 already relies on this: it is what `_floating()` reads). Gating
+`skipTaskbar` on `info.kind === 'tiled'` reproduces the old ordering — skip-taskbar only ever mattered
+for a window that would otherwise be a tiling candidate — without reintroducing `skipTaskbar` as a
+classification input, which §1 and §2 both rule out. `minimized` and `sticky` get no such gate: neither
+was ever behind that ordering (`sticky` mapped to `null` unconditionally in the pre-phase code above,
+and `minimized` is orthogonal to `kind` by construction), so gating them would be inventing new
+behaviour, not restoring old.
+
+The predicate replaces the bare `info.minimized` at `engine.ts:485` and the `!w.minimized` filter in
+the `tree.normalize(...)` live set at `engine.ts:391`. Both sites exist today; both consult a predicate
 instead of a field.
+
+**Amendment (whole-branch review): "two call sites" was an undercount, and the omission was
+user-visible.** The rule is that *every* gate asking "is this window ours to place" must ask this
+predicate, and the engine has five:
+
+| `src/engine.ts` | Gate | Was |
+|---|---|---|
+| `:392` | the `tree.normalize()` live set | `!w.minimized` |
+| `:480` | force a fresh generation when a window rejoins | `old.minimized && !info.minimized` |
+| `:486` | leave or rejoin the tree | `info.minimized` |
+| `:510` | request `unmaximize()` on a maximized window | `!info.minimized` |
+| `:559` | `_observe()`, queue a corrective re-apply | `!info.minimized` |
+
+The last two were missed in the first implementation, and `:510` was not cosmetic: a window pinned to
+all workspaces and then maximized by the user had its maximize undone, once per maximize, forever
+(`_unmaximizeAttempts` resets each time the window reports itself unmaximized), and it could never be
+tiled instead because an excluded window is absent from `expected`. That is active interference with a
+window this phase itself declares not ours, and it contradicts `docs/acceptance/phase-3b.md`'s promise
+that a pinned window stays usable. `:559` is the same omission with a milder symptom: a wasted
+published commit that can apply nothing. Both now call `excludedFromTree`, and engine tests pin that a
+sticky or skip-taskbar window reporting itself maximized is sent no `unmaximize`, and that a frame
+report for an excluded window publishes no commit.
 
 Re-entry needs no new **engine** code. `_syncWindow`'s else-branch already re-inserts a window that
 is absent from the tree via `tree.insert(id, workspace, monitor)`, which places it beside the focus —
@@ -169,7 +240,30 @@ every application, while the extension is enabled. `disable()` puts it back.
 - it returns **beside the focused window** when sticky clears, with its floating state intact;
 - a skip-taskbar window is excluded and recovers the same way;
 - `excludedFromTree`'s three reasons compose: a window both minimized and sticky returns only when
-  both clear.
+  both clear;
+- an excluded window that reports itself maximized is sent **no** `unmaximize()`, and a frame report
+  for an excluded window publishes no commit (the `:510` and `:559` gates of §3.3).
+
+**Amendment (post-implementation): the first two Layer 0 bullets and the first shell bullet could not
+be written as specified, and what replaced them proves less.** They are kept above as the record of
+what was planned; the shipped suite is:
+
+- `classifyWindow` returning `'tiled'` for a sticky window **cannot be tested at all**, because §3.1
+  removed `sticky` from `WindowFacts`: the signature can no longer express the input. A test asserting
+  it was written, found to assert only that the unrelated fields still classify, and deleted for
+  overstating what it proved. The surviving assertion is the honest one: `classifyWindow` returns
+  `null` for `type === 'ignored'` and never for anything else.
+- "a window whose facts would previously have classified `null`" is likewise unexpressible: with
+  `sticky` gone, the only such facts are `type === 'ignored'`, which still classifies `null`. The
+  tracker test instead parameterises over every **admitted** type (`normal`, `dialog`,
+  `modal-dialog`, `utility`), asserting an id and a kept change watch for each, with `'ignored'` as
+  the single disposing case. That pins the *narrowed contract* — one entrance to the drop path — not
+  the permanent drop itself.
+- the per-commit re-read is therefore carried by the adapter test, which mutates `on_all_workspaces`
+  and `skip_taskbar` on a fake window and reads the new values back with **no signal emitted**, and
+  by the engine bullets above. The permanent drop end to end is proven only by the native membership
+  scenario. No unit test can prove Mutter re-marks a live window, and
+  `docs/acceptance/phase-3b.md`'s automated-evidence section now says so in those words.
 
 **Integration, in the nested shell** — the payoff, and the assertion that matters most because
 Phase 3A taught us a correct tree is not a correct screen:
