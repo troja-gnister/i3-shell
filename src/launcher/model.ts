@@ -1,3 +1,5 @@
+import type {Rect} from '../tree/node';
+
 /** Where a launcher item came from. Applications outrank binaries on a tie. */
 export type LauncherSource = 'app' | 'binary';
 
@@ -32,4 +34,11 @@ export interface LauncherItem {
    * absolute path. Layer 0 never spawns anything, so this is opaque here.
    */
   command: string;
+}
+
+export interface LauncherRequest {
+  /** The work area of the monitor the launcher must appear on. */
+  area: Rect;
+  /** What Shift+Enter runs the choice inside, or null when the binding gave no --term. */
+  term: string | null;
 }
