@@ -5,6 +5,7 @@ import Shell from 'gi://Shell';
 import {buildCatalogue} from '../launcher/catalogue';
 import type {BinaryDir, LauncherItem, RawApp} from '../launcher/model';
 import {isLaunchableEntry, splitPath} from '../launcher/paths';
+import {log} from './log';
 
 /**
  * The two catalogue sources.
@@ -25,7 +26,7 @@ export class AppCatalogue {
   private _installedId = 0;
   private _warned = new Set<string>();
 
-  constructor(private readonly _log: {warn(message: string): void}) {
+  constructor() {
     const system = Shell.AppSystem.get_default();
     this._installedId = system.connect('installed-changed', () => { this._apps = null; });
   }
@@ -52,13 +53,13 @@ export class AppCatalogue {
   private _readApps(): RawApp[] {
     if (this._apps) return this._apps;
     const apps: RawApp[] = [];
+    let skipped = 0;
     for (const app of Shell.AppSystem.get_default().get_installed()) {
-      // get_installed() is typed as the generic Gio.AppInfo interface, but
-      // every entry Shell.AppSystem produces is really a GDesktopAppInfo
-      // (GioUnix-2.0's DesktopAppInfo, which gjs merges into Gio at runtime).
+      // Shell.AppSystem hands back Gio.AppInfo; the fields we need live on
+      // GioUnix-2.0's DesktopAppInfo, which gjs merges into Gio at runtime.
       // Narrow explicitly rather than casting, so a future non-desktop entry
       // is skipped instead of throwing.
-      if (!(app instanceof GioUnix.DesktopAppInfo)) continue;
+      if (!(app instanceof GioUnix.DesktopAppInfo)) { skipped++; continue; }
       if (!app.should_show()) continue;
       const name = app.get_name();
       const id = app.get_id();
@@ -71,6 +72,10 @@ export class AppCatalogue {
         icon: app.get_string('Icon'),
       });
     }
+    // A wholesale narrowing failure would otherwise show the user a launcher
+    // with no applications in it and say nothing about why.
+    if (skipped > 0)
+      log.warn(`launcher: ${skipped} installed application(s) were not GioUnix.DesktopAppInfo and were skipped`);
     this._apps = apps;
     return apps;
   }
@@ -131,7 +136,7 @@ export class AppCatalogue {
       // exist is ordinary, and repeating it on every open would be noise.
       if (!this._warned.has(path)) {
         this._warned.add(path);
-        this._log.warn(`launcher: skipping unreadable $PATH entry ${path}: ${error}`);
+        log.warn(`launcher: skipping unreadable $PATH entry ${path}: ${error}`);
       }
       return null;
     }
