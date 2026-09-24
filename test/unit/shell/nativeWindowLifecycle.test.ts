@@ -315,10 +315,22 @@ describe('Phase 4 window facts and urgency', () => {
     f.tracker.destroy();
   });
 
-  it('is not urgent when neither urgency hint is set', () => {
+  it('reports urgency appearing and then clearing, not merely absent', () => {
+    // A static "neither hint is set" assertion passes even against a
+    // hardcoded `urgent: false`, which is what the placeholder was before
+    // this task -- and it cannot tell OR from AND, since both are false for
+    // false,false. Asserting the transition makes the false half load-bearing.
     const f = setup();
-    f.create();
-    expect(f.tracker.list()[0]?.urgent).toBe(false);
+    const window = f.create();
+    const info = (): boolean | undefined => f.tracker.list()[0]?.urgent;
+    window.urgentFlag = true;
+    expect(info()).toBe(true);
+    window.urgentFlag = false;
+    expect(info()).toBe(false);
+    window.demandsAttentionFlag = true;
+    expect(info()).toBe(true);
+    window.demandsAttentionFlag = false;
+    expect(info()).toBe(false);
     f.tracker.destroy();
   });
 
