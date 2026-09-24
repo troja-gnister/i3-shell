@@ -73,6 +73,8 @@ export interface Config {
   floatingModifier: 'Mod4' | 'Mod1' | 'none';
   focusWrapping: 'yes' | 'no' | 'force' | 'workspace';
   workspaceAutoBackAndForth: boolean;
+  /** bar { strip_workspace_numbers }: render pills without the leading number. */
+  stripWorkspaceNumbers: boolean;
   /** Workspace number → full configured name, e.g. 1 → "1:I". */
   workspaceNames: Map<number, string>;
   /** Largest workspace number the config references (1..36); 0 when it references none. */

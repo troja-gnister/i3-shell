@@ -1,4 +1,5 @@
 import type {Config} from './model';
+import {displayWorkspaceName} from './workspaceNames';
 
 export interface OverridePlan {
   /** Default-mode accelerators; any GNOME binding equal to one of these is cleared. */
@@ -13,8 +14,10 @@ export interface OverridePlan {
 export function planOverrides(config: Config): OverridePlan {
   const accels = config.modes.get('default')?.bindings.map(b => b.accel) ?? [];
   const workspaceNames: string[] = [];
-  for (let n = 1; n <= config.workspaceCount; n++)
-    workspaceNames.push(config.workspaceNames.get(n) ?? String(n));
+  for (let n = 1; n <= config.workspaceCount; n++) {
+    const name = config.workspaceNames.get(n) ?? String(n);
+    workspaceNames.push(displayWorkspaceName(name, config.stripWorkspaceNumbers));
+  }
   const mouseButtonModifier =
     config.floatingModifier === 'Mod4' ? '<Super>' :
     config.floatingModifier === 'Mod1' ? '<Alt>' : '';

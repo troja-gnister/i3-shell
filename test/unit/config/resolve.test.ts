@@ -102,3 +102,40 @@ describe('resolve', () => {
     expect(r.config!.modes.get('default')!.bindings).toHaveLength(25);
   });
 });
+
+describe('strip_workspace_numbers', () => {
+  const load = (lines: string[]) => loadConfigText(lines.join('\n'));
+
+  it('defaults to off, as i3 does', () => {
+    const r = load(['set $ws1 "1:I"', 'bindsym Mod4+1 workspace number $ws1']);
+    expect(r.config?.stripWorkspaceNumbers).toBe(false);
+  });
+
+  it('is on when the bar block says yes', () => {
+    const r = load([
+      'set $ws1 "1:I"',
+      'bindsym Mod4+1 workspace number $ws1',
+      'bar {',
+      '  strip_workspace_numbers yes',
+      '}',
+    ]);
+    expect(r.diagnostics.filter(d => d.severity === 'error')).toEqual([]);
+    expect(r.config?.stripWorkspaceNumbers).toBe(true);
+  });
+
+  it('is off when the bar block says no', () => {
+    const r = load(['bar {', '  strip_workspace_numbers no', '}']);
+    expect(r.config?.stripWorkspaceNumbers).toBe(false);
+  });
+
+  it('leaves the stored workspace name intact, so bindings still resolve', () => {
+    const r = load([
+      'set $ws1 "1:I"',
+      'bindsym Mod4+1 workspace number $ws1',
+      'bar {',
+      '  strip_workspace_numbers yes',
+      '}',
+    ]);
+    expect(r.config?.workspaceNames.get(1)).toBe('1:I');
+  });
+});

@@ -12,6 +12,7 @@ export type Directive =
   | {kind: 'floating_modifier'; line: number; value: string}
   | {kind: 'focus_wrapping'; line: number; value: string}
   | {kind: 'workspace_auto_back_and_forth'; line: number; value: string}
+  | {kind: 'strip_workspace_numbers'; line: number; value: string}
   | {kind: 'client'; line: number; which: ClientColorKey; colors: string[]}
   | {kind: 'ignored'; line: number; name: string}
   | {kind: 'unsupported'; line: number; name: string};
@@ -48,10 +49,27 @@ export function parse(lines: LogicalLine[]): ParseResult {
     };
 
     if (barDepth > 0) {
-      if (text.endsWith('{'))
+      if (text.endsWith('{')) {
         barDepth++;
-      else if (text === '}')
+        continue;
+      }
+      if (text === '}') {
         barDepth--;
+        continue;
+      }
+      // The bar is i3-shell's own panel, so the block stays ignored (§6.3) with
+      // one exception: strip_workspace_numbers says how to render the pills.
+      // Only at depth 1 — inside `colors { }` the word is not a bar option.
+      if (barDepth === 1) {
+        const [barHead, barRest] = splitHead(text);
+        if (barHead === 'strip_workspace_numbers') {
+          if (barRest !== 'yes' && barRest !== 'no') {
+            err('strip_workspace_numbers: expected yes|no');
+            continue;
+          }
+          directives.push({kind: 'strip_workspace_numbers', line: l.line, value: barRest});
+        }
+      }
       continue;
     }
     if (text === '}') {

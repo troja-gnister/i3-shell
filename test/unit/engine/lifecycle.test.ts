@@ -751,3 +751,30 @@ describe('exclusion from the tree', () => {
     expect(f.engine.treeSnapshot().revision).toBe(revision);
   });
 });
+
+describe('workspace pill labels', () => {
+  const config = (extra: string) => [
+    'bindsym Mod4+1 workspace number "1:I"',
+    'bindsym Mod4+2 workspace number "2:II"',
+    extra,
+  ].join('\n');
+
+  it('labels pills with the full configured name by default', () => {
+    const f = fakeEngine(config('# no bar block'));
+    f.engine.start();
+    expect(f.pills.map(p => p.name)).toEqual(['1:I', '2:II']);
+  });
+
+  it('drops the leading number when the bar block asks it to', () => {
+    const f = fakeEngine(config('bar {\n  strip_workspace_numbers yes\n}'));
+    f.engine.start();
+    expect(f.pills.map(p => p.name)).toEqual(['I', 'II']);
+  });
+
+  it('still resolves a workspace command by its full name while stripping', () => {
+    const f = fakeEngine(config('bar {\n  strip_workspace_numbers yes\n}'));
+    f.engine.start();
+    f.engine.run(parseCommands('workspace "2:II"').commands, 0);
+    expect(f.calls).toContain('activate:1');
+  });
+});
