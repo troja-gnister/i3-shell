@@ -90,6 +90,45 @@ describe('firstDrawnRow', () => {
     expect(firstDrawnRow(100, 50, -1)).toBe(0);
   });
 
+  it('contains the selection only when the window and the slice agree on the row count', () => {
+    // Why src/shell/launcher.ts must pass ONE row count to both halves of its
+    // slice. `slice()` above uses the same `rows` twice, which is the contract;
+    // this is what the contract costs when a caller breaks it.
+    //
+    // A viewport holding 4 rows, a 500-item list, the selection on row 9:
+    const first = firstDrawnRow(500, 9, 4);
+    expect(first).toBe(7);                       // window [7, 11) -- contains 9
+    expect(9).toBeGreaterThanOrEqual(first);
+    expect(9).toBeLessThan(first + 4);
+
+    // The same call asked for a DIFFERENT number of rows -- what an adapter
+    // does when one of its two uses of the row count is stale:
+    const wrong = firstDrawnRow(500, 9, 10);
+    expect(wrong).toBe(4);                       // window [4, 8) -- does NOT
+    expect(9).toBeGreaterThanOrEqual(wrong + 4);
+    // Four rows are still drawn, so every count assertion still passes. The
+    // selected row is simply not one of them.
+  });
+
+  it('contains the selection for every row count, swept, not just for ten', () => {
+    // The existing sweeps above all fix `rows` at ROWS. A work area that holds
+    // fewer rows than VISIBLE_ROWS is the ordinary case on a short output, and
+    // it is where the centring arithmetic is most likely to drift.
+    for (const rows of [1, 2, 3, 4, 5, 7, 9, 10, 13]) {
+      for (const count of [1, 2, 5, 11, 60, 500]) {
+        for (const selected of [0, 1, Math.floor(count / 2), count - 2, count - 1]) {
+          if (selected < 0 || selected >= count) continue;
+          const first = firstDrawnRow(count, selected, rows);
+          const last = Math.min(first + rows, count);
+          expect(selected, `rows ${rows}, count ${count}, selected ${selected}`)
+            .toBeGreaterThanOrEqual(first);
+          expect(selected, `rows ${rows}, count ${count}, selected ${selected}`)
+            .toBeLessThan(last);
+        }
+      }
+    }
+  });
+
   it('holds the contract for a one-row viewport', () => {
     // The degenerate case the centring arithmetic is most likely to get wrong.
     for (let selected = 0; selected < 5; selected++) {

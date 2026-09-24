@@ -197,6 +197,22 @@ function selectedRow(root: Actor): Actor | undefined {
     String(row.props.style_class ?? '').includes('i3-shell-launcher-row-selected'));
 }
 
+/**
+ * The name on the row the renderer actually marked selected, or null when no
+ * drawn row was marked at all.
+ *
+ * `null` is the interesting answer: it means the reducer's selection fell
+ * outside the slice the renderer built, so the highlight is nowhere on screen
+ * and `Enter` is about to launch a row the user cannot see.
+ */
+function drawnSelection(root: Actor): string | null {
+  const row = selectedRow(root);
+  if (!row) return null;
+  const label = row.children.find(child =>
+    child.kind === 'St.Label' && child.props.style_class !== 'i3-shell-launcher-hint');
+  return String(label?.props.text ?? '');
+}
+
 const keyEvent = (
   symbol: number,
   {unicode = '', state = 0, repeated = false}: {unicode?: string; state?: number; repeated?: boolean} = {},
@@ -634,6 +650,71 @@ describe('Launcher: placement', () => {
     expect(rowsOf(lastBox())).not.toHaveLength(10);
     expect(partOf(lastBox(), 'i3-shell-launcher-scroll').props.height).toBe(40 * 5);
     expect(lastBox().geometry.y + lastBox().geometry.height).toBeLessThanOrEqual(300);
+  });
+
+  it('always DRAWS the selected row, at every viewport size and every depth', () => {
+    // Containment, not count. `_render()` reads `this._rows` twice -- once to
+    // choose where the window starts and once to decide where it ends -- and a
+    // row count that is right in one and wrong in the other draws the correct
+    // NUMBER of rows from the WRONG place. With a viewport of 4 and the
+    // selection on row 9, `firstDrawnRow(500, 9, 10)` starts the window at 4
+    // and the slice ends at 8: four rows drawn, none of them the selected one.
+    // The highlight vanishes and Enter launches something invisible -- the M2
+    // defect verbatim. Every count assertion in this file passes through that.
+    items = Array.from({length: 500}, (_, i) => binary(`/usr/bin/b${i}`, `b${String(i).padStart(3, '0')}`));
+    // Four work areas: 200 holds 4 rows, 300 holds 7, and 560 and 1053 hold the
+    // full ten. Only the ones below VISIBLE_ROWS can discriminate -- at ten the
+    // two row counts are the same number and the hazard is invisible -- so the
+    // short areas are the load-bearing half of this sweep.
+    for (const height of [200, 300, 560, 1053]) {
+      const launcher = build();
+      launcher.open({area: {x: 0, y: 0, width: 1920, height}, term: null});
+      const box = lastBox();
+      let at = 0;
+      // Head, just past the first window, the middle, and the very tail.
+      for (const target of [0, 1, 4, 9, 20, 250, 499]) {
+        while (at < target) { press(box, KEY.Down); at++; }
+        const drawn = drawnSelection(box);
+        expect(drawn, `height ${height}, selection ${target}`).not.toBe(null);
+        // ...and it is the row the reducer thinks is selected, not just any
+        // row that happened to be marked.
+        expect(drawn, `height ${height}, selection ${target}`).toBe(launcher.debugState().selected);
+      }
+      launcher.close();
+    }
+  });
+
+  it('draws the selection with a four-row viewport and the cursor on row nine', () => {
+    // The named case, spelled out rather than left inside a sweep: a work area
+    // of 200px holds four rows at a 26px row and a 58px chrome, and
+    // `firstDrawnRow(500, 9, 10)` -- the wrong row count -- starts the window
+    // at 4, so the slice is [4, 8) and row 9 is not in it. Four rows are still
+    // drawn, so nothing about the geometry or the count moves.
+    items = Array.from({length: 500}, (_, i) => binary(`/usr/bin/b${i}`, `b${String(i).padStart(3, '0')}`));
+    const launcher = build();
+    launcher.open({area: {x: 0, y: 0, width: 1920, height: 200}, term: null});
+    const box = lastBox();
+    expect(rowsOf(box)).toHaveLength(4);
+
+    for (let i = 0; i < 9; i++) press(box, KEY.Down);
+
+    expect(launcher.debugState().selected).toBe('b009');
+    expect(drawnSelection(box)).toBe('b009');
+    expect(rowLabels(box)).toEqual(['b007', 'b008', 'b009', 'b010']);
+  });
+
+  it('keeps drawing the selected row on the way back up', () => {
+    // Up and Down move the window by different arithmetic at the clamps; a
+    // sweep that only ever descends misses the tail-to-head return.
+    items = Array.from({length: 500}, (_, i) => binary(`/usr/bin/b${i}`, `b${String(i).padStart(3, '0')}`));
+    const launcher = build();
+    launcher.open({area: {x: 0, y: 0, width: 1920, height: 300}, term: null});
+    const box = lastBox();
+    for (let i = 0; i < 60; i++) press(box, KEY.Down);
+    for (let i = 0; i < 60; i++) {
+      press(box, KEY.Up);
+      expect(drawnSelection(box), `after ${i + 1} Up presses`).toBe(launcher.debugState().selected);
+    }
   });
 
   it('never builds more rows than the viewport was sized for', () => {
