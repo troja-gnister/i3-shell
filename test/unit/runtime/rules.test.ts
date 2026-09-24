@@ -20,10 +20,17 @@ describe('matchesCriteria', () => {
   });
 
   it('matches each of the five regex criteria against its own fact', () => {
+    // Each key gets a positive AND a negative case: a positive-only assertion
+    // passes even if the check were deleted, since an unchecked criterion
+    // returns true. The negative half is what makes the test's name honest.
     expect(matchesCriteria(c({class: /^gnome-control-center$/}), info())).toBe(true);
+    expect(matchesCriteria(c({class: /^kitty$/}), info())).toBe(false);
     expect(matchesCriteria(c({instance: /control/}), info())).toBe(true);
+    expect(matchesCriteria(c({instance: /^nope$/}), info())).toBe(false);
     expect(matchesCriteria(c({app_id: /^org\.gnome\.Settings$/}), info())).toBe(true);
+    expect(matchesCriteria(c({app_id: /^org\.gnome\.Nope$/}), info())).toBe(false);
     expect(matchesCriteria(c({window_role: /^dialog$/}), info())).toBe(true);
+    expect(matchesCriteria(c({window_role: /^toolbar$/}), info())).toBe(false);
   });
 
   it('requires EVERY present criterion to match, as i3 does', () => {
