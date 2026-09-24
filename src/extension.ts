@@ -10,6 +10,7 @@ import {planOverrides} from './config/overridePlan';
 import {Engine} from './engine';
 import type {LoadedConfig} from './engine';
 import type {PillState} from './runtime/model';
+import {AppCatalogue} from './shell/appCatalogue';
 import {MonitorBars} from './shell/bars';
 import {ConfigLoader} from './shell/configLoader';
 import {DBusControl, DebugObject} from './shell/control';
@@ -18,6 +19,8 @@ import {ShellAccent} from './shell/accent';
 import {Decorations} from './shell/decorations';
 import {Indicator} from './shell/indicator';
 import {KeyBinder} from './shell/keys';
+import {Launcher} from './shell/launcher';
+import type {RecencyStore} from './shell/launcher';
 import {log} from './shell/log';
 import {notify} from './shell/notify';
 import {measureRowHeight} from './shell/rowHeight';
@@ -39,6 +42,8 @@ export default class I3ShellExtension extends Extension {
   private _dbus: DBusControl | null = null;
   private _windows: ManagedWindows | null = null;
   private _geometry: Geometry | null = null;
+  private _catalogue: AppCatalogue | null = null;
+  private _launcher: Launcher | null = null;
   private readonly _deferred = new Set<number>();
 
   enable(): void {
@@ -138,6 +143,21 @@ export default class I3ShellExtension extends Extension {
       callback => { defer(callback); });
     this._decorations = decorations;
 
+    const catalogue = new AppCatalogue();
+    this._catalogue = catalogue;
+    // Task 8 replaces this with the GSettings-backed store. It is in memory
+    // for now so the launcher is complete on its own: recency orders the list
+    // correctly within a session and is forgotten at disable.
+    let recent: string[] = [];
+    const recency: RecencyStore = {
+      read: () => recent,
+      record: (id: string) => { recent = [id, ...recent.filter(other => other !== id)]; },
+    };
+    // The same `defer` the decorations use, and for the same reason: the
+    // launcher closes itself out of signals Mutter is still emitting.
+    const launcher = new Launcher(catalogue, recency, callback => { defer(callback); });
+    this._launcher = launcher;
+
     const accent = new ShellAccent();
     this._accent = accent;
 
@@ -161,12 +181,7 @@ export default class I3ShellExtension extends Extension {
       },
       accent,
       decorations,
-      // Task 7 replaces this with the real Launcher adapter. It exists now
-      // only because EnginePorts.launcher is required, and a port that is
-      // declared but unsupplied stops the extension compiling. A no-op is
-      // honest here: the launcher command parses, resolves its monitor, and
-      // reaches a port that does nothing yet.
-      launcher: {open: () => {}, close: () => {}, setColors: () => {}},
+      launcher,
       exec: spawnShell,
       notify,
       log,
@@ -219,6 +234,10 @@ export default class I3ShellExtension extends Extension {
     // rather than laying every window out twice.
     engine.setRowHeight(measureRowHeight());
     engine.start(session.isLocked);
+    // Off the critical path, and off the path that opens the launcher: the
+    // first $PATH scan and the first read of every installed .desktop file
+    // would otherwise both land on the keystroke the user is waiting on.
+    defer(() => catalogue.prime());
     const debug = __I3SHELL_TEST__ ? new DebugObject(session, engine) : null;
     this._dbus = new DBusControl(engine, debug, notify);
     log.info(`ready: ${engine.state().grabbed} bindings grabbed, config from ${engine.lastLoad.source} (${engine.lastLoad.path})`);
@@ -226,6 +245,13 @@ export default class I3ShellExtension extends Extension {
 
   disable(): void {
     log.info('disable');
+    // First, before anything else can throw: an open launcher holds a modal
+    // grab, and a grab left behind takes the keyboard away from the whole
+    // session. close() releases it before it destroys the actor.
+    this._launcher?.destroy();
+    this._launcher = null;
+    this._catalogue?.destroy();
+    this._catalogue = null;
     this._dbus?.destroy();
     this._dbus = null;
     this._engine?.stop();

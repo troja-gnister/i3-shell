@@ -71,3 +71,32 @@
      vertical padding here would be reserved by nobody and clip the pills. */
   padding: 0 6px;
 }
+
+.i3-shell-launcher {
+  /* Geometry and a plate to read against, nothing else. The one colour that
+     has to agree with the rest of the extension -- the selected row's -- is
+     set inline by src/shell/launcher.ts from effectiveColors(), exactly as the
+     active workspace pill and the focused border are, so it carries the GNOME
+     accent when the config did not name one. A rule for it here would look
+     like the source of truth while losing every time. */
+  background-color: rgba(20, 20, 20, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.i3-shell-launcher-entry {
+  margin-bottom: 6px;
+}
+
+.i3-shell-launcher-row {
+  padding: 2px 8px;
+  border-radius: 4px;
+  spacing: 8px;
+}
+
+.i3-shell-launcher-hint {
+  /* The $PATH binary's own path, beside its name: present for the reader who
+     wants to know which `code` this is, quiet enough not to compete with it. */
+  color: rgba(255, 255, 255, 0.45);
+}
