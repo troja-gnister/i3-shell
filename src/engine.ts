@@ -7,6 +7,7 @@ import {decorationPlan, type DecorationPlan} from './runtime/decoration';
 import type {WindowsPort, GeometryPort, DeferredPort, PillState, Topology, WindowInfo, WindowEvent} from './runtime/model';
 import {displayWorkspaceName} from './config/workspaceNames';
 import {excludedFromTree} from './runtime/classify';
+import {matchesCriteria} from './runtime/rules';
 import {parseCommands} from './commands/parse';
 import type {Command, WorkspaceTarget} from './commands/model';
 import type {LauncherRequest} from './launcher/model';
@@ -131,6 +132,8 @@ export class Engine {
   private _rowHeight = 0;
   private readonly _borderOverrides = new Map<WindowId, number>();
   private readonly _floatingRects = new Map<WindowId, Rect>();
+  /** window -> indexes into Config.rules that have already fired for it. */
+  private readonly _firedRules = new Map<WindowId, Set<number>>();
   private readonly _frameReads = new Map<WindowId, {token: number; generation: number | undefined}>();
   private readonly _listeners = new Set<() => void>();
   private readonly _raiseOrders = new Map<number, string>();
@@ -255,6 +258,7 @@ export class Engine {
         if (selected && location?.workspace === this._tree?.activeWorkspace) this._activateSelection(0);
       } else {
         this._syncWindow(event.id, event.type === 'workspace');
+        if (event.type === 'added' || event.type === 'title') this._applyRules(event.id, 0);
       }
     });
   }
@@ -569,11 +573,44 @@ export class Engine {
     this._forced.delete(id);
     this._floatingRects.delete(id);
     this._borderOverrides.delete(id);
+    this._firedRules.delete(id);
     this._reconciler.forget(id);
     const read = this._frameReads.get(id);
     if (read) this._ports.deferred.cancel(read.token);
     this._frameReads.delete(id);
     if (this._lastFocus === id) this._lastFocus = null;
+  }
+
+  /**
+   * i3's for_window. Runs at first frame and again when a title-matching
+   * rule's subject changes its title, because a GNOME dialog routinely sets
+   * its title after mapping and the user's own rule matches one.
+   *
+   * Each rule fires at most once per window: a window whose title flaps must
+   * not have `resize set` re-applied and fight the user for the rectangle.
+   *
+   * Commands go through run() unchanged. commit() queues rather than rejecting
+   * a nested call and the drain is synchronous, so the extra layout passes are
+   * never painted -- see the plan's mechanism note.
+   */
+  private _applyRules(id: WindowId, timestamp: number): void {
+    const info = this._ports.windows.get(id);
+    if (!info) return;
+    const fired = this._firedRules.get(id) ?? new Set<number>();
+    this._firedRules.set(id, fired);
+    this._config.rules.forEach((rule, index) => {
+      if (fired.has(index)) return;
+      if (!matchesCriteria(rule.criteria, info)) return;
+      fired.add(index);
+      const {commands, diagnostics} = parseCommands(rule.command);
+      for (const problem of diagnostics)
+        this._ports.log.warn(`for_window line ${rule.line}: ${problem}`);
+      for (const command of commands) {
+        const message = this._runOne(command, timestamp, new Map());
+        if (message.includes(':'))
+          this._ports.log.warn(`for_window line ${rule.line}: ${message}`);
+      }
+    });
   }
 
   /**
