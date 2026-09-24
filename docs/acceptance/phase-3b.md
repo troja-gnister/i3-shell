@@ -72,8 +72,9 @@ restore box cannot tell a working restore from a setting nobody touched.
 Open two terminals (`$mod+Return`) unless a check says otherwise. `$mod` is `Super`. To pin a window
 to all workspaces, press **`Alt+Space`** for GNOME's own window menu (i3-shell does not claim that
 accelerator; the reference config binds `$mod+space`) and choose **Always on Visible Workspace**, or
-right-click the window's title bar for the same menu. The item is there because i3-shell sets static
-workspaces; GNOME hides it when workspaces are dynamic.
+right-click the window's title bar for the same menu. If your GNOME build does not offer that item
+at all, do not treat A26 as failed on that account — reach the same fact the long way round, with
+the `gsettings set … true` in A22's last box, and say in your report which route you used.
 
 Reading a GSetting is fine anywhere below. **Writing one is a defect for this phase** — except for
 the `gsettings reset` above, which sets up A22, and the `gsettings set` in A22's own last box.

@@ -1398,6 +1398,10 @@ def scenario_membership():
     # A22/A27. nested.sh no longer seeds this key for multi-output runs, so a
     # false here was written by the extension's own enable(), against the real
     # schema, with GNOME's default (true) snapshotted for restore.
+    # Polled, not read once: the keyfile backend flushes asynchronously, which is
+    # why wait_snapshot() exists below. enable() ran long before this scenario
+    # connected, so the gap is generous -- but a single read is a latent flake.
+    settled(lambda: setting_value(*WORKSPACES_ONLY_ON_PRIMARY) is False, 10.0)
     check('A22 the extension cleared workspaces-only-on-primary',
           setting_value(*WORKSPACES_ONLY_ON_PRIMARY), False)
 
@@ -1437,14 +1441,11 @@ def scenario_membership():
     # is exactly the state this phase had to survive: the engine must see the
     # fact move in *both* directions, which needs the notify::on-all-workspaces
     # subscription that did not exist before (design 3.3.1).
+    became_sticky = False
     set_setting_boolean(*WORKSPACES_ONLY_ON_PRIMARY, True)
     try:
-        if not settled(lambda: window_by_title('MB win')['sticky'], 15.0):
-            print('LIMITATION: this backend never marked the window on all workspaces '
-                  'after workspaces-only-on-primary was set back to true; the sticky '
-                  'round trip stays unchecked here and belongs to the live walk (A26).',
-                  flush=True)
-        else:
+        became_sticky = settled(lambda: window_by_title('MB win')['sticky'], 15.0)
+        if became_sticky:
             ok('MB Mutter marks a window on a secondary output on_all_workspaces '
                'while workspaces-only-on-primary is true')
             wait_until(lambda: tiled_leaf('MB win')[1] is None,
@@ -1456,14 +1457,26 @@ def scenario_membership():
             # skipped (design 3.3).
             check('MB and it is in no workspace floating list either',
                   tracked in workspace_snapshot()['floating'], False)
+        else:
+            print('LIMITATION: this backend never marked the window on all workspaces '
+                  'after workspaces-only-on-primary was set back to true; the sticky '
+                  'round trip stays unchecked here and belongs to the live walk (A26).',
+                  flush=True)
     finally:
         set_setting_boolean(*WORKSPACES_ONLY_ON_PRIMARY, False)
-    wait_until(lambda: not window_by_title('MB win')['sticky'],
-               'MB the sticky fact clears with the setting')
-    check_tiling(alone, 'MB the window rejoins the secondary tiling when sticky clears',
-                 monitor=second_id)
-    check('MB it kept one id across the whole round trip',
-          window_by_title('MB win')['id'], tracked)
+    # Only if the fact really moved. On the limitation path the window never
+    # left the tiling, so `not sticky` would be trivially true and the two
+    # assertions below would restate a transition that did not happen -- and the
+    # rejoin one is what docs/acceptance/phase-3b.md quotes as this phase's
+    # proof. A missing assertion, and the count that drops with it, is the
+    # correct signal there; a passing one is a false green.
+    if became_sticky:
+        wait_until(lambda: not window_by_title('MB win')['sticky'],
+                   'MB the sticky fact clears with the setting')
+        check_tiling(alone, 'MB the window rejoins the secondary tiling when sticky clears',
+                     monitor=second_id)
+        check('MB it kept one id across the whole round trip',
+              window_by_title('MB win')['id'], tracked)
     check('A22 the scenario leaves the extension\'s value in place',
           setting_value(*WORKSPACES_ONLY_ON_PRIMARY), False)
     reset_windows()
