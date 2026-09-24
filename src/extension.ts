@@ -232,7 +232,7 @@ export default class I3ShellExtension extends Extension {
     // first $PATH scan and the first read of every installed .desktop file
     // would otherwise both land on the keystroke the user is waiting on.
     defer(() => catalogue.prime());
-    const debug = __I3SHELL_TEST__ ? new DebugObject(session, engine) : null;
+    const debug = __I3SHELL_TEST__ ? new DebugObject(session, engine, launcher) : null;
     this._dbus = new DBusControl(engine, debug, notify);
     log.info(`ready: ${engine.state().grabbed} bindings grabbed, config from ${engine.lastLoad.source} (${engine.lastLoad.path})`);
   }

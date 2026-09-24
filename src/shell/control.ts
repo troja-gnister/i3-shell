@@ -5,6 +5,7 @@ import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import type {Engine} from '../engine';
 import {ControlObject} from './controlObject';
+import type {Launcher} from './launcher';
 import {log} from './log';
 import type {SessionWatcher} from './session';
 import {guard} from './util/signals';
@@ -35,6 +36,7 @@ const DEBUG_IFACE = `<node>
       <arg type="b" direction="out" name="ok"/>
     </method>
     <method name="Relayout"/>
+    <method name="LauncherState"><arg type="s" direction="out" name="json"/></method>
   </interface>
 </node>`;
 
@@ -69,7 +71,8 @@ export function accelToKeyvals(accel: string): number[] | null {
 export class DebugObject {
   private _keyboard: Clutter.VirtualInputDevice | null = null;
 
-  constructor(private readonly _session: SessionWatcher, private readonly _engine: Engine) {}
+  constructor(private readonly _session: SessionWatcher, private readonly _engine: Engine,
+    private readonly _launcher: Launcher) {}
 
   SimulateSessionMode(locked: boolean): void {
     try {
@@ -84,6 +87,15 @@ export class DebugObject {
       this._engine.relayout();
     } catch (error) {
       log.error('Relayout failed', error);
+    }
+  }
+
+  LauncherState(): string {
+    try {
+      return JSON.stringify(this._launcher.debugState());
+    } catch (error) {
+      log.error('LauncherState failed', error);
+      return '{}';
     }
   }
 
