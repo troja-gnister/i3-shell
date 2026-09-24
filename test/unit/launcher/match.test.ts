@@ -74,6 +74,23 @@ describe('rankItems', () => {
     expect(names(rankItems(items, '', []))).toEqual(['Zebra', 'Antelope']);
   });
 
+  it('ranks an exact match above a prefix match, even one the user launched recently', () => {
+    // Length cannot separate these: an exact match's name IS the query, so it
+    // is always the shortest prefix match too. Recency is the only lever that
+    // can point the other way, so it is what this test uses. Collapse tier 0
+    // into tier 1 and recency puts 'Example' first.
+    const items = [item('Example'), item('ex')];
+    expect(names(rankItems(items, 'ex', ['Example']))).toEqual(['ex', 'Example']);
+  });
+
+  it('ranks a substring match above a keyword-only match, despite being longer', () => {
+    // 'complexity zz' contains 'ex' but no word starts with it -> substring.
+    // 'Aa' matches only through its keyword. Collapse the keyword tier into
+    // the substring tier and the length rule puts the 2-character 'Aa' first.
+    const items = [item('Aa', {keywords: ['ex']}), item('complexity zz')];
+    expect(names(rankItems(items, 'ex', []))).toEqual(['complexity zz', 'Aa']);
+  });
+
   it('breaks a final tie alphabetically', () => {
     const items = [item('fireb'), item('firea')];
     expect(names(rankItems(items, 'fire', []))).toEqual(['firea', 'fireb']);
@@ -83,10 +100,18 @@ describe('rankItems', () => {
     expect(rankItems([item('Firefox')], 'ffx', [])).toEqual([]);
   });
 
-  it('treats a word boundary as a space, hyphen or underscore', () => {
-    const items = [item('gnome-disk-utility'), item('sound_juicer'), item('Text Editor')];
-    expect(names(rankItems(items, 'disk', []))).toEqual(['gnome-disk-utility']);
-    expect(names(rankItems(items, 'juicer', []))).toEqual(['sound_juicer']);
-    expect(names(rankItems(items, 'editor', []))).toEqual(['Text Editor']);
+  it('treats a hyphen as a word boundary, outranking a shorter substring match', () => {
+    const items = [item('gnome-disk-utility'), item('xdisk')];
+    expect(names(rankItems(items, 'disk', []))).toEqual(['gnome-disk-utility', 'xdisk']);
+  });
+
+  it('treats an underscore as a word boundary, outranking a shorter substring match', () => {
+    const items = [item('sound_juicer'), item('xjuicer')];
+    expect(names(rankItems(items, 'juicer', []))).toEqual(['sound_juicer', 'xjuicer']);
+  });
+
+  it('treats a space as a word boundary, outranking a shorter substring match', () => {
+    const items = [item('Text Editor'), item('xeditor')];
+    expect(names(rankItems(items, 'editor', []))).toEqual(['Text Editor', 'xeditor']);
   });
 });
