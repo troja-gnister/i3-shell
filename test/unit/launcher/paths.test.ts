@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest';
-import {isLaunchableEntry, splitPath} from '../../../src/launcher/paths';
+import {isLaunchableEntry, pathScanIsStale, splitPath, UNREADABLE_MTIME} from '../../../src/launcher/paths';
 
 describe('splitPath', () => {
   it('splits on colons', () => {
@@ -41,9 +41,51 @@ describe('isLaunchableEntry', () => {
   it('rejects a file that is not executable', () => {
     expect(isLaunchableEntry({isDirectory: false, canExecute: false})).toBe(false);
   });
+});
 
-  it('rejects a dangling symlink, which resolves to neither', () => {
-    // Gio answers false for access::can-execute when the target is missing.
-    expect(isLaunchableEntry({isDirectory: false, canExecute: false})).toBe(false);
+describe('pathScanIsStale', () => {
+  const m = (entries: Array<[string, number]>) => new Map(entries);
+
+  it('is fresh when every directory matches its cached mtime', () => {
+    expect(pathScanIsStale(['/a', '/b'], m([['/a', 1], ['/b', 2]]), m([['/a', 1], ['/b', 2]]))).toBe(false);
+  });
+
+  it('is stale before anything has been cached', () => {
+    expect(pathScanIsStale(['/a'], m([]), m([['/a', 1]]))).toBe(true);
+  });
+
+  it('is stale when a directory was added to $PATH', () => {
+    expect(pathScanIsStale(['/a', '/b'], m([['/a', 1]]), m([['/a', 1], ['/b', 2]]))).toBe(true);
+  });
+
+  it('is stale when a directory was removed from $PATH', () => {
+    expect(pathScanIsStale(['/a'], m([['/a', 1], ['/b', 2]]), m([['/a', 1]]))).toBe(true);
+  });
+
+  it('is stale when a directory was swapped for another, keeping the count', () => {
+    expect(pathScanIsStale(['/a', '/c'], m([['/a', 1], ['/b', 2]]), m([['/a', 1], ['/c', 3]]))).toBe(true);
+  });
+
+  it('is stale when a directory mtime changed', () => {
+    expect(pathScanIsStale(['/a'], m([['/a', 1]]), m([['/a', 9]]))).toBe(true);
+  });
+
+  it('stays fresh when an unreadable directory is still unreadable', () => {
+    // The bug this replaces: a $PATH entry that does not exist got no cache
+    // entry at all, so the size check made the cache look stale forever and
+    // every launcher open rescanned every directory on $PATH.
+    expect(pathScanIsStale(
+      ['/a', '/gone'],
+      m([['/a', 1], ['/gone', UNREADABLE_MTIME]]),
+      m([['/a', 1], ['/gone', UNREADABLE_MTIME]]),
+    )).toBe(false);
+  });
+
+  it('is stale when an unreadable directory has appeared', () => {
+    expect(pathScanIsStale(
+      ['/a', '/new'],
+      m([['/a', 1], ['/new', UNREADABLE_MTIME]]),
+      m([['/a', 1], ['/new', 7]]),
+    )).toBe(true);
   });
 });

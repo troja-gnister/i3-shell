@@ -4,7 +4,7 @@ import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
 import {buildCatalogue} from '../launcher/catalogue';
 import type {BinaryDir, LauncherItem, RawApp} from '../launcher/model';
-import {isLaunchableEntry, splitPath} from '../launcher/paths';
+import {isLaunchableEntry, pathScanIsStale, splitPath, UNREADABLE_MTIME} from '../launcher/paths';
 import {log} from './log';
 
 /**
@@ -82,26 +82,20 @@ export class AppCatalogue {
 
   private _readBinaries(): BinaryDir[] {
     const dirs = splitPath(GLib.getenv('PATH'));
-    if (this._binaries && !this._stale(dirs)) return this._binaries;
+    // One entry per directory, unreadable ones included, so the cache can tell
+    // "still missing" from "appeared since last time".
+    const current = new Map(dirs.map(path => [path, this._mtime(path)]));
+    if (this._binaries && !pathScanIsStale(dirs, this._mtimes, current)) return this._binaries;
 
     const scanned: BinaryDir[] = [];
-    this._mtimes.clear();
+    this._mtimes = current;
     for (const path of dirs) {
       const names = this._scan(path);
       if (names === null) continue;
-      this._mtimes.set(path, this._mtime(path));
       scanned.push({path, names});
     }
     this._binaries = scanned;
     return scanned;
-  }
-
-  /** A handful of stats. On an image-based OS /usr/bin changes only on rebase. */
-  private _stale(dirs: readonly string[]): boolean {
-    if (dirs.length !== this._mtimes.size) return true;
-    for (const path of dirs)
-      if (this._mtimes.get(path) !== this._mtime(path)) return true;
-    return false;
   }
 
   private _mtime(path: string): number {
@@ -110,7 +104,7 @@ export class AppCatalogue {
         .query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
       return info.get_attribute_uint64('time::modified');
     } catch {
-      return -1;
+      return UNREADABLE_MTIME;
     }
   }
 
