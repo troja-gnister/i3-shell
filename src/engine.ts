@@ -616,6 +616,13 @@ export class Engine {
       const {commands, diagnostics} = parseCommands(rule.command);
       for (const problem of diagnostics)
         this._ports.log.warn(`for_window line ${rule.line}: ${problem}`);
+      // ONE map for the whole rule, exactly as run() does for a comma-separated
+      // command line. _floatingFrame() reads it to see a rect a prior command
+      // has queued but Mutter has not yet confirmed, so a fresh map per command
+      // would make `move position center` centre on the pre-resize size -- and,
+      // worse, re-apply it, reverting the resize. Silent: nothing fails, the
+      // wrong rect is just computed and applied successfully.
+      const commandFrames = new Map<WindowId, Rect>();
       for (const command of commands) {
         // A command the parser could not understand is already covered,
         // 1:1, by the diagnostics loop above (parseCommands() pushes both
@@ -623,7 +630,7 @@ export class Engine {
         // only repeat the same rejection through _runOne's own unprefixed
         // "unknown command: ..." warning.
         if (command.type === 'unknown') continue;
-        this._runOne(command, timestamp, new Map());
+        this._runOne(command, timestamp, commandFrames);
       }
     });
   }
