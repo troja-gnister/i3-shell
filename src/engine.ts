@@ -5,6 +5,7 @@ import {RectReconciler} from './runtime/reconcile';
 import {serializeTree, type TreeSnapshot, type WindowSnapshot} from './runtime/snapshot';
 import {decorationPlan, type DecorationPlan} from './runtime/decoration';
 import type {WindowsPort, GeometryPort, DeferredPort, PillState, Topology, WindowInfo, WindowEvent} from './runtime/model';
+import {displayWorkspaceName} from './config/workspaceNames';
 import {excludedFromTree} from './runtime/classify';
 import {parseCommands} from './commands/parse';
 import type {Command, WorkspaceTarget} from './commands/model';
@@ -441,7 +442,10 @@ export class Engine {
     }
     if (this._disposed) return;
     this._pills = Array.from({length: this._workspaceCount}, (_, index) => ({
-      name: this._config.workspaceNames.get(index + 1) ?? String(index + 1),
+      name: displayWorkspaceName(
+        this._config.workspaceNames.get(index + 1) ?? String(index + 1),
+        this._config.stripWorkspaceNumbers,
+      ),
       active: index === this._ports.workspaces.activeIndex,
       occupied: [...this._windows.values()].some(w => w.workspace === index),
     }));

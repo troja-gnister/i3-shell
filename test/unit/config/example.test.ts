@@ -25,4 +25,9 @@ describe('examples/i3-shell.config', () => {
     expect(result.config!.workspaceCount).toBe(4);
     expect(result.config!.workspaceNames.get(1)).toBe('1:I');
   });
+
+  it('demonstrates strip_workspace_numbers without changing the stored name', () => {
+    expect(result.config!.stripWorkspaceNumbers).toBe(true);
+    expect(result.config!.workspaceNames.get(1)).toBe('1:I');
+  });
 });

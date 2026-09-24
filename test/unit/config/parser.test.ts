@@ -95,3 +95,64 @@ describe('parse directives', () => {
     expect(P('bar {\n  colors {\n  }').diagnostics).toEqual([{line: 3, severity: 'error', message: 'bar: missing closing }'}]);
   });
 });
+
+describe('bar block', () => {
+  it('reads strip_workspace_numbers and still ignores the rest of the block', () => {
+    const r = P([
+      'bar {',
+      '  status_command i3status',
+      '  strip_workspace_numbers yes',
+      '  colors {',
+      '    background #000000',
+      '  }',
+      '}',
+    ].join('\n'));
+    expect(r.diagnostics).toEqual([]);
+    expect(r.directives).toEqual([
+      {kind: 'ignored', line: 1, name: 'bar'},
+      {kind: 'strip_workspace_numbers', line: 3, value: 'yes'},
+    ]);
+  });
+
+  it('reads an explicit no', () => {
+    const r = P(['bar {', '  strip_workspace_numbers no', '}'].join('\n'));
+    expect(r.diagnostics).toEqual([]);
+    expect(r.directives).toEqual([
+      {kind: 'ignored', line: 1, name: 'bar'},
+      {kind: 'strip_workspace_numbers', line: 2, value: 'no'},
+    ]);
+  });
+
+  it('emits no directive when the block does not mention it', () => {
+    const r = P(['bar {', '  status_command i3status', '}'].join('\n'));
+    expect(r.diagnostics).toEqual([]);
+    expect(r.directives).toEqual([{kind: 'ignored', line: 1, name: 'bar'}]);
+  });
+
+  it('rejects a value that is not yes or no', () => {
+    const r = P(['bar {', '  strip_workspace_numbers maybe', '}'].join('\n'));
+    expect(r.diagnostics).toEqual([
+      {line: 2, severity: 'error', message: 'strip_workspace_numbers: expected yes|no'},
+    ]);
+  });
+
+  it('ignores the key inside a nested block, where it is not a bar option', () => {
+    const r = P([
+      'bar {',
+      '  colors {',
+      '    strip_workspace_numbers yes',
+      '  }',
+      '}',
+    ].join('\n'));
+    expect(r.diagnostics).toEqual([]);
+    expect(r.directives).toEqual([{kind: 'ignored', line: 1, name: 'bar'}]);
+  });
+
+  it('ignores the key outside a bar block, where i3 does not define it', () => {
+    const r = P('strip_workspace_numbers yes');
+    expect(r.directives).toEqual([]);
+    expect(r.diagnostics).toEqual([
+      {line: 1, severity: 'error', message: 'unknown directive strip_workspace_numbers'},
+    ]);
+  });
+});
