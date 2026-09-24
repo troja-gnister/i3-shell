@@ -592,6 +592,17 @@ export class Engine {
    * Commands go through run() unchanged. commit() queues rather than rejecting
    * a nested call and the drain is synchronous, so the extra layout passes are
    * never painted -- see the plan's mechanism note.
+   *
+   * Warnings come only from parseCommands()'s diagnostics -- a parse failure
+   * is synchronous and truthful. The command's own run() *result* is not
+   * sniffed for a rejection: several of _runOne's cases set their result flag
+   * inside a commit() closure, and commit() queues rather than running that
+   * closure when a drain is already in progress -- which it always is here,
+   * since rules apply from inside the 'added'/'title' commit. Reading the
+   * result would therefore read it before the closure runs, which is false
+   * for a command that is about to succeed. A warning that fires on success
+   * is worse than none: it teaches the reader to ignore the only channel
+   * that would ever tell them a rule genuinely failed.
    */
   private _applyRules(id: WindowId, timestamp: number): void {
     const info = this._ports.windows.get(id);
@@ -606,9 +617,13 @@ export class Engine {
       for (const problem of diagnostics)
         this._ports.log.warn(`for_window line ${rule.line}: ${problem}`);
       for (const command of commands) {
-        const message = this._runOne(command, timestamp, new Map());
-        if (message.includes(':'))
-          this._ports.log.warn(`for_window line ${rule.line}: ${message}`);
+        // A command the parser could not understand is already covered,
+        // 1:1, by the diagnostics loop above (parseCommands() pushes both
+        // together for every unparseable segment) -- running it here would
+        // only repeat the same rejection through _runOne's own unprefixed
+        // "unknown command: ..." warning.
+        if (command.type === 'unknown') continue;
+        this._runOne(command, timestamp, new Map());
       }
     });
   }
@@ -1058,37 +1073,48 @@ export class Engine {
         return changed ? `resize ${command.action} ${command.dimension}` : 'resize: no change';
       }
       case 'resize_set': {
+        // The warn lives inside the closure, not after this.commit() returns:
+        // commit() queues rather than running a nested call synchronously
+        // (see _applyRules), so a warn keyed on `changed` read right after
+        // this.commit() would fire before the closure -- which may yet
+        // succeed -- has even run. Inside the closure it fires only once the
+        // outcome, whichever call site triggered it, is actually known.
         let changed = false;
+        const reject = () => ports.log.warn('resize set applies only to a tracked floating window');
         this.commit(() => {
           const floating = this._floatingFrame(commandFrames);
-          if (!floating) return false;
+          if (!floating) { reject(); return false; }
           changed = this._queueFloatingFrame(floating.id, {
             ...floating.info.rect, width: command.width, height: command.height,
           }, commandFrames);
+          if (!changed) reject();
           return changed;
         });
-        if (!changed) ports.log.warn('resize set applies only to a tracked floating window');
         return changed ? 'resize set' : 'resize set: no floating window';
       }
       case 'move_position': {
+        // See resize_set above: the warn is inside the closure so it reflects
+        // the outcome at the time the closure actually runs, not a read of
+        // `changed` taken before a queued (nested) closure has run.
         let changed = false;
+        const reject = () => ports.log.warn('move position applies only to a tracked floating window');
         this.commit(() => {
           const floating = this._floatingFrame(commandFrames);
-          if (!floating || !this._topology) return false;
+          if (!floating || !this._topology) { reject(); return false; }
           let position: {x: number; y: number};
           if (command.position === 'center') {
             const monitor = floating.info.monitor ?? this._topology.primary;
             const area = this._topology.workAreas.get(floating.info.workspace)?.get(monitor);
-            if (!area) return false;
+            if (!area) { reject(); return false; }
             position = {
               x: area.x + Math.round((area.width - floating.info.rect.width) / 2),
               y: area.y + Math.round((area.height - floating.info.rect.height) / 2),
             };
           } else position = command.position;
           changed = this._queueFloatingFrame(floating.id, {...floating.info.rect, ...position}, commandFrames);
+          if (!changed) reject();
           return changed;
         });
-        if (!changed) ports.log.warn('move position applies only to a tracked floating window');
         return changed ? 'move position' : 'move position: no floating window';
       }
       case 'floating': {

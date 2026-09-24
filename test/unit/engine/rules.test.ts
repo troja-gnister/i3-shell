@@ -94,14 +94,35 @@ describe('for_window rules', () => {
     expect(stateOf(f, 1)).toBe('floating');
   });
 
-  it('warns with the rule line when a command is rejected, and runs the rest', () => {
-    const f = fakeEngine([
-      'for_window [title="^Audio output$"] resize set 0 0, border pixel 2',
-    ].join('\n'));
+  it('warns with the rule line when a command cannot be parsed', () => {
+    const f = fakeEngine('for_window [title="^Audio output$"] floating sideways');
     f.engine.start();
     f.add(1, {title: 'Audio output'});
     f.flush();
     expect(f.calls.some(c => c.startsWith('warn:') && c.includes('line 1'))).toBe(true);
-    expect(f.plan!.borders.find(b => b.window === 1)?.width).toBe(2);
+  });
+
+  /**
+   * The user's real rule, applied correctly, must be silent. A warning that
+   * fires on success trains the reader to ignore the channel -- the only
+   * channel that would ever tell them a rule genuinely failed. This is the
+   * test that would have caught the message-sniffing bug in the original
+   * _applyRules: `floating enable`, `resize set` and `move position` each
+   * set their result flag inside a commit() closure, and commit() queues
+   * rather than running that closure synchronously when a drain is already
+   * in progress -- which it always is here (rules apply from inside the
+   * 'added'/'title' commit). Sniffing their returned status, or their
+   * conditional internal warn read at the same stale moment, logged a
+   * rejection for a command that was seconds from succeeding.
+   */
+  it('warns nothing when every command in the rule succeeds', () => {
+    const f = fakeEngine([
+      'for_window [title="^Audio output$"] floating enable, border pixel 2, resize set 720 420, move position center',
+    ].join('\n'));
+    f.engine.start();
+    f.add(1, {title: 'Audio output'});
+    f.flush();
+    expect(f.calls.filter(c => c.startsWith('warn:'))).toEqual([]);
+    expect(f.engine.windowsSnapshot().find(w => w.id === 1)?.state).toBe('floating');
   });
 });
