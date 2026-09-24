@@ -1102,6 +1102,10 @@ export class Engine {
         this._ports.launcher.close();
         return this._applyLoaded(ports.loadConfig('reload')) ? 'reloaded' : 'reload: config rejected, keeping previous';
       case 'restart':
+        // Same reason as `reload` above: this rebuilds the tree and the
+        // bindings, and a modal grab that outlives that rebuild holds the
+        // keyboard with nothing listening behind it.
+        this._ports.launcher.close();
         if (!this._applyLoaded(ports.loadConfig('reload'))) return 'restart: config rejected, keeping previous';
         this.commit(() => {
           this._tree = null;

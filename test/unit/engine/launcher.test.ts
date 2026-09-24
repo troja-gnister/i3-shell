@@ -66,6 +66,32 @@ describe('engine launcher command', () => {
     expect(f.calls).toContain('launcher.close');
   });
 
+  it('closes the launcher when the config restarts', () => {
+    const f = twoMonitors();
+    f.engine.start();
+    f.add(1);
+    f.engine.run(parseCommands('launcher').commands, 0);
+    f.calls.length = 0;
+    f.engine.run(parseCommands('restart').commands, 0);
+    expect(f.calls).toContain('launcher.close');
+  });
+
+  it('closes the launcher even when a restart rejects the new config', () => {
+    const f = twoMonitors();
+    f.engine.start();
+    f.add(1);
+    f.engine.run(parseCommands('launcher').commands, 0);
+    // The fixture's loadConfig() returns nextLoad verbatim; a config text
+    // that fails to parse is how this fixture makes _applyLoaded() reject
+    // (see the "reload keeps the running config when the new one is
+    // rejected" test in engine.test.ts and the restart-rejection test in
+    // lifecycle.test.ts, both of which use the same f.load('bogus 1') idiom).
+    f.setNextLoad(f.load('bogus 1'));
+    f.calls.length = 0;
+    f.engine.run(parseCommands('restart').commands, 0);
+    expect(f.calls).toContain('launcher.close');
+  });
+
   it('does not change the current mode', () => {
     const f = fakeEngine('bindsym Mod4+d launcher\nmode "resize" {\n  bindsym Escape mode "default"\n}');
     f.engine.start();
