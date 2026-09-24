@@ -161,6 +161,12 @@ export default class I3ShellExtension extends Extension {
       },
       accent,
       decorations,
+      // Task 7 replaces this with the real Launcher adapter. It exists now
+      // only because EnginePorts.launcher is required, and a port that is
+      // declared but unsupplied stops the extension compiling. A no-op is
+      // honest here: the launcher command parses, resolves its monitor, and
+      // reaches a port that does nothing yet.
+      launcher: {open: () => {}, close: () => {}, setColors: () => {}},
       exec: spawnShell,
       notify,
       log,
