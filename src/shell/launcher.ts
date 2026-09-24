@@ -73,10 +73,11 @@ export class Launcher {
   }
 
   open(request: LauncherRequest): void {
-    // Toggle: the binding that opens it closes it. This works only because the
-    // grab below is taken with ActionMode.NORMAL, which is the mode
-    // src/shell/keys.ts grabs its accelerators in -- under ActionMode.NONE the
-    // shell would filter every keybinding out and nothing could reach here.
+    // Toggle: the binding that opens it closes it. The grab below is taken in
+    // POPUP mode, so a second `$mod+d` press never reaches the engine and
+    // never reaches here either -- it arrives as a key event and toAction()
+    // turns it into a dismissal. This branch is what the D-Bus `launcher`
+    // command and a rebind outside i3-shell's own grabs still go through.
     if (this._actor) { this.close(); return; }
 
     this._term = request.term;
@@ -130,7 +131,12 @@ export class Launcher {
     // sets key focus unconditionally -- so a refusal shows up as a grab that
     // is revoked the moment it is taken. The falsy half of the test is kept
     // for the shells that did return null.
-    const grab: Clutter.Grab | null = Main.pushModal(actor, {actionMode: Shell.ActionMode.NORMAL});
+    // POPUP, not NORMAL: src/shell/keys.ts grabs every i3 binding under
+    // NORMAL | OVERVIEW, so NORMAL would leave the whole config live while the
+    // launcher is open -- `$mod+1` would switch workspace mid-search, which
+    // spec 2.4 forbids. Under POPUP the shell filters those bindings out, and
+    // `$mod+d` reaches toAction() instead, which dismisses on it.
+    const grab: Clutter.Grab | null = Main.pushModal(actor, {actionMode: Shell.ActionMode.POPUP});
     if (!grab || grab.is_revoked()) {
       // A refused grab must leave nothing behind: a launcher that is drawn but
       // not listening, or listening but not drawn, is worse than one that
@@ -371,8 +377,9 @@ function launchApp(item: LauncherItem): void {
 
 function toAction(event: Clutter.Event): LauncherAction | null {
   const symbol = event.get_key_symbol();
-  const shift = (event.get_state() & Clutter.ModifierType.SHIFT_MASK) !== 0;
-  const control = (event.get_state() & Clutter.ModifierType.CONTROL_MASK) !== 0;
+  const state = event.get_state();
+  const shift = (state & Clutter.ModifierType.SHIFT_MASK) !== 0;
+  const control = (state & Clutter.ModifierType.CONTROL_MASK) !== 0;
 
   switch (symbol) {
     case Clutter.KEY_Escape: return {kind: 'dismiss'};
@@ -386,7 +393,24 @@ function toAction(event: Clutter.Event): LauncherAction | null {
   }
   if (control && (symbol === Clutter.KEY_n)) return {kind: 'down'};
   if (control && (symbol === Clutter.KEY_p)) return {kind: 'up'};
-  if (control) return null;
+
+  // The grab is held in POPUP mode, so i3-shell's own bindings do not fire
+  // while the launcher is open (spec 2.4) -- which means the second `$mod+d`
+  // press lands here rather than in the engine. Any Super/Alt/Control-modified
+  // key dismisses: that satisfies "$mod+d closes the launcher" without the
+  // launcher having to know which modifier the user configured as $mod, and it
+  // keeps "$mod+1 does not switch workspace" true while also stopping the `1`
+  // from being typed into the query.
+  //
+  // Shift is deliberately not in this set -- Shift+Enter is acceptInTerminal
+  // above, and Shift+letter is ordinary uppercase typing.
+  //
+  // Both Super bits are tested: Mutter reports the Super key on real key
+  // events as MOD4_MASK, while SUPER_MASK is the virtual modifier, and which
+  // one arrives is not worth betting the `$mod+d` close on.
+  const superHeld = (state & (Clutter.ModifierType.MOD4_MASK | Clutter.ModifierType.SUPER_MASK)) !== 0;
+  const altHeld = (state & Clutter.ModifierType.MOD1_MASK) !== 0;
+  if (control || superHeld || altHeld) return {kind: 'dismiss'};
 
   const unicode = event.get_key_unicode();
   return unicode && unicode >= ' ' ? {kind: 'type', char: unicode} : null;
