@@ -54,8 +54,11 @@ describe('rankItems', () => {
   });
 
   it('breaks a tier tie on recency first', () => {
-    const items = [item('Firebird'), item('Firefox')];
-    expect(names(rankItems(items, 'fire', ['Firefox']))).toEqual(['Firefox', 'Firebird']);
+    // Equal-length names whose alphabetical order is the OPPOSITE of the
+    // asserted one, so neither the length rule nor the alphabetical rule can
+    // produce this result. Only recency can.
+    const items = [item('Fireball'), item('Firebird')];
+    expect(names(rankItems(items, 'fire', ['Firebird']))).toEqual(['Firebird', 'Fireball']);
   });
 
   it('breaks a tie on application before binary when recency is silent', () => {
@@ -64,8 +67,11 @@ describe('rankItems', () => {
   });
 
   it('breaks a remaining tie on the shorter name', () => {
-    const items = [item('Firefox Developer Edition'), item('Firefox')];
-    expect(names(rankItems(items, 'firefox', []))).toEqual(['Firefox', 'Firefox Developer Edition']);
+    // An empty query puts both in one tier with no recency and the same
+    // source, so the length rule is the only thing left -- and it points the
+    // opposite way to the alphabetical rule that follows it.
+    const items = [item('Antelope'), item('Zebra')];
+    expect(names(rankItems(items, '', []))).toEqual(['Zebra', 'Antelope']);
   });
 
   it('breaks a final tie alphabetically', () => {
