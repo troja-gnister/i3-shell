@@ -192,6 +192,13 @@ function parseOne(segment: string): Command | string {
       return {type: 'restart'};
     case 'nop':
       return {type: 'nop', text: args.join(' ')};
+    case 'launcher': {
+      if (args.length === 0) return {type: 'launcher', term: null};
+      if (args[0] !== '--term') return `launcher: unknown option '${args[0]}'`;
+      const rest = segment.slice(segment.indexOf('--term') + '--term'.length).trim();
+      if (!rest) return 'launcher: --term needs a command';
+      return {type: 'launcher', term: unquote(rest)};
+    }
     default:
       return `unknown command '${head ?? ''}'`;
   }
