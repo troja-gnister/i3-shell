@@ -369,7 +369,14 @@ describe('MonitorBars', () => {
     const monitorBars = new MonitorBars(() => {});
     monitorBars.setPills(pills);
     contentBoxOf(bars()[0]).preferredHeight = 44;
+    // _resize() asks the inner content box, not the outer chrome actor, for
+    // its preferred height -- real Clutter's get_stage() walks the parent
+    // chain, so a child is never "in the stage" once its parent is not, but
+    // this fake tracks the flag per actor rather than deriving it. Both have
+    // to be set, or this test's `criticals` assertion below could not fail
+    // even with the guard in _resize() deleted.
     bars()[0].inStage = false;
+    contentBoxOf(bars()[0]).inStage = false;
     criticals.length = 0;
 
     monitorBars.setPills([{name: '9', active: true, occupied: true}]);

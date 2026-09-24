@@ -1533,12 +1533,16 @@ def scenario_launcher(primary_id, second_id, primary_area, second_area):
           and box['x'] >= primary_area['x'],
           False)
 
-    # A binding must not fire while the launcher holds the grab.
-    before = call('org.i3shell.Control', 'GetState')[0]
-    press('<Super>1')
-    after = call('org.i3shell.Control', 'GetState')[0]
-    check('LA a workspace binding does not fire while the launcher is open',
-          json.loads(after)['activeWorkspace'], json.loads(before)['activeWorkspace'])
+    # A binding must not fire while the launcher holds the grab. <Super>2
+    # targets workspace index 1, and the session is on index 0 here -- pressing
+    # a binding for the workspace you are already on is a no-op either way and
+    # would pass with the grab leaking. The grab-release proof below presses the
+    # SAME key: it must do nothing now and something once the launcher closes.
+    before = json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace']
+    check('LA the session has not left the boot workspace yet', before, 0)
+    press('<Super>2')
+    after = json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace']
+    check('LA a workspace binding does not fire while the launcher is open', after, before)
 
     press('Escape')
     wait_until(lambda: not launcher_state()['open'], 'LA Escape closes the launcher')
