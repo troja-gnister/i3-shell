@@ -522,8 +522,14 @@ export const fakeMain = {
     if (modal.outcome === 'throw') throw new Error('pushModal: no stage');
     if (modal.outcome === 'null') return null;
     const grab = new FakeGrab(actor);
+    // A revoked grab is still ON the stack. GNOME's pushModal pushes a modal
+    // entry and hands back whatever global.stage.grab() gave it; a revocation
+    // is a property of that grab, not a push that did not happen, and the
+    // caller still owes it a popModal. Modelling it as never pushed made the
+    // release unassertable -- deleting the popModal from the refused-grab
+    // branch changed nothing any test could see.
     if (modal.outcome === 'revoke') grab.revoked = true;
-    else modal.stack.push(grab);
+    modal.stack.push(grab);
     return grab;
   },
   /**

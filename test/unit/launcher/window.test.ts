@@ -125,29 +125,45 @@ describe('launcherWidth', () => {
   });
 });
 
+/**
+ * A measured chrome, as `measureLauncherChrome()` would report it for a 26px
+ * row at Cantarell 11: `.i3-shell-launcher`'s 6px padding and 1px border on
+ * both sides (14), `.i3-shell-launcher-entry`'s 6px bottom margin, and the
+ * entry itself at a 20px line height plus GNOME's own 9px StEntry padding on
+ * both sides (38). Deliberately NOT a multiple of 26 -- the whole point is
+ * that the chrome and the rows are sized by different stylesheet rules.
+ */
+const CHROME = 58;
+
 describe('visibleRowCount', () => {
   it('gives the full ten rows on an ordinary work area', () => {
-    expect(visibleRowCount(1048, 26, 10)).toBe(10);
+    expect(visibleRowCount(1048, 26, 10, CHROME)).toBe(10);
   });
 
   it('never exceeds the rows asked for', () => {
-    expect(visibleRowCount(4000, 26, 10)).toBe(10);
+    expect(visibleRowCount(4000, 26, 10, CHROME)).toBe(10);
   });
 
   it('reduces the rows when the work area cannot hold them', () => {
-    // 300px high, 12% of it above the box, two rows of chrome: four rows fit.
-    expect(visibleRowCount(300, 40, 10)).toBe(4);
+    // 300px high, 12% (36) above the box, 58 of chrome: 206 left, five 40px rows.
+    expect(visibleRowCount(300, 40, 10, CHROME)).toBe(5);
   });
 
   it('is zero when not even the chrome fits', () => {
-    expect(visibleRowCount(60, 40, 10)).toBe(0);
-    expect(visibleRowCount(0, 26, 10)).toBe(0);
+    expect(visibleRowCount(60, 40, 10, CHROME)).toBe(0);
+    expect(visibleRowCount(0, 26, 10, CHROME)).toBe(0);
   });
 
   it('is zero for a degenerate row height or row count', () => {
-    expect(visibleRowCount(1048, 0, 10)).toBe(0);
-    expect(visibleRowCount(1048, -5, 10)).toBe(0);
-    expect(visibleRowCount(1048, 26, 0)).toBe(0);
+    expect(visibleRowCount(1048, 0, 10, CHROME)).toBe(0);
+    expect(visibleRowCount(1048, -5, 10, CHROME)).toBe(0);
+    expect(visibleRowCount(1048, 26, 0, CHROME)).toBe(0);
+  });
+
+  it('reserves the chrome it was given, not a multiple of the row height', () => {
+    // A tall chrome costs rows; a short one buys them. Counting the chrome in
+    // row heights cannot express either.
+    expect(visibleRowCount(400, 26, 10, 20)).toBeGreaterThan(visibleRowCount(400, 26, 10, 200));
   });
 });
 
@@ -155,32 +171,52 @@ describe('launcherBox', () => {
   const AREA = {x: 1728, y: 27, width: 1920, height: 1053};
 
   it('centres the box horizontally in the work area it was given', () => {
-    const box = launcherBox(AREA, 26, 10);
+    const box = launcherBox(AREA, 26, 10, CHROME);
     expect(box.width).toBe(806);
     expect(box.x).toBe(1728 + Math.round((1920 - 806) / 2));
   });
 
   it('places the top edge an eighth of the way down', () => {
-    const box = launcherBox(AREA, 26, 10);
+    const box = launcherBox(AREA, 26, 10, CHROME);
     expect(box.y).toBe(27 + Math.round(1053 * 0.12));
   });
 
   it('is offset by the work area origin, not the screen origin', () => {
     // The whole feature: the box belongs to the monitor holding focus, and a
     // second monitor's work area does not start at 0,0.
-    const primary = launcherBox({x: 0, y: 27, width: 1920, height: 1053}, 26, 10);
-    const second = launcherBox(AREA, 26, 10);
+    const primary = launcherBox({x: 0, y: 27, width: 1920, height: 1053}, 26, 10, CHROME);
+    const second = launcherBox(AREA, 26, 10, CHROME);
     expect(second.x - primary.x).toBe(1728);
     expect(second.y).toBe(primary.y);
   });
 
-  it('reserves the drawn rows plus the chrome', () => {
-    expect(launcherBox(AREA, 26, 10).height).toBe(26 * (10 + CHROME_ROWS));
+  it('is exactly the sum of its parts: the measured chrome plus the drawn rows', () => {
+    // The regression this replaces: the height was `rowHeight * (drawn + 2)`,
+    // which is about eleven pixels SHORT of the contents at Cantarell 11,
+    // because `.i3-shell-launcher-row` has 2px of padding and GNOME's StEntry
+    // has 9px. A box forced shorter than its contents overflows its own plate,
+    // and in the bottom-clamped branch it overflows the work area.
+    expect(launcherBox(AREA, 26, 10, CHROME).height).toBe(CHROME + 26 * 10);
+  });
+
+  it('follows the chrome the theme reported rather than a row multiple', () => {
+    const tall = launcherBox(AREA, 26, 10, 120);
+    const short = launcherBox(AREA, 26, 10, 20);
+    // Both still draw ten rows on an area this size, so the whole difference
+    // is the chrome -- and it is carried through exactly.
+    expect(tall.height - short.height).toBe(100);
+  });
+
+  it('falls back to three row heights, never two, when nothing could be measured', () => {
+    // CHROME_ROWS is only reachable through measureLauncherChrome()'s failure
+    // path; two rows was the value that was short.
+    expect(CHROME_ROWS).toBe(3);
+    expect(launcherBox(AREA, 26, 10, 26 * CHROME_ROWS).height).toBe(26 * (10 + 3));
   });
 
   it('shrinks rather than overflowing a short work area', () => {
-    const box = launcherBox({x: 0, y: 0, width: 1920, height: 300}, 40, 10);
-    expect(box.height).toBe(40 * (4 + CHROME_ROWS));
+    const box = launcherBox({x: 0, y: 0, width: 1920, height: 300}, 40, 10, CHROME);
+    expect(box.height).toBe(CHROME + 40 * 5);
     expect(box.y + box.height).toBeLessThanOrEqual(300);
   });
 
@@ -188,13 +224,13 @@ describe('launcherBox', () => {
     // Nothing clamped the bottom before: a box taller than the space below
     // TOP_FRACTION simply ran off the work area.
     const area = {x: 0, y: 0, width: 1920, height: 200};
-    const box = launcherBox(area, 60, 10);
+    const box = launcherBox(area, 60, 10, CHROME);
     expect(box.y + box.height).toBeLessThanOrEqual(area.height);
   });
 
   it('stays inside a work area narrower than the minimum width', () => {
     const area = {x: 0, y: 0, width: 320, height: 800};
-    const box = launcherBox(area, 26, 10);
+    const box = launcherBox(area, 26, 10, CHROME);
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(320);
   });
@@ -212,7 +248,7 @@ describe('launcherBox', () => {
         for (const height of heights)
           for (const rowHeight of rowHeights) {
             const area = {...origin, width, height};
-            const box = launcherBox(area, rowHeight, 10);
+            const box = launcherBox(area, rowHeight, 10, CHROME);
             expect(box.width).toBeGreaterThanOrEqual(0);
             expect(box.height).toBeGreaterThanOrEqual(0);
             expect(box.x).toBeGreaterThanOrEqual(area.x);
@@ -222,7 +258,7 @@ describe('launcherBox', () => {
           }
   });
 
-  it('holds containment for arbitrary areas and row heights', () => {
+  it('holds containment for arbitrary areas, row heights and chromes', () => {
     fc.assert(fc.property(
       fc.integer({min: -4000, max: 4000}),
       fc.integer({min: -4000, max: 4000}),
@@ -230,9 +266,10 @@ describe('launcherBox', () => {
       fc.integer({min: 0, max: 4000}),
       fc.integer({min: 0, max: 200}),
       fc.integer({min: 0, max: 40}),
-      (x, y, width, height, rowHeight, rows) => {
+      fc.integer({min: 0, max: 400}),
+      (x, y, width, height, rowHeight, rows, chrome) => {
         const area = {x, y, width, height};
-        const box = launcherBox(area, rowHeight, rows);
+        const box = launcherBox(area, rowHeight, rows, chrome);
         return box.x >= area.x
           && box.y >= area.y
           && box.width >= 0
@@ -249,10 +286,11 @@ describe('launcherBox', () => {
       fc.integer({min: 0, max: 4000}),
       fc.integer({min: 1, max: 200}),
       fc.integer({min: 0, max: 40}),
-      (height, rowHeight, rows) => {
+      fc.integer({min: 0, max: 400}),
+      (height, rowHeight, rows, chrome) => {
         const area = {x: 0, y: 0, width: 1920, height};
-        const drawn = visibleRowCount(height, rowHeight, rows);
-        return launcherBox(area, rowHeight, rows).height >= drawn * rowHeight;
+        const drawn = visibleRowCount(height, rowHeight, rows, chrome);
+        return launcherBox(area, rowHeight, rows, chrome).height >= drawn * rowHeight;
       }), {numRuns: 1000});
   });
 });

@@ -3,7 +3,7 @@ import {DEFAULT_COLORS} from '../../../src/config/model';
 import type {Colors} from '../../../src/config/model';
 import type {LauncherItem} from '../../../src/launcher/model';
 import {KEY, MOD} from '../../../src/launcher/keys';
-import {CHROME_ROWS, launcherBox, launcherIconSize} from '../../../src/launcher/window';
+import {launcherBox, launcherIconSize} from '../../../src/launcher/window';
 import type {Rect} from '../../../src/tree/node';
 // Type-only: the classes themselves come in through the dynamic import below, so
 // they resolve through the same mocked module `gi://St` does; this import
@@ -29,8 +29,17 @@ const spawns = vi.hoisted(() => ({
   plain: [] as string[],
 }));
 
-/** What the theme reports for `.i3-shell-launcher-row`. */
-const theme = vi.hoisted(() => ({rowHeight: 26}));
+/**
+ * What the theme reports, per measurement.
+ *
+ * The three are deliberately different numbers. `titleRowHeight` is
+ * `.i3-shell-row`, which the launcher must NOT use -- when both measurements
+ * returned the same value, reverting the adapter to `measureRowHeight()`
+ * changed nothing any test could see, and the test named
+ * "sizes the viewport from the launcher row, not the title row" could not tell
+ * the two apart.
+ */
+const theme = vi.hoisted(() => ({rowHeight: 26, titleRowHeight: 17, chrome: 58}));
 
 /** The desktop entries `GioUnix.DesktopAppInfo.new()` can find. */
 const desktop = vi.hoisted(() => ({
@@ -71,8 +80,9 @@ vi.mock('../../../src/shell/exec', () => ({
 }));
 vi.mock('../../../src/shell/rowHeight', () => ({
   FALLBACK_ROW_HEIGHT: 24,
-  measureRowHeight: () => theme.rowHeight,
+  measureRowHeight: () => theme.titleRowHeight,
   measureLauncherRowHeight: () => theme.rowHeight,
+  measureLauncherChrome: () => theme.chrome,
 }));
 // guard() (src/shell/util/signals.ts) logs through this when a handler throws.
 vi.mock('../../../src/shell/log', () => ({log: {info: vi.fn(), warn: vi.fn(), error: vi.fn()}}));
@@ -226,6 +236,8 @@ beforeEach(() => {
   desktop.lookupThrows = false;
   desktop.launchThrows = false;
   theme.rowHeight = 26;
+  theme.titleRowHeight = 17;
+  theme.chrome = 58;
   vi.mocked(log.warn).mockClear();
   vi.mocked(log.error).mockClear();
 });
@@ -284,6 +296,25 @@ describe('Launcher: the grab and its teardown', () => {
     expect(liveActors()).toEqual([]);
     expect(launcher.debugState().open).toBe(false);
     expect(log.warn).toHaveBeenCalledWith('launcher: the modal grab was refused; not opening');
+  });
+
+  it('RELEASES the revoked grab rather than just dropping the actor', () => {
+    // A revoked grab is still on the modal stack and the caller still owes it
+    // a popModal. Destroying the actor and walking away leaves a modal entry
+    // behind for a launcher that never opened -- the same class of leak as
+    // closing in the wrong order, on the one path where the user has no
+    // launcher on screen to explain it.
+    modal.outcome = 'revoke';
+    const launcher = build();
+    launcher.open({area: AREA, term: 'kitty'});
+
+    expect(modal.popped).toHaveLength(1);
+    expect(modal.stack).toEqual([]);
+    // And in the right order, as close() does it.
+    const order = ops.filter(op =>
+      op === 'pushModal' || op === 'popModal' || op === 'destroy:i3-shell-launcher');
+    expect(order).toEqual(['pushModal', 'popModal', 'destroy:i3-shell-launcher']);
+    expect(disposedAccesses()).toEqual([]);
   });
 
   it('leaves nothing behind when the grab comes back null', () => {
@@ -507,7 +538,7 @@ describe('Launcher: placement', () => {
   it('draws exactly where src/launcher/window.ts says, on the area it was given', () => {
     const launcher = build();
     launcher.open({area: AREA, term: 'kitty'});
-    const expected = launcherBox(AREA, 26, 10);
+    const expected = launcherBox(AREA, 26, 10, theme.chrome);
 
     expect(lastBox().geometry).toEqual(expected);
   });
@@ -538,27 +569,84 @@ describe('Launcher: placement', () => {
   it('sizes the viewport from the launcher row, not the title row', () => {
     // Sizing it from `.i3-shell-row` is what clipped the tenth row when a
     // theme made `.i3-shell-launcher-row` the taller of the two: the highlight
-    // vanished and Enter launched something invisible.
+    // vanished and Enter launched something invisible. The two measurements
+    // report different numbers here precisely so this can tell them apart.
     theme.rowHeight = 40;
+    theme.titleRowHeight = 17;
     const launcher = build();
     launcher.open({area: AREA, term: null});
 
     expect(partOf(lastBox(), 'i3-shell-launcher-scroll').props.height).toBe(40 * 10);
+    expect(partOf(lastBox(), 'i3-shell-launcher-scroll').props.height).not.toBe(17 * 10);
   });
 
-  it('reserves the drawn rows plus the chrome in the box itself', () => {
+  it('sizes the icon from the launcher row rather than the title row', () => {
+    theme.rowHeight = 40;
+    theme.titleRowHeight = 17;
     const launcher = build();
     launcher.open({area: AREA, term: null});
-    expect(lastBox().geometry.height).toBe(26 * (10 + CHROME_ROWS));
+    const icon = descendants(lastBox()).find(actor => actor.kind === 'St.Icon');
+
+    expect(icon?.props.icon_size).toBe(launcherIconSize(40));
+    expect(icon?.props.icon_size).not.toBe(launcherIconSize(17));
   });
 
-  it('draws fewer rows on a work area that cannot hold ten', () => {
+  it('is exactly as tall as the sum of its parts', () => {
+    // The regression this replaces: the box was force-sized to
+    // `rowHeight * (drawn + 2)`, about eleven pixels SHORT of its contents at
+    // Cantarell 11, because `.i3-shell-launcher-row` has 2px of padding and
+    // GNOME's own StEntry has 9px. The box overflowed its own rounded plate,
+    // and in the bottom-clamped branch it overflowed the work area. Asserting
+    // against a row multiple is what let that through; this asserts against
+    // the measured chrome plus the viewport the box actually holds.
+    const launcher = build();
+    launcher.open({area: AREA, term: null});
+    const scroll = partOf(lastBox(), 'i3-shell-launcher-scroll');
+
+    expect(lastBox().geometry.height).toBe(theme.chrome + Number(scroll.props.height));
+    // ...and that is not a row multiple, so a row-multiple regression shows up.
+    expect(lastBox().geometry.height % 26).not.toBe(0);
+  });
+
+  it('carries the measured chrome through rather than a row multiple', () => {
+    const launcher = build();
+    launcher.open({area: AREA, term: null});
+    const short = lastBox().geometry.height;
+    launcher.close();
+    theme.chrome = 158;
+    launcher.open({area: AREA, term: null});
+
+    expect(lastBox().geometry.height - short).toBe(100);
+  });
+
+  it('draws fewer ROWS, not just a shorter viewport, on a work area that cannot hold ten', () => {
+    // The fixture has to be longer than the viewport: with four items in the
+    // catalogue both row counts draw the same four rows, and reverting the
+    // renderer to the unclamped VISIBLE_ROWS changes nothing. That is the M2
+    // clipping defect exactly -- the renderer building its window from one row
+    // count while the viewport is sized for another.
+    items = Array.from({length: 500}, (_, i) => binary(`/usr/bin/b${i}`, `b${String(i).padStart(3, '0')}`));
     theme.rowHeight = 40;
     const launcher = build();
     launcher.open({area: {x: 0, y: 0, width: 1920, height: 300}, term: null});
 
-    expect(partOf(lastBox(), 'i3-shell-launcher-scroll').props.height).toBe(40 * 4);
+    expect(rowsOf(lastBox())).toHaveLength(5);
+    expect(rowsOf(lastBox())).not.toHaveLength(10);
+    expect(partOf(lastBox(), 'i3-shell-launcher-scroll').props.height).toBe(40 * 5);
     expect(lastBox().geometry.y + lastBox().geometry.height).toBeLessThanOrEqual(300);
+  });
+
+  it('never builds more rows than the viewport was sized for', () => {
+    // The renderer and the viewport read the same row count; this is that
+    // agreement, swept across the heights where they could drift apart.
+    items = Array.from({length: 500}, (_, i) => binary(`/usr/bin/b${i}`, `b${String(i).padStart(3, '0')}`));
+    for (const height of [200, 300, 420, 560, 700, 900, 1053]) {
+      const launcher = build();
+      launcher.open({area: {x: 0, y: 0, width: 1920, height}, term: null});
+      const viewport = Number(partOf(lastBox(), 'i3-shell-launcher-scroll').props.height);
+      expect(rowsOf(lastBox())).toHaveLength(viewport / 26);
+      launcher.close();
+    }
   });
 });
 
@@ -915,7 +1003,7 @@ describe('Launcher: debugState', () => {
   it('reports the box geometry while it is open', () => {
     const launcher = build();
     launcher.open({area: AREA, term: null});
-    const expected = launcherBox(AREA, 26, 10);
+    const expected = launcherBox(AREA, 26, 10, theme.chrome);
 
     expect(launcher.debugState()).toMatchObject({
       open: true, x: expected.x, y: expected.y, width: expected.width, height: expected.height,

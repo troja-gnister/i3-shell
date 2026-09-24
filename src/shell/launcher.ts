@@ -13,7 +13,7 @@ import {firstDrawnRow, launcherBox, launcherIconSize, visibleRowCount} from '../
 import type {AppCatalogue} from './appCatalogue';
 import {spawnShellChecked} from './exec';
 import {log} from './log';
-import {measureLauncherRowHeight} from './rowHeight';
+import {measureLauncherChrome, measureLauncherRowHeight} from './rowHeight';
 import {guard} from './util/signals';
 
 /** Where the persistent list of recently launched ids is read and written. */
@@ -92,8 +92,11 @@ export class Launcher {
     this._state = initialState(this._catalogue.items(), this._recency.read());
 
     const rowHeight = measureLauncherRowHeight();
-    const rows = visibleRowCount(request.area.height, rowHeight, VISIBLE_ROWS);
-    const box = launcherBox(request.area, rowHeight, VISIBLE_ROWS);
+    // Both measurements come from the theme, and the box's height is their sum
+    // rather than a multiple of either: see measureLauncherChrome().
+    const chrome = measureLauncherChrome(rowHeight);
+    const rows = visibleRowCount(request.area.height, rowHeight, VISIBLE_ROWS, chrome);
+    const box = launcherBox(request.area, rowHeight, VISIBLE_ROWS, chrome);
     this._rowHeight = rowHeight;
     this._rows = rows;
 

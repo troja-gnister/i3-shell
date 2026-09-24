@@ -63,14 +63,27 @@ const MAX_WIDTH = 900;
 /** How far down the work area the box's top edge sits, before the bottom clamp. */
 const TOP_FRACTION = 0.12;
 /**
- * The part of the box that is not list rows -- the search entry, the entry's
- * bottom margin, and the box's own padding and border -- counted in row
- * heights rather than pixels so it follows the font and the scale factor
- * exactly as the rows do. Two rows covers `.i3-shell-launcher`'s 6px padding
- * plus 1px border, `.i3-shell-launcher-entry`'s 6px margin, and the entry
- * itself, at every row height a theme realistically produces.
+ * The fallback for `chrome` below, in row heights, for when the theme cannot be
+ * asked at all.
+ *
+ * It is a fallback and nothing else. An earlier revision used it as the actual
+ * value and got the box's height wrong: the chrome is
+ * `.i3-shell-launcher`'s 6px padding and 1px border on both sides (14), plus
+ * `.i3-shell-launcher-entry`'s 6px bottom margin, plus the entry itself, which
+ * GNOME's own `StEntry { padding: 9px }` makes `L + 18` for a theme line height
+ * of `L` -- so `L + 38` in total, against a budget of `2 x rowHeight`, and
+ * rowHeight is only `L + 4` because `.i3-shell-launcher-row`'s padding is 2px.
+ * The surplus was `L - 30`: about eleven pixels SHORT at Cantarell 11, and
+ * correct only above roughly a 22pt UI font. Scaling does not rescue it,
+ * because every term scales together. A box forced shorter than its contents
+ * overflows its own rounded plate, and in the bottom-clamped branch it
+ * overflows the work area this module's property test exists to guarantee.
+ *
+ * So the real value is measured (`measureLauncherChrome()` in
+ * src/shell/rowHeight.ts) and passed in. Three rows rather than two only makes
+ * the fallback wrong in the safe direction.
  */
-export const CHROME_ROWS = 2;
+export const CHROME_ROWS = 3;
 
 /** `value`, clamped into [`low`, `high`]; `low` wins if the range is inverted. */
 function clamp(value: number, low: number, high: number): number {
@@ -97,10 +110,16 @@ export function launcherWidth(areaWidth: number): number {
  * the height reserved for them cannot disagree -- which is what would clip the
  * last row and hide the selection on it.
  */
-export function visibleRowCount(areaHeight: number, rowHeight: number, rows: number): number {
+export function visibleRowCount(
+  areaHeight: number,
+  rowHeight: number,
+  rows: number,
+  /** The measured height of everything in the box that is not a list row. */
+  chrome: number,
+): number {
   if (rowHeight <= 0 || rows <= 0) return 0;
   const height = Math.max(0, areaHeight);
-  const forRows = height - Math.round(height * TOP_FRACTION) - rowHeight * CHROME_ROWS;
+  const forRows = height - Math.round(height * TOP_FRACTION) - Math.max(0, chrome);
   if (forRows <= 0) return 0;
   return Math.min(rows, Math.floor(forRows / rowHeight));
 }
@@ -109,12 +128,17 @@ export function launcherBox(
   area: {x: number; y: number; width: number; height: number},
   rowHeight: number,
   rows: number,
+  /** The measured height of everything in the box that is not a list row. */
+  chrome: number,
 ): {x: number; y: number; width: number; height: number} {
   const areaWidth = Math.max(0, area.width);
   const areaHeight = Math.max(0, area.height);
   const width = launcherWidth(areaWidth);
-  const drawn = visibleRowCount(areaHeight, rowHeight, rows);
-  const height = Math.min(areaHeight, Math.max(0, rowHeight) * (drawn + CHROME_ROWS));
+  const drawn = visibleRowCount(areaHeight, rowHeight, rows, chrome);
+  // The sum of the box's parts, and nothing else: the chrome the theme
+  // reported, plus one row height for every row the viewport is sized to show.
+  // Any other number is a box that does not match its own contents.
+  const height = Math.min(areaHeight, Math.max(0, chrome) + Math.max(0, rowHeight) * drawn);
   return {
     x: area.x + Math.max(0, Math.round((areaWidth - width) / 2)),
     // The bottom clamp: a box taller than the space below TOP_FRACTION is

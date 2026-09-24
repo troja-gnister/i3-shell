@@ -1,5 +1,6 @@
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import {CHROME_ROWS} from '../launcher/window';
 import {log} from './log';
 
 /**
@@ -93,5 +94,47 @@ export function measureLauncherRowHeight(): number {
     return FALLBACK_ROW_HEIGHT;
   } finally {
     row?.destroy();
+  }
+}
+
+/**
+ * How tall everything in the launcher box that is NOT a list row comes out:
+ * the box's own padding and border, the search entry, and the entry's bottom
+ * margin.
+ *
+ * Measured rather than estimated, because estimating it got the box's height
+ * wrong. `src/shell/launcher.ts` gives the box an explicit `set_size()` -- it
+ * has to, since nothing otherwise clamps its bottom edge against the work
+ * area -- and a forced height shorter than the contents makes them overflow
+ * the rounded plate instead of the box growing to fit. The arithmetic is in
+ * `CHROME_ROWS`'s comment in src/launcher/window.ts; the short version is that
+ * `.i3-shell-launcher-row`'s padding is 2px while GNOME's own `StEntry` has
+ * 9px, so a chrome budget counted in row heights is short at every ordinary
+ * font size.
+ *
+ * What is measured is a `.i3-shell-launcher` box holding a
+ * `.i3-shell-launcher-entry`, which is the real box minus its scroll view.
+ * `.i3-shell-launcher` sets no `spacing`, so adding the scroll view back would
+ * add exactly its height -- which makes `chrome + rows * rowHeight` the box's
+ * natural height rather than an approximation of it.
+ *
+ * @param rowHeight the measured launcher row height, used only for the fallback
+ */
+export function measureLauncherChrome(rowHeight: number): number {
+  const fallback = Math.max(1, Math.round(rowHeight)) * CHROME_ROWS;
+  let box: St.BoxLayout | null = null;
+  try {
+    box = new St.BoxLayout({style_class: 'i3-shell-launcher', vertical: true});
+    box.hide();
+    box.add_child(new St.Entry({style_class: 'i3-shell-launcher-entry'}));
+    Main.uiGroup.add_child(box);
+    const [, natural] = box.get_preferred_height(-1);
+    if (!Number.isFinite(natural) || natural <= 0) return fallback;
+    return Math.ceil(natural);
+  } catch (e) {
+    log.error('could not measure the launcher chrome; using the fallback', e);
+    return fallback;
+  } finally {
+    box?.destroy();
   }
 }
