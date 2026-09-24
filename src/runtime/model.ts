@@ -34,7 +34,7 @@ export type WindowEvent =
   | {type: 'added'; id: WindowId}
   | {type: 'removed'; id: WindowId}
   | {type: 'focused'; id: WindowId | null}
-  | {type: 'frame' | 'workspace' | 'minimized' | 'fullscreen' | 'maximized' | 'membership'; id: WindowId};
+  | {type: 'frame' | 'workspace' | 'minimized' | 'fullscreen' | 'maximized' | 'membership' | 'title' | 'urgent'; id: WindowId};
 
 export interface WindowsPort {
   list(): readonly WindowInfo[];
