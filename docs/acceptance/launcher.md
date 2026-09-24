@@ -1,7 +1,7 @@
 # Launcher acceptance — live session
 
-**Product revision:** branch `launcher`, ten tasks, base `0bbce0d` (`git rev-parse --short HEAD` to
-confirm). Adds a dmenu-style launcher drawn in-process: `src/launcher/**` (Layer 0 — model,
+**Product revision:** branch `launcher`, ten tasks plus a whole-branch fix wave, base `0bbce0d`
+(`git rev-parse --short HEAD` to confirm). Adds a dmenu-style launcher drawn in-process: `src/launcher/**` (Layer 0 — model,
 catalogue, matching, key map, the row window, recency), `src/shell/launcher.ts` (the actor, the
 modal grab and spawning) and `src/shell/appCatalogue.ts` (`Shell.AppSystem` plus a `$PATH` scan).
 **Build under test:** release `make install` (no `org.i3shell.Debug` interface or methods).
@@ -41,8 +41,9 @@ bindsym $mod+d launcher --term $term
 ```
 
 `$mod` is `Super`. If `$term` is not already `set` in your config, either set it (e.g.
-`set $term kitty`) or bind without `--term` and skip the `Shift+Enter` boxes (A33, hand-check 12)
-— without `--term`, that action is deliberately a no-op plus one log line, not a missing feature.
+`set $term kitty`) or bind without `--term` and skip the `Shift+Enter` boxes (A33, A33b,
+hand-check 12) — without `--term`, that action is deliberately a refusal with a notification, not a
+missing feature. There is a box under "Feedback when a launch fails" that walks the refusal itself.
 
 **What the native suite already proves — do not re-derive it, just watch for it.** Confirmed
 against a real compositor, with the pointer never moved:
@@ -95,6 +96,16 @@ except the single binding-suppression case above.
 - [ ] Type `htop` and press `Shift+Enter`: a terminal window opens with `htop` running inside it
       (`<term> -e htop`).
 
+## A33b — Shift+Enter on an APPLICATION row
+- [ ] Type enough to select an **application** (an icon, no path beside the name — `firefox`, say)
+      and press `Shift+Enter`: a terminal opens and the application runs **inside it**. A33 above
+      only walks a `$PATH` binary, and the application row is where this used to break: the row's
+      command is its `.desktop` id, so it ran `<term> -e firefox.desktop` and the terminal died on
+      "command not found" — while the item was promoted in the recency list as though it had
+      launched. Check the list order afterwards too.
+- [ ] Repeat on a **Flatpak** row (Steam, say): it runs in the terminal rather than failing on the
+      file-forwarding markers in its `Exec=` line.
+
 ## A34 — no match falls through to a shell command
 - [ ] Type a command that matches nothing in the list (e.g. a shell one-liner or a binary name you
       know is not installed) and press `Enter`: it runs verbatim, the way `dmenu_run` would.
@@ -108,6 +119,23 @@ except the single binding-suppression case above.
 - [ ] With something typed and a row selected, press `Escape`: the launcher closes, nothing
       launches, and the window that had focus before you opened the launcher has it again.
 - [ ] The tiling is unchanged — no window moved, resized, or changed stacking order.
+
+## A36b — $mod+d on a workspace with NO windows at all
+- [ ] Move to an empty workspace on the **external** display — nothing open on it anywhere — and
+      press `$mod+d`. The launcher must appear on **that** display. A29/A30 both presuppose a
+      focused window, and this is the path where the engine has no window to read a monitor off,
+      so it is the likeliest real-world reversion to "it opened on the laptop again".
+- [ ] Check the journal while you do it: a line containing `opening on the primary output` means
+      the fallback fired and the placement you are looking at is not the one the feature promises.
+      No such line is the pass.
+
+## A36c — a display change while the launcher is OPEN
+- [ ] Open the launcher on the external display and, with it still open, pull the cable (or close
+      the lid, for a laptop panel). **Does the keyboard come back?** Type into a terminal
+      afterwards and press a couple of i3-shell bindings. The failure this checks for is a modal
+      grab still held against an actor positioned on a monitor that no longer exists: every
+      binding dead, nothing on screen to explain it, recoverable only by killing the shell.
+- [ ] Plug it back in and open the launcher again: it opens normally.
 
 ## A37 — opening the launcher does not disturb the tiling
 - [ ] With two or more tiled windows visible, open the launcher: no tile resizes, reflows, or
@@ -138,6 +166,10 @@ except the single binding-suppression case above.
         bind): the launcher is gone on unlock, and the keyboard works on the lock screen itself.
 3. - [ ] Open the launcher, then reload the i3 config (however your config reload is bound): the
         launcher closes.
+   - [ ] Open it again and run **`restart`** rather than `reload` (bind it, or use the D-Bus
+        control on a test build): the launcher closes there too. `restart` rebuilds the tree as
+        well as the bindings, so a grab that outlived it would hold the keyboard against an actor
+        nothing owns any more.
 4. - [ ] Hold `$mod+d` down past the keyboard repeat delay (about half a second) instead of
         tapping it: the launcher appears and **stays** open — it must not flicker open and
         immediately close from the held key's auto-repeat.
@@ -183,11 +215,41 @@ except the single binding-suppression case above.
 - [ ] On a HiDPI or fractional-scale display, the box is centred horizontally and sits roughly an
       eighth of the way down the work area, and no row's text clips.
 
+## Feedback when a launch fails
+- [ ] Type a command that does not exist (`frefox`, say — make sure it matches nothing in the list
+      so it takes the dmenu fallthrough) and press `Enter`. A notification says the launch failed
+      and names the command. Before this wave, `/bin/sh` spawned successfully and exited 127, and
+      nothing anywhere said a word.
+- [ ] If you have a terminal that does **not** accept `-e`, bind `launcher --term <that terminal>`
+      and press `Shift+Enter` on anything: a notification appears (spec §4.3 promises one here).
+      Note the wording — it carries whatever exit status the terminal chose, which may not read
+      clearly. If you have no such terminal, say so and skip.
+- [ ] Bind `launcher` with **no** `--term` and press `Shift+Enter`: a notification says to bind
+      `launcher --term $term`, and it appears **every** time you press it, not only the first.
+      Confirm that reads as helpful rather than nagging; if it nags, say so.
+- [ ] Launch something long-running from the launcher (a `$PATH` binary, not an application), use
+      it, then quit it in a way that exits non-zero. A "launch failed" notification arrives *then*,
+      minutes later. This is a known consequence of reporting exit status at all — note whether it
+      is confusing enough to be worth trading back for silence on typos.
+
+## Perceived latency
+- [ ] With the full catalogue (every installed application plus every `$PATH` binary — thousands of
+      entries), press `$mod+d`: does the box appear **instantly**, or is there a visible pause
+      between the keystroke and the box? Time it roughly if it is not instant.
+- [ ] Type a long query quickly, then backspace it all: does the list keep up with the keys, or
+      does it lag behind what you typed? Every keystroke re-ranks the whole catalogue and rebuilds
+      the drawn rows, under a modal grab — if this drags, it drags with the keyboard captured.
+- [ ] Hold a letter key down past the repeat delay: the list must keep redrawing rather than
+      freezing.
+
 ## Recency across a logout
 - [ ] Launch something distinctive (e.g. an app you rarely use), then log out and back in. Open the
       launcher with an empty query: that item is still ranked ahead of items you have not launched,
       confirming recency survived the restart (it is persisted in a GSettings key, not held only in
       memory).
+- [ ] Do the same with a **`$PATH` binary** rather than an application (`htop`, say): it too is
+      ranked first on the next open. Recency keys on the item's id, which is a `.desktop` id for one
+      and an absolute path for the other, so the two are not the same code path end to end.
 
 ---
 
@@ -196,8 +258,15 @@ except the single binding-suppression case above.
 - **No fuzzy subsequence matching.** Prefix and substring matching only, by design (spec §4.1) — a
   poor fuzzy scorer ranks worse than none, and this can be added later without disturbing the tiers
   above.
-- **Without `--term` configured, `Shift+Enter` is a no-op** plus one log line
-  (`launcher: Shift+Enter needs a terminal`), logged once per session, not on every press.
+- **Without `--term` configured, `Shift+Enter` is refused**: a notification every time you press it,
+  plus one log line (`launcher: Shift+Enter needs a terminal`) logged once per session rather than
+  on every press.
+- **A launch failure is reported when the process ends**, which for a long-running program means
+  the notification arrives whenever you quit it, not when you started it. That is the cost of
+  reporting exit status at all; the alternative is silence on a typo.
+- **`Shift+Enter` on an application runs its `Exec=` line**, with the desktop-entry field codes
+  stripped. An entry whose `Exec=` is unusual may reach the terminal in a form its author did not
+  intend; a plain `Enter` is unaffected, since that goes through `Gio.AppInfo.launch()`.
 - **Clicking outside the launcher does not dismiss it.** Under the stage grab this is a deliberate
   choice, not an oversight; it is one of the boxes above precisely because it may not match dmenu
   habits.
@@ -220,13 +289,32 @@ does not fire while it is open (confirmed non-vacuous — reverting the grab's a
 that had it on `Escape`, and the grab is released so bindings work again afterward. It ticks nothing
 above.
 
-Unit suite alongside it: **726 tests in 58 files**, both TypeScript programs clean, Layer 0 import
+Unit suite alongside it: **893 tests in 63 files**, both TypeScript programs clean, Layer 0 import
 gate. This is where the reducer, the key map, the catalogue merge/dedup, every ranking tier and
-tie-break, and `launcher --term` parsing are pinned — everything in `src/launcher/**`, which is pure
-and excluded from no test file. `src/shell/launcher.ts` (the actor, the grab, spawning) is Layer 1
-and is outside `tsconfig.test.json`'s reach entirely; nothing there is proven by any automated
-suite except the seven native `LA` assertions above. That is the entire reason this document's
-"Grab and dismissal" and "Mouse and focus edge cases" sections exist.
+tie-break, `launcher --term` parsing, the box's placement arithmetic and the launch decision are
+pinned — everything in `src/launcher/**`, which is pure and excluded from no test file.
+
+**Correction to earlier revisions of this document.** They said `src/shell/launcher.ts` was
+"outside `tsconfig.test.json`'s reach entirely" and that nothing in it was proven by any automated
+suite. That was wrong. The exclusion in `tsconfig.test.json` is a *typecheck* boundary, not a test
+boundary: the suite reaches an adapter by mocking `gi://…` and `resource:///…` and loading it with
+`vi.importActual`, which eleven suites under `test/unit/shell/` now do. `src/shell/launcher.ts`,
+`src/shell/appCatalogue.ts`, `src/shell/exec.ts` and `src/shell/recency.ts` all have unit suites,
+and the following are now pinned by them rather than by this walk alone:
+
+- the grab is released **before** the actor it was taken on is destroyed, on every path out
+  (mutation-checked: swapping the two fails five assertions);
+- a refused, revoked, null or *throwing* `pushModal` leaves no actor in `uiGroup` and no state;
+- ten open/close cycles leave nothing behind and touch no disposed object;
+- a stale deferred close cannot close a launcher that was reopened, and a stale row click cannot
+  launch the wrong item;
+- what an accepted row actually launches, including `Shift+Enter` on an application;
+- the box's position and size, against the work area it was handed.
+
+What remains this walk's alone is everything the doubles do not model: real pixels, real colours,
+real theme metrics, a real modal stack, real processes, and how any of it feels. The "Grab and
+dismissal" and "Mouse and focus edge cases" sections below are still worth walking — a double
+agreeing with itself is not a compositor — but they are no longer the *only* evidence.
 
 **What the automation deliberately does not cover**, beyond what is stated inline above:
 
