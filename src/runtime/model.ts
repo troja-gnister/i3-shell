@@ -69,4 +69,11 @@ export interface PillState {
   name: string;
   active: boolean;
   occupied: boolean;
+  /**
+   * Any window on this workspace is urgent and this workspace is not active.
+   * Styled from client.urgent: i3 takes bar colours from `bar { colors { … } }`
+   * and this project ignores the bar block, so client.urgent is the only
+   * urgent colour the config supplies. A deliberate divergence; see the spec.
+   */
+  urgent: boolean;
 }

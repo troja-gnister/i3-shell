@@ -38,7 +38,7 @@ const {Indicator} = await vi.importActual<{
 
 const pills = (count: number, active = 0): PillState[] =>
   Array.from({length: count}, (_, index) => ({
-    name: String(index + 1), active: index === active, occupied: index === 0,
+    name: String(index + 1), active: index === active, occupied: index === 0, urgent: false,
   }));
 
 function indicator(): IndicatorLike {

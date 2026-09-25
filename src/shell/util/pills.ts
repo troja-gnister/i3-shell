@@ -24,7 +24,7 @@ import {guard} from './signals';
 export function samePills(current: readonly PillState[], next: readonly PillState[]): boolean {
   return current.length === next.length && current.every((pill, index) =>
     pill.name === next[index].name && pill.active === next[index].active &&
-    pill.occupied === next[index].occupied);
+    pill.occupied === next[index].occupied && pill.urgent === next[index].urgent);
 }
 
 /**
@@ -50,8 +50,15 @@ export function createModeLabel(): St.Label {
 export function stylePill(pill: St.Button, state: PillState, colors: Colors): void {
   // Plain text: a workspace name comes from the user's config, never markup.
   pill.label = state.name;
+  // `.i3-shell-ws-urgent` supplies only the border's width and style (the
+  // geometry half); its colour is `currentColor`, i.e. whatever `color:` is
+  // set to below -- so the ring never needs a colour of its own to track.
+  pill.style_class = state.urgent && !state.active ? 'i3-shell-ws i3-shell-ws-urgent' : 'i3-shell-ws';
   if (state.active) {
     pill.set_style(`background-color: ${colors.focused.background}; color: ${colors.focused.text};`);
+    pill.opacity = 255;
+  } else if (state.urgent) {
+    pill.set_style(`background-color: ${colors.urgent.background}; color: ${colors.urgent.text};`);
     pill.opacity = 255;
   } else {
     // Every inactive pill is transparent, which is also how a test tells the

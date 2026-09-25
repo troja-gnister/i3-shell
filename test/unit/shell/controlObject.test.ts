@@ -47,7 +47,7 @@ describe('ControlObject', () => {
 
     const unavailable = JSON.parse(control.GetState());
     expect(unavailable).toMatchObject({actionMode: 2, ready: false});
-    expect(unavailable.pills[0]).toEqual({name: '1', active: true, occupied: false});
+    expect(unavailable.pills[0]).toEqual({name: '1', active: true, occupied: false, urgent: false});
 
     f.setTopology({
       primary: 10,
@@ -71,7 +71,7 @@ describe('ControlObject', () => {
 
     const state = JSON.parse(control.GetState());
     state.pills[0].name = 'changed by caller';
-    expect(JSON.parse(control.GetState()).pills[0]).toEqual({name: '1', active: true, occupied: true});
+    expect(JSON.parse(control.GetState()).pills[0]).toEqual({name: '1', active: true, occupied: true, urgent: false});
     expect(JSON.parse(control.GetConfigStatus())).toMatchObject({
       path: '/fake/config', source: 'file', loadTime: 123456789, errors: 0, warnings: 0, diagnostics: [],
     });

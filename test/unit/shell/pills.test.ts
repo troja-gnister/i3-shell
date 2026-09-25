@@ -44,9 +44,15 @@ const COLORS: Colors = {
 };
 
 const pills: PillState[] = [
-  {name: '1:I', active: false, occupied: true},
-  {name: '2:II', active: true, occupied: true},
-  {name: '3:III', active: false, occupied: false},   // empty: the dimmed case
+  {name: '1:I', active: false, occupied: true, urgent: false},
+  {name: '2:II', active: true, occupied: true, urgent: false},
+  {name: '3:III', active: false, occupied: false, urgent: false},   // empty: the dimmed case
+];
+
+const urgentPills: PillState[] = [
+  {name: '1:I', active: false, occupied: true, urgent: false},
+  {name: '2:II', active: true, occupied: true, urgent: false},
+  {name: '3:III', active: false, occupied: true, urgent: true},   // urgent: the case under test
 ];
 
 const styles = (root: FakeActor): unknown[] => pillsOf(root).map(pill => pill.props.style);
@@ -90,6 +96,17 @@ describe('the panel and a monitor bar render the same pills', () => {
 
     expect(kinds(bar)).toEqual(kinds(button));
     expect(props(bar)).toEqual(props(button));
+  });
+
+  it('gives an urgent, inactive pill the client.urgent background on both renderings', () => {
+    const [button, bar] = bothWith(urgentPills);
+
+    expect(styles(bar)).toEqual(styles(button));
+    expect(String(styles(bar)[2])).toContain(COLORS.urgent.background);
+    expect(String(styles(bar)[2])).toContain(COLORS.urgent.text);
+    // The non-urgent pills are unaffected.
+    expect(String(styles(bar)[0])).not.toContain(COLORS.urgent.background);
+    expect(String(styles(bar)[1])).toContain(COLORS.focused.background);
   });
 
   it('gives every pill the same label, style and opacity', () => {

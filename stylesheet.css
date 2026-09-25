@@ -13,6 +13,14 @@
   border-radius: 4px;
   font-weight: bold;
 }
+/*
+ * The urgent border: geometry only. src/shell/util/pills.ts's stylePill()
+ * sets the pill's `color` inline from client.urgent, and never sets a colour
+ * here, so the border paints in that same colour (`currentColor`) for free.
+ */
+.i3-shell-ws-urgent {
+  border: 2px solid;
+}
 
 /*
  * Phase 3A chrome. src/shell/decorations.ts and src/shell/bars.ts set every

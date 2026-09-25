@@ -475,6 +475,11 @@ export class Engine {
       ),
       active: index === this._ports.workspaces.activeIndex,
       occupied: [...this._windows.values()].some(w => w.workspace === index),
+      // Derived per commit from the live window set, like `occupied` -- never
+      // separate state to keep in sync. The active workspace is never urgent:
+      // focusing a workspace is how i3 clears it.
+      urgent: index !== this._ports.workspaces.activeIndex
+        && [...this._windows.values()].some(w => w.workspace === index && w.urgent),
     }));
     this._ports.indicator.setPills(this._copyPills());
     if (this._disposed) return;

@@ -43,8 +43,8 @@ const monitor = (index: number, x: number, width: number, height: number) =>
 const TWO = [monitor(0, 0, 1728, 1048), monitor(1, 1728, 1920, 1080)];
 
 const pills: PillState[] = [
-  {name: '1:I', active: true, occupied: true},
-  {name: '2:II', active: false, occupied: false},
+  {name: '1:I', active: true, occupied: true, urgent: false},
+  {name: '2:II', active: false, occupied: false, urgent: false},
 ];
 
 /** Every bar currently in the chrome, in the order it was added. */
@@ -168,7 +168,7 @@ describe('MonitorBars', () => {
     const switched: number[] = [];
     const monitorBars = new MonitorBars(index => switched.push(index));
     monitorBars.setPills(pills);
-    monitorBars.setPills([...pills, {name: '3:III', active: false, occupied: true}]);
+    monitorBars.setPills([...pills, {name: '3:III', active: false, occupied: true, urgent: false}]);
 
     pillsOf(bars()[0])[2].emit('clicked');
 
@@ -195,8 +195,8 @@ describe('MonitorBars', () => {
     const createdBefore = created.length;
 
     monitorBars.setPills([
-      {name: '1:I', active: false, occupied: true},
-      {name: '2:II', active: true, occupied: true},
+      {name: '1:I', active: false, occupied: true, urgent: false},
+      {name: '2:II', active: true, occupied: true, urgent: false},
     ]);
     monitorBars.setColors(DEFAULT_COLORS);
 
@@ -208,7 +208,7 @@ describe('MonitorBars', () => {
 
   it('drops the pills of workspaces that have gone', () => {
     const monitorBars = new MonitorBars(() => {});
-    monitorBars.setPills([...pills, {name: '3:III', active: false, occupied: true}]);
+    monitorBars.setPills([...pills, {name: '3:III', active: false, occupied: true, urgent: false}]);
 
     monitorBars.setPills(pills);
 
@@ -220,7 +220,7 @@ describe('MonitorBars', () => {
     // Review Focus: with the pills held in an array, a pill disposed behind
     // this class's back would shift every pill after it, so clicking "3"
     // would switch to workspace 2.
-    const three = [...pills, {name: '3:III', active: false, occupied: true}];
+    const three = [...pills, {name: '3:III', active: false, occupied: true, urgent: false}];
     const switched: number[] = [];
     const monitorBars = new MonitorBars(index => switched.push(index));
     monitorBars.setPills(three);
@@ -241,8 +241,8 @@ describe('MonitorBars', () => {
     monitorBars.setPills(pills);
 
     monitorBars.setPills([
-      {name: '1:I', active: false, occupied: true},
-      {name: '2:II', active: true, occupied: true},
+      {name: '1:I', active: false, occupied: true, urgent: false},
+      {name: '2:II', active: true, occupied: true, urgent: false},
     ]);
 
     expect(activeIndexOf(bars()[0])).toBe(1);
@@ -329,7 +329,7 @@ describe('MonitorBars', () => {
     bars()[0].destroy();
     criticals.length = 0;
 
-    monitorBars.setPills([{name: '9', active: true, occupied: true}]);
+    monitorBars.setPills([{name: '9', active: true, occupied: true, urgent: false}]);
     monitorBars.setColors(DEFAULT_COLORS);
     monitorBars.setMode('resize');
     monitorBars.setMode(null);
@@ -379,7 +379,7 @@ describe('MonitorBars', () => {
     contentBoxOf(bars()[0]).inStage = false;
     criticals.length = 0;
 
-    monitorBars.setPills([{name: '9', active: true, occupied: true}]);
+    monitorBars.setPills([{name: '9', active: true, occupied: true, urgent: false}]);
     monitorBars.setColors(DEFAULT_COLORS);
     monitorBars.setMode('resize');
     monitorBars.setMode(null);
