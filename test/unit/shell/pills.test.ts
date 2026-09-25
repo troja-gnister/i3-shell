@@ -2,6 +2,7 @@ import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {DEFAULT_COLORS} from '../../../src/config/model';
 import type {Colors} from '../../../src/config/model';
 import type {PillState} from '../../../src/runtime/model';
+import {samePills} from '../../../src/shell/util/pills';
 import type {FakeActor} from './fakes/actors';
 
 vi.mock('gi://Clutter', async () => ({default: (await import('./fakes/actors')).fakeClutter}));
@@ -55,6 +56,14 @@ const urgentPills: PillState[] = [
   {name: '3:III', active: false, occupied: true, urgent: true},   // urgent: the case under test
 ];
 
+// The engine never derives this combination -- an active workspace is never
+// urgent (src/engine.ts clears it) -- but stylePill's branch order still has
+// to prefer `active` on its own, because that invariant lives one layer away
+// and nothing here re-checks it.
+const activeAndUrgentPills: PillState[] = [
+  {name: '1:I', active: true, occupied: true, urgent: true},
+];
+
 const styles = (root: FakeActor): unknown[] => pillsOf(root).map(pill => pill.props.style);
 const opacities = (root: FakeActor): number[] => pillsOf(root).map(pill => pill.opacity);
 const kinds = (root: FakeActor): string[] => pillsOf(root).map(pill => pill.kind);
@@ -68,6 +77,21 @@ beforeEach(() => {
     {index: 1, x: 1728, y: 0, width: 1920, height: 1080},
   ];
   layout.primaryIndex = 0;
+});
+
+describe('samePills', () => {
+  it('repaints when only urgency changed', () => {
+    // samePills is the repaint guard. Without the urgent comparison an urgency
+    // flip with an unchanged name, active and occupied reports "same", the bar
+    // skips the repaint, and the feature is dead at runtime while every
+    // derivation test stays green. Same length on both sides on purpose: a
+    // length mismatch short-circuits before the comparison is reached, which is
+    // why the render test above cannot cover this.
+    const before = [{name: '1:I', active: false, occupied: true, urgent: false}];
+    const after  = [{name: '1:I', active: false, occupied: true, urgent: true}];
+    expect(samePills(before, after)).toBe(false);
+    expect(samePills(before, before)).toBe(true);
+  });
 });
 
 /**
@@ -107,6 +131,14 @@ describe('the panel and a monitor bar render the same pills', () => {
     // The non-urgent pills are unaffected.
     expect(String(styles(bar)[0])).not.toContain(COLORS.urgent.background);
     expect(String(styles(bar)[1])).toContain(COLORS.focused.background);
+  });
+
+  it('renders a pill that is both active and urgent as active, not urgent', () => {
+    const [button, bar] = bothWith(activeAndUrgentPills);
+
+    expect(styles(bar)).toEqual(styles(button));
+    expect(String(styles(bar)[0])).toContain(COLORS.focused.background);
+    expect(String(styles(bar)[0])).not.toContain(COLORS.urgent.background);
   });
 
   it('gives every pill the same label, style and opacity', () => {
