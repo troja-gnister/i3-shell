@@ -290,7 +290,23 @@ two-output session. Only **visible** workspaces are laid out now: a parked works
 not on screen and its geometry is unobservable until it is shown, at which point step 4 of the swap
 computes it. Two roots instead of twenty, and a simpler rule.
 
-A workspace's rect comes from its output's work area, `topology.workAreas.get(ws)!.get(w.output)!`.
+### 5.5 `Topology.workAreas` collapses to one map
+
+`Topology.workAreas` is today `ReadonlyMap<number, ReadonlyMap<MonitorId, Rect>>`, keyed first by
+workspace index, and `geometryTopology.ts:41` builds it by looping to the **GNOME** workspace
+manager's count. Once GNOME holds two workspaces that loop produces entries for 0 and 1 only, so any
+lookup by an i3 workspace index of 2 or above returns `undefined` — `_launcherArea()`'s
+`workAreas.get(workspace)` would fail on seven of ten workspaces.
+
+It therefore becomes a single map keyed by output:
+
+```ts
+Topology.workAreas: ReadonlyMap<MonitorId, Rect>
+```
+
+read from the *live* workspace, which is the only one any visible window occupies. A workspace's rect
+is `topology.workAreas.get(ws.output)!`. This is also the honest shape: a work area is a property of
+an output, and the per-workspace keying only ever existed because GNOME owned workspaces.
 
 ---
 
@@ -355,7 +371,12 @@ Mutter always reports at least one output, so "no outputs" is an assertion, not 
 - `src/commands/` — three new `Command` members and their parsing. `_runOne`'s switch has no
   `default:`, so adding a member is a compile error until every site handles it; this is relied upon.
 - `src/config/parser.ts` — `workspace`, `focus_follows_mouse` and `mouse_warping` leave `UNSUPPORTED`.
-- `src/runtime/snapshot.ts`, `src/runtime/model.ts` — per-output pills, `PillState`.
+- `src/runtime/snapshot.ts`, `src/runtime/model.ts` — per-output pills, `PillState`,
+  `Topology.workAreas` (§5.5), and `TreeSnapshot` **version 2**: a workspace carries `output` and one
+  `root` instead of a `monitors` array. The version bump is required because `GetTree` is a public
+  D-Bus surface and `test/integration/phase2-checks.py` parses it.
+- `src/shell/geometryTopology.ts` — builds the collapsed `workAreas` (§5.5) from the live workspace
+  only, so its workspace loop disappears.
 - `src/shell/settings.ts` — the overrides in §8.2.
 - `src/shell/workspaces.ts` — the attic swap, `moveToWorkspace` bracketing, the `workspace-switched`
   guard.
