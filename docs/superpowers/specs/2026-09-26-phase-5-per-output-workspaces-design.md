@@ -86,8 +86,11 @@ the one a user describes as "primary is workspace one, external is workspace two
 first**, then the remainder by ascending Mutter monitor index. The primary must come first because
 "primary is workspace one" is the behaviour being asked for; `geometryTopology.ts:55` sorts monitors by
 index and tracks the primary separately, so the primary is not index 0 in general and sorting by index
-alone would hand workspace I to whichever output Mutter happened to enumerate first. Workspaces beyond the output count are unassigned until
-first shown (§2.4).
+alone would hand workspace I to whichever output Mutter happened to enumerate first. Workspaces beyond the output count are assigned to the
+**primary**, which keeps invariant 1 total; §2.4 moves one to the focused output the first time it is
+shown. i3 instead hides a never-visited workspace from every bar, so its output is unobservable; with
+the fixed set of §2.5 this design shows all *N* pills, and a workspace therefore always belongs to
+exactly one output's bar. A third divergence, recorded for the same reason as §2.5's.
 
 `workspace <number|name> output <name…>` graduates from `UNSUPPORTED` to implemented. It accepts
 i3's list form, first live output wins, with `primary` valid as a name. A configured assignment
