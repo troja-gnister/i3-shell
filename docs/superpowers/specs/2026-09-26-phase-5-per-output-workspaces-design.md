@@ -119,6 +119,37 @@ named and bound. For a config that names and binds every workspace the observabl
 identical, and a fixed set is simpler to model and to test. The divergence is recorded rather than
 hidden: a config relying on i3's dynamic workspace lifecycle is out of scope for v1.
 
+### 2.6 The tree is the authority for workspace membership
+
+Today the engine *learns* a window's workspace from Mutter. `WindowInfo.workspace` is a GNOME
+workspace index, and three places read it as if it were an i3 workspace:
+
+- `engine.ts:471` derives every pill's `occupied` and `urgent` from `w.workspace === index`.
+- `_pills`' `active` and `_layoutAndPublish`'s `tree.activateWorkspace(...)` both read
+  `this._ports.workspaces.activeIndex`.
+- adoption on enable (`isNew`) groups windows by `info.workspace`.
+
+Under the attic every window's GNOME workspace is 0 or 1 and the active index is always 0, so all
+three would silently compute nonsense — pills for workspaces II–X would read empty however many
+windows they held. The inversion is therefore part of this phase, not a consequence of it:
+
+- **`WindowInfo.workspace` stops being an input to placement.** A new window is inserted into the
+  focused output's visible workspace (§3.1); thereafter the tree is the sole authority and
+  `moveToWorkspace` *drives* Mutter rather than reading from it. The field stays on `WindowInfo` —
+  reconciliation still needs to know where Mutter actually put a window, which is how a parked window
+  that failed to move is detected (§8.3) — but nothing derives i3 workspace membership from it.
+- **Pills derive from the tree**: `occupied` from whether a workspace's root has any leaf or any
+  floating window, `urgent` from the urgency of the windows the *tree* places there, `focused` and
+  `visible` from `visible` and `focusedOutput` (§6).
+- **`tree.activateWorkspace(activeIndex)` is deleted.** GNOME's active workspace is a constant now
+  (§5.3); nothing may derive an i3 workspace from it.
+
+**Adoption on enable / restart** (main spec §8.5) needs a rule, because reducing `num-workspaces` to 2
+makes Mutter collapse windows from the removed workspaces onto the last remaining one, so a window's
+pre-enable workspace is unrecoverable. A window is adopted onto **the visible workspace of the output
+it currently occupies**. Its output is observable and is what the user sees; its old workspace is not.
+Dumping everything onto workspace I would be the alternative and is worse.
+
 ---
 
 ## 3. The focused output
@@ -467,7 +498,10 @@ one commit, which is the shape of change that produced 34 St-CRITICALs in Phase 
    `workspace-names` apply; adds the `switch-to-workspace-*` clears.
 9. **Roadmap line (§17, "Phases and deliverables").** Phase 4's "multi-monitor (per-monitor focus / move across MonitorCons)"
    and "`focus_follows_mouse` ↔ `focus-mode`" move to Phase 5, which replaces `MonitorCon` entirely.
-10. **§8.2 / §7.10.** Unchanged, and noted as such: a window is excluded from the tree by
+10. **§8.5, adoption on enable.** A window is adopted onto the visible workspace of the output it
+    currently occupies (§2.6). Its pre-enable workspace is unrecoverable, because reducing
+    `num-workspaces` to 2 makes Mutter collapse the removed workspaces onto the last remaining one.
+11. **§8.2 / §7.10.** Unchanged, and noted as such: a window is excluded from the tree by
     `excludedFromTree` exactly as Phase 3B defined. Parking is not exclusion — a parked window stays
     in its workspace's tree — and nothing about `minimized`, `sticky` or `skipTaskbar` changes.
 
