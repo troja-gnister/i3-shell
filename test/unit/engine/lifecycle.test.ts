@@ -215,9 +215,15 @@ describe('engine lifecycle', () => {
     f.engine.run([{type: 'workspace', target: {kind: 'number', number: 1, name: '1'}}], 0);   // the output now shows workspace 0 instead
     f.change(1, {minimized: true}, 'minimized'); f.flush();
     expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: []});
+    // The real switch above (unlike the tree poke this used to be) already parks workspace 2's
+    // windows on its own way out, so by now window 1's native workspace is already 1 (ATTIC) --
+    // asserting that value on restore, as this test used to, would pass whether or not restore's own
+    // adoption-time sync (`_syncWindow`'s `_parkOrShow` call) exists. Clearing `f.calls` first and
+    // asserting the port call restore itself makes is what actually exercises that sync.
+    f.calls.length = 0;
     f.change(1, {minimized: false}, 'minimized'); f.flush();
     expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: [{window: 1}]});
-    expect(f.windows.get(1)!.workspace).toBe(1);   // ATTIC: workspace 2 is hidden now
+    expect(f.calls).toContain('moveTo:1:1');   // ATTIC: workspace 2 is hidden now
     expect(f.engine.treeSnapshot().workspaces[0].monitors[0].root).toMatchObject({children: []});
   });
   it('rebuilds restart from live classification with stable ids and announces cache', () => {

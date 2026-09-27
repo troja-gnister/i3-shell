@@ -338,27 +338,9 @@ export class Engine {
   }
 
   /**
-   * Show workspace `incoming` on `output`. The five steps, in this order -- the last three of them now
-   * living in `_parkAndShow` below, which Task 7's `workspace` command also drives after `Tree.showWorkspace`
-   * has done what this wrapper's first two steps (`tree.visible.set`, `workspace.output`) do here.
-   *
-   * Step 5 is the subtle one. Parking the focused window makes Mutter pick a replacement on its own,
-   * which arrives as an unexpected focus report. There is no pre-registration that can suppress it:
-   * `_expectedFocus` holds ids we *asked* to focus, and Mutter's replacement is a still-visible
-   * window, never one of the ids being parked -- so bracketing the parking with it, as an earlier
-   * version of this method did, could never match the report it was meant to catch. Provided the
-   * incoming workspace has a selection *and* the trailing `_activateSelection` below succeeds in
-   * activating it, that call settles things: its own report arrives last (native reports are FIFO
-   * relative to this synchronous method, and this one is queued after any replacement's) and
-   * re-selects the intended window regardless of what an earlier unexpected report did. Two residuals
-   * are unverified by any test here: such an earlier report can transiently re-select on a
-   * *different* workspace than the one this swap is showing, and if `_activateSelection` never
-   * activates -- an empty incoming workspace (handled below), or Mutter refusing the activate
-   * request -- the replacement pick stands, since nothing follows it. Both are out of reach of a
-   * synchronous fake; Task 17's native harness is what can show whether Mutter actually produces one.
-   * Native focus for an empty incoming workspace is Task 13's job (spec §4.1): this method only
-   * makes the *tree* agree that the incoming workspace's root is selected, so `activeWorkspace`, the
-   * selection and the pills are right regardless of whether anything native follows.
+   * Show workspace `incoming` on `output`: validates, then makes `tree.visible`/`workspace.output` say
+   * so, then delegates the window moves to `_parkAndShow` below, where the five-step account of what
+   * actually happens now lives (this wrapper does none of those five itself).
    */
   private _showOnOutput(output: MonitorId, incoming: number): void {
     const tree = this._tree;
@@ -379,20 +361,49 @@ export class Engine {
     this.commit(() => {
       tree.visible.set(output, incoming);
       tree.workspace(incoming).output = output;
-      this._parkAndShow(output, outgoing, incoming);
+      this._parkAndShow(outgoing, incoming);
       return true;
     });
   }
 
   /**
-   * The window moves behind showing `incoming` on `output`, once whatever set `tree.visible` and
-   * `workspace.output` (this wrapper above, or `Tree.showWorkspace` from the `workspace` command) has
-   * already done so. Warns (naming the window) rather than throwing when Mutter refuses a move, in
-   * the same style as `_parkOrShow`. Callers must already be inside a `commit()` closure: this method
-   * does not open one itself, so a caller can bracket it with tree mutations of its own (as `workspace`
-   * does with `Tree.showWorkspace`) and still see one relayout, not two.
+   * The window moves behind showing `incoming`, once whatever decided that -- `_showOnOutput` above
+   * (for a given `output`), or `Tree.showWorkspace` (for the focused output, from the `workspace`
+   * command) -- has already set `tree.visible` and `workspace.output` to match. Takes no output of its
+   * own: every window it touches goes to LIVE or the attic, never to a specific output, so the caller's
+   * output choice has nothing left for this method to act on. Callers must already be inside a
+   * `commit()` closure: this method does not open one itself, so a caller can bracket it with tree
+   * mutations of its own (as `workspace` does with `Tree.showWorkspace`) and still see one relayout,
+   * not two. The five steps, in this order.
+   *
+   * 1. Collect `parked`: the outgoing workspace's members (empty if there was no outgoing workspace).
+   * 2. Collect `arriving`: the incoming workspace's members.
+   * 3. Move every arriving window onto LIVE, warning (naming the window) rather than throwing if
+   *    Mutter refuses one.
+   * 4. Move every parked window into the attic, the same way.
+   * 5. `_activateSelection`, with one piece of tree-only bookkeeping immediately before it for an
+   *    incoming workspace with no window (below): the subtle step.
+   *
+   * Step 5 is the subtle one. Parking the focused window makes Mutter pick a replacement on its own,
+   * which arrives as an unexpected focus report. There is no pre-registration that can suppress it:
+   * `_expectedFocus` holds ids we *asked* to focus, and Mutter's replacement is a still-visible
+   * window, never one of the ids being parked -- so bracketing the parking with it, as an earlier
+   * version of this method did, could never match the report it was meant to catch. Provided the
+   * incoming workspace has a selection *and* the trailing `_activateSelection` below succeeds in
+   * activating it, that call settles things: its own report arrives last (native reports are FIFO
+   * relative to this synchronous method, and this one is queued after any replacement's) and
+   * re-selects the intended window regardless of what an earlier unexpected report did. Two residuals
+   * are unverified by any test here: such an earlier report can transiently re-select on a
+   * *different* workspace than the one this swap is showing, and if `_activateSelection` never
+   * activates -- an empty incoming workspace (handled below), or Mutter refusing the activate
+   * request -- the replacement pick stands, since nothing follows it. Both are out of reach of a
+   * synchronous fake; Task 17's native harness is what can show whether Mutter actually produces one.
+   * Native focus for an empty incoming workspace is Task 13's job (spec §4.1): step 5's tree-only
+   * bookkeeping only makes the *tree* agree that the incoming workspace's root is selected, so
+   * `activeWorkspace`, the selection and the pills are right regardless of whether anything native
+   * follows.
    */
-  private _parkAndShow(output: MonitorId, outgoing: number | undefined, incoming: number): void {
+  private _parkAndShow(outgoing: number | undefined, incoming: number): void {
     const tree = this._tree;
     if (!tree) return;
     const parked = outgoing === undefined ? [] : this._workspaceMembers(tree, outgoing);
@@ -403,15 +414,16 @@ export class Engine {
     for (const id of parked)
       if (!this._ports.windows.moveToWorkspace(id, ATTIC_WORKSPACE))
         this._ports.log.warn(`could not park window ${id}; leaving it on screen`);
-    // No window to select: make the tree agree the workspace's own root is what is showing, so
-    // activeWorkspace/selection/pills are right regardless of what happens to native focus (spec
-    // §4.1, Task 13's job, not this method's).
     if (arriving.length === 0) tree.select(tree.workspace(incoming).root);
     // 0 = no native event timestamp; the windows adapter substitutes the current server time.
     this._activateSelection(0);
   }
 
-  /** Test-only entry point for _showOnOutput; Task 7 is its first real caller. */
+  /**
+   * Test-only entry point for `_showOnOutput`, which still has no production caller of its own -- the
+   * `workspace` command drives `_parkAndShow` directly, through `Tree.showWorkspace` instead. Tasks 14
+   * and 15 are `_showOnOutput`'s real callers.
+   */
   showOnOutputForTest(output: MonitorId, incoming: number): void {
     this._showOnOutput(output, incoming);
   }
@@ -1080,7 +1092,7 @@ export class Engine {
       case 'name': {
         for (const [number, name] of this._config.workspaceNames) {
           if (name === target.name)
-            return number - 1;
+            return number >= 1 && number <= count ? number - 1 : null;
         }
         if (/^\d+$/.test(target.name)) {
           const number = parseInt(target.name, 10);
@@ -1138,14 +1150,18 @@ export class Engine {
         const index = this._workspaceIndex(command.target);
         if (index === null)
           return 'workspace: no such workspace';
-        // Captured before `Tree.showWorkspace` runs: it is the tree's only record of what the focused
-        // output was showing a moment ago, and both branches below need it -- the message to say
-        // whether anything actually changed, and the swap branch to know what to park.
-        const outgoing = tree.visible.get(tree.focusedOutput);
-        if (outgoing === index) return 'workspace: already active';
+        // This snapshot is only for the message, which needs an answer now, synchronously -- never for
+        // the switch itself. `commit()` queues on re-entry (a `for_window` rule's own command list runs
+        // from inside the commit its matching 'added'/'title' event opened), so a `workspace` command
+        // still queued from earlier in the same chain can leave this read stale by the time this one's
+        // closure actually drains; the closure below re-reads `tree.visible` itself rather than
+        // trusting it, so the workspace it parks is whatever is *actually* showing when it runs, not
+        // whatever was showing when it was merely scheduled.
+        if (tree.visible.get(tree.focusedOutput) === index) return 'workspace: already active';
         this.commit(() => {
-          const {output, swap} = tree.showWorkspace(index);
-          if (swap && outgoing !== undefined) this._parkAndShow(output, outgoing, index);
+          const outgoing = tree.visible.get(tree.focusedOutput);
+          const {swap} = tree.showWorkspace(index);
+          if (swap && outgoing !== undefined) this._parkAndShow(outgoing, index);
           else this._activateSelection(0);
           return true;
         });

@@ -54,6 +54,10 @@ describe('Engine', () => {
     expect(e.run([{type: 'workspace', target: {kind: 'number', number: 3, name: '3'}}], 5)).toBe('workspace: already active');
     expect(e.run([{type: 'workspace', target: {kind: 'prev'}}], 6)).toBe('workspace 2');
     expect(e.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 8)).toBe('move container to workspace: already there');
+    // `next` resolves against the tree's own active workspace too (active is 1 here, from `prev`
+    // above); `prev`'s own coverage above does not exercise `next`'s branch of `_workspaceIndex`.
+    expect(e.run([{type: 'workspace', target: {kind: 'next'}}], 9)).toBe('workspace 3');
+    expect(e.state().activeWorkspace).toBe(2);
   });
 
   it('moves the tree\'s own active workspace for real, not just GNOME\'s index', () => {
