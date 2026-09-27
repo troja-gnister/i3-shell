@@ -4,6 +4,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {DEFAULT_COLORS} from '../config/model';
 import type {Colors} from '../config/model';
 import type {PillState} from '../runtime/model';
+import type {MonitorId} from '../tree/node';
 import {applyMode, createModeLabel, createPill, samePills, stylePill, styleModeLabel} from './util/pills';
 import {guard} from './util/signals';
 
@@ -38,20 +39,34 @@ interface Bar {
    */
   pills: Map<number, St.Button>;
   modeLabel: St.Label | null;
+  /**
+   * This bar's own output, or `undefined` if the geometry backend has not assigned one yet (a monitor
+   * that appeared between a hardware change and the topology read that names it) -- such a bar shows
+   * no pills until a later `setPills` call finds an id for it.
+   */
+  id: MonitorId | undefined;
+  /** The pill states most recently rendered onto this bar -- this output's own list, never another's. */
+  states: readonly PillState[];
 }
 
 /**
- * The same workspace pills the panel indicator shows, on every monitor that is
- * not the primary one.
+ * This output's own workspace pills, on every monitor that is not the primary one.
  *
  * GNOME has exactly one top panel and it lives on the primary monitor, so
  * without this a user with an external display sees no workspace indicator on
  * it. The primary deliberately gets no bar: it keeps GNOME's own panel, so it
  * still looks like GNOME rather than carrying two bars.
  *
- * Every bar is a mirror -- same pills, same highlight, and a click on any of
- * them switches the one shared workspace (spec 4.3). Per-output workspace sets
- * are a Phase 4 question and nothing here prejudges it.
+ * Each bar shows only its own output's workspaces (spec 4.3, Task 8) -- i3
+ * distinguishes a workspace that is focused from one merely visible on
+ * another output, and a bar mirroring every output's pills everywhere could
+ * not express that a workspace shown on this screen is not the one shown on
+ * that one. A pill's position is no longer the workspace's own index once a
+ * bar shows a proper subset of the workspaces that exist, so a click reports
+ * both this bar's own output and the clicked position; whoever resolves it
+ * (src/extension.ts, via `Engine.workspaceIndexOn`) turns that back into the
+ * workspace the pill was actually built for before issuing `workspace <n>`,
+ * i3bar's own behaviour for a pill click.
  *
  * Unlike the decoration renderer, these actors are not driven from commit():
  * they are monitor chrome, built at construction and rebuilt when the monitor
@@ -59,26 +74,41 @@ interface Bar {
  */
 export class MonitorBars {
   private readonly _bars: Bar[] = [];
-  private _states: PillState[] = [];
+  private _byOutput: ReadonlyMap<MonitorId, readonly PillState[]> = new Map();
   private _mode: string | null = null;
   private _colors: Colors = DEFAULT_COLORS;
   private _visible = true;
   /** The shell can destroy chrome before disable() runs; see src/shell/indicator.ts. */
   private _destroyed = false;
 
-  constructor(private readonly _onPill: (index: number) => void) {
+  constructor(
+    /** `output` is this bar's own id, `position` the clicked pill's index within its own list. */
+    private readonly _onPill: (output: MonitorId, position: number) => void,
+    /** Mutter's own monitor index -> this project's stable output id; see src/shell/geometry.ts. */
+    private readonly _monitorId: (index: number) => MonitorId | undefined,
+  ) {
     this._build();
   }
 
-  setPills(states: PillState[]): void {
-    if (samePills(this._states, states)) return;
-    this._states = states;
+  setPills(byOutput: ReadonlyMap<MonitorId, readonly PillState[]>): void {
+    this._byOutput = byOutput;
     if (this._destroyed) return;
-    for (const bar of [...this._bars]) {
-      this._renderPills(bar);
-      this._restyle(bar);
-      this._resize(bar);
-    }
+    for (const bar of [...this._bars]) this._applyOwnPills(bar);
+  }
+
+  /** This bar's own slice of the last pills published, or `[]` if its output is not known yet. */
+  private _pillsFor(bar: Bar): readonly PillState[] {
+    return bar.id !== undefined ? this._byOutput.get(bar.id) ?? [] : [];
+  }
+
+  /** Re-renders `bar` only if its own output's pills actually changed -- `setPills`'s repaint guard. */
+  private _applyOwnPills(bar: Bar): void {
+    const states = this._pillsFor(bar);
+    if (samePills(bar.states, states)) return;
+    bar.states = states;
+    this._renderPills(bar);
+    this._restyle(bar);
+    this._resize(bar);
   }
 
   setMode(name: string | null): void {
@@ -135,17 +165,17 @@ export class MonitorBars {
     const primaryIndex = manager.primaryIndex;
     manager.monitors.forEach((monitor: MonitorGeometry, index: number) => {
       if (index === primaryIndex) return;     // the primary keeps GNOME's own panel
-      this._addBar(monitor);
+      this._addBar(monitor, index);
     });
   }
 
-  private _addBar(monitor: MonitorGeometry): void {
+  private _addBar(monitor: MonitorGeometry, index: number): void {
     const actor = new St.BoxLayout({style_class: 'i3-shell-monitor-bar'});
     const box = new St.BoxLayout({style_class: 'i3-shell-bar', y_align: Clutter.ActorAlign.CENTER});
     actor.add_child(box);
     const modeLabel = createModeLabel();
     box.add_child(modeLabel);
-    const bar: Bar = {monitor, actor, box, pills: new Map(), modeLabel};
+    const bar: Bar = {monitor, actor, box, pills: new Map(), modeLabel, id: this._monitorId(index), states: []};
 
     // Every actor drops its own reference when it is destroyed, so one the
     // shell disposes behind our back cannot leave a dangling entry a later
@@ -165,9 +195,10 @@ export class MonitorBars {
     if (!this._visible) actor.hide();
     this._bars.push(bar);
 
-    // A bar built later -- a display plugged in mid-session -- starts life
-    // showing whatever the others already show. Fill it before measuring it,
-    // and measure it before the layout manager reads it for the strut.
+    // A bar built later -- a display plugged in mid-session -- starts life showing whatever its own
+    // output already had, from the last full `setPills`. Fill it before measuring it, and measure it
+    // before the layout manager reads it for the strut.
+    bar.states = this._pillsFor(bar);
     this._renderPills(bar);
     this._renderMode(bar);
     this._restyle(bar);
@@ -196,9 +227,13 @@ export class MonitorBars {
   }
 
   private _renderPills(bar: Bar): void {
-    this._states.forEach((_state, index) => {
+    // Every pill in `bar.states` belongs to `bar.id` by construction (`_pillsFor` returns `[]` for a
+    // bar with no known output yet), so the click closure below always has a real output to report.
+    const output = bar.id;
+    bar.states.forEach((_state, index) => {
       if (bar.pills.has(index)) return;
-      const pill = createPill(() => this._onPill(index));
+      if (output === undefined) return;
+      const pill = createPill(() => this._onPill(output, index));
       pill.connect('destroy', guard('monitor pill destroy', () => {
         if (bar.pills.get(index) === pill) bar.pills.delete(index);
       }));
@@ -206,7 +241,7 @@ export class MonitorBars {
       bar.pills.set(index, pill);
     });
     for (const [index, pill] of [...bar.pills]) {
-      if (index < this._states.length) continue;
+      if (index < bar.states.length) continue;
       pill.destroy();                             // its 'destroy' handler drops the entry
     }
   }
@@ -228,7 +263,7 @@ export class MonitorBars {
     // default dark look anyway. _addBar() calls this before the bar reaches
     // the screen, so there is no unpainted first frame.
     bar.actor.set_style(`background-color: ${c.unfocused.background};`);
-    this._states.forEach((state, index) => {
+    bar.states.forEach((state, index) => {
       const pill = bar.pills.get(index);
       if (pill) stylePill(pill, state, c);
     });

@@ -28,7 +28,7 @@ describe('urgent workspaces', () => {
     f.engine.start();
     f.add(1, {workspace: 0, urgent: true});
     f.flush();
-    expect(f.pills[0].active).toBe(true);
+    expect(f.pills[0].focused).toBe(true);
     expect(f.pills[0].urgent).toBe(false);
   });
 

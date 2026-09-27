@@ -319,7 +319,7 @@ describe('engine lifecycle', () => {
     f.add(1);
     const state = f.engine.state();
 
-    expect(state.pills[0]).toEqual({name: '1', active: true, occupied: true, urgent: false});
+    expect(state.pills[0]).toEqual({name: '1', focused: true, visible: true, occupied: true, urgent: false});
     state.pills[0].name = 'caller mutation';
     expect(f.engine.state().pills[0].name).toBe('1');
     expect(f.pills[0].name).toBe('1');

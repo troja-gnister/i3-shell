@@ -84,13 +84,18 @@ export interface DeferredPort {
 }
 export interface PillState {
   name: string;
-  active: boolean;
+  /** Visible on the focused output. At most one pill across all outputs is focused. */
+  focused: boolean;
+  /** Visible on some output — possibly another one. i3bar's third state, which `active` could not express. */
+  visible: boolean;
   occupied: boolean;
   /**
-   * Any window on this workspace is urgent and this workspace is not active.
-   * Styled from client.urgent: i3 takes bar colours from `bar { colors { … } }`
-   * and this project ignores the bar block, so client.urgent is the only
-   * urgent colour the config supplies. A deliberate divergence; see the spec.
+   * Any window the tree places on this workspace is urgent and this workspace is not focused. Derived
+   * per commit from the tree, never separate state. Focusing a workspace is how i3 clears it.
+   *
+   * Styled from client.urgent: i3 takes bar colours from `bar { colors { … } }` and this project
+   * ignores the bar block, so client.urgent is the only urgent colour the config supplies. A deliberate
+   * divergence; see the spec.
    */
   urgent: boolean;
 }

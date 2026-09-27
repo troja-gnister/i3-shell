@@ -36,9 +36,10 @@ const {Indicator} = await vi.importActual<{
   ) => IndicatorLike;
 }>('../../../src/shell/indicator');
 
-const pills = (count: number, active = 0): PillState[] =>
+const pills = (count: number, focused = 0): PillState[] =>
   Array.from({length: count}, (_, index) => ({
-    name: String(index + 1), active: index === active, occupied: index === 0, urgent: false,
+    name: String(index + 1), focused: index === focused, visible: index === focused,
+    occupied: index === 0, urgent: false,
   }));
 
 function indicator(): IndicatorLike {

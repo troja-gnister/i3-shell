@@ -132,7 +132,8 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
     indicator: {
       setMode: name => { calls.push(`mode:${name}`); },
       setColors: colors => { calls.push('colors'); f.pushedColors = colors; },
-      setPills: pills => { f.pills = pills; }, setVisible: visible => { f.visible = visible; },
+      setPills: byOutput => { f.pillsByOutput = new Map(byOutput); },
+      setVisible: visible => { f.visible = visible; },
     },
     accent: {
       current: () => accent,
@@ -156,7 +157,22 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
   const engine = new Engine(ports);
   const f = {
     engine, ports, calls, applied, windows, load,
-    pills: [] as PillState[], pushedColors: null as Colors | null, decorationColors: null as Colors | null,
+    pillsByOutput: new Map<MonitorId, readonly PillState[]>(),
+    /**
+     * The flat, workspace-ordered view of whatever was last pushed to the indicator port -- the shape
+     * every test written before Task 8 (per-output pills) already asserts against. Reconstructed from
+     * `pillsByOutput` via the tree's own `workspacesOn`, which is exactly how the engine grouped it in
+     * the first place, so this is provably the same data, not a second derivation that could drift.
+     */
+    get pills(): PillState[] {
+      const tree = (engine as unknown as {_tree: Tree | null})._tree;
+      if (!tree) return [];
+      const flat: PillState[] = [];
+      for (const [output, list] of f.pillsByOutput)
+        tree.workspacesOn(output).forEach((index, position) => { flat[index] = list[position]!; });
+      return flat;
+    },
+    pushedColors: null as Colors | null, decorationColors: null as Colors | null,
     visible: true, refuseGeometry: false, emitFrames: true, activationFails: false,
     onApply: null as ((id: WindowId) => void) | null,
     plan: null as DecorationPlan | null,

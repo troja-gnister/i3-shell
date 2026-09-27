@@ -332,4 +332,30 @@ describe('Engine', () => {
       expect(() => e.state()).not.toThrow();
     });
   });
+
+  // Task 8 RED evidence: PillState still has `active`, and the indicator port fake still hands back a
+  // flat PillState[], not a per-output map -- `f.pillsByOutput` does not exist yet.
+  describe('Task 8: focused vs visible, per output (RED)', () => {
+    it('marks the workspace on the focused output focused, and the other output’s visible', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      const pills = e.state().pills;
+      expect(pills[0]!.focused).toBe(true);
+      expect(pills[0]!.visible).toBe(true);
+      expect(pills[1]!.focused).toBe(false);
+      expect(pills[1]!.visible).toBe(true);     // on screen, on the other output
+      expect(pills[2]!.visible).toBe(false);
+    });
+
+    it('gives each output only its own workspaces’ pills', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      const byOutput = f.pillsByOutput;
+      expect(byOutput.get(1)!.map(p => p.name)).toEqual(['2:II']);
+      expect(byOutput.get(0)!.map(p => p.name)).toEqual(
+        ['1:I', '3:III', '4:IV', '5:V', '6:VI', '7:VII', '8:VIII', '9:IX', '10:X']);
+    });
+  });
 });

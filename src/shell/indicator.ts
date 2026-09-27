@@ -15,7 +15,13 @@ export interface IndicatorPort {
   setVisible(visible: boolean): void;
 }
 
-/** One pill per workspace in the left panel box, plus a binding-mode label (i3bar look). */
+/**
+ * One pill per workspace in the left panel box, plus a binding-mode label (i3bar look).
+ *
+ * GNOME's one panel lives on the primary monitor, so `setPills` is always given the primary output's
+ * own list (Task 8) -- src/extension.ts picks that list out of the engine's per-output map before
+ * calling here; every other output gets its own bar instead (src/shell/bars.ts).
+ */
 export class Indicator implements IndicatorPort {
   private readonly _button: PanelMenu.Button;
   private readonly _box: St.BoxLayout;

@@ -327,8 +327,8 @@ describe('engine command dispatch', () => {
     f.engine.run([{type: 'workspace', target: {kind: 'number', number: 2, name: '2'}}], 1);
     expect(f.engine.state().focusedOutput).toBe(1);
     // This focus-only move (nothing visible changes, `swap: false`) still has to relayout: without it,
-    // the cached pills -- and the bar's active-workspace highlight they drive -- would go stale.
-    expect(f.engine.state().pills[1]!.active).toBe(true);
+    // the cached pills -- and the bar's focused-workspace highlight they drive -- would go stale.
+    expect(f.engine.state().pills[1]!.focused).toBe(true);
   });
 
   it('workspace number brings an unshown workspace to the focused output', () => {

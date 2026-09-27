@@ -53,7 +53,11 @@ export interface EnginePorts {
   indicator: {
     setMode(name: string | null): void;
     setColors(colors: Colors): void;
-    setPills(pills: PillState[]): void;
+    /**
+     * Every live output's own pills, keyed by output -- i3bar's focused/visible distinction cannot be
+     * expressed as one flat list once two outputs are both on screen (spec 4.3, Task 8).
+     */
+    setPills(byOutput: ReadonlyMap<MonitorId, readonly PillState[]>): void;
     setVisible(visible: boolean): void;
   };
   /**
@@ -116,6 +120,10 @@ export class Engine {
   private _lastLoadTime = 0;
   private _workspaceCount = 1;
   private _tree: Tree | null = null;
+  /** Every live output's own pills, rebuilt each commit; `_flatPills` is the same data, flattened. */
+  private _pillsByOutput: Map<MonitorId, PillState[]> = new Map();
+  /** `state().pills`'s flat, workspace-ordered shape -- the stable `GetState` surface. */
+  private _flatPills: PillState[] = [];
   private _topology: Topology | null = null;
   private _ready = false;
   private _revision = 0;
@@ -141,7 +149,6 @@ export class Engine {
   private readonly _frameReads = new Map<WindowId, {token: number; generation: number | undefined}>();
   private readonly _listeners = new Set<() => void>();
   private readonly _raiseOrders = new Map<number, string>();
-  private _pills: PillState[] = [];
 
 
   constructor(private readonly _ports: EnginePorts) {}
@@ -579,24 +586,57 @@ export class Engine {
     // The tree's own size, not `_workspaceCount`: the clamp can raise it above what the config named,
     // and a workspace with no pill is a workspace the user cannot see or click.
     const count = tree ? tree.workspaces.size : this._workspaceCount;
-    this._pills = Array.from({length: count}, (_, index) => {
-      // From the tree, never from WindowInfo.workspace: under the attic that field is 0 or 1 for
-      // every window, so a workspace's occupancy is not observable from Mutter any more.
-      const members = tree ? this._workspaceMembers(tree, index) : [];
-      const active = tree ? tree.activeWorkspace === index : index === 0;
-      return {
-        name: displayWorkspaceName(
-          this._config.workspaceNames.get(index + 1) ?? String(index + 1),
-          this._config.stripWorkspaceNumbers,
-        ),
-        active,
-        occupied: members.length > 0,
-        // Derived per commit from the live window set, like `occupied` -- never separate state to keep
-        // in sync. The active workspace is never urgent: focusing a workspace is how i3 clears it.
-        urgent: !active && members.some(id => this._windows.get(id)?.urgent === true),
-      };
-    });
-    this._ports.indicator.setPills(this._copyPills());
+    const byOutput = new Map<MonitorId, PillState[]>();
+    // Reads back out of `byOutput` below to build the flat, workspace-ordered shape `state()` keeps --
+    // one pass over the tree, not two derivations of the same thing that could drift apart.
+    const byIndex = new Map<number, PillState>();
+    if (tree) {
+      const focusedWorkspace = tree.activeWorkspace;
+      const visibleSet = new Set(tree.visible.values());
+      for (const output of tree.visible.keys()) {
+        const list: PillState[] = [];
+        for (const index of tree.workspacesOn(output)) {
+          // From the tree, never from WindowInfo.workspace: under the attic that field is 0 or 1 for
+          // every window, so a workspace's occupancy is not observable from Mutter any more.
+          const members = this._workspaceMembers(tree, index);
+          const focused = index === focusedWorkspace;
+          const pill: PillState = {
+            name: displayWorkspaceName(
+              this._config.workspaceNames.get(index + 1) ?? String(index + 1),
+              this._config.stripWorkspaceNumbers,
+            ),
+            focused,
+            visible: visibleSet.has(index),
+            occupied: members.length > 0,
+            // Derived per commit from the live window set, like `occupied` -- never separate state to
+            // keep in sync. The focused workspace is never urgent: focusing a workspace clears it.
+            urgent: !focused && members.some(id => this._windows.get(id)?.urgent === true),
+          };
+          list.push(pill);
+          byIndex.set(index, pill);
+        }
+        byOutput.set(output, list);
+      }
+    } else {
+      // No tree yet (no usable topology): there is no output to key pills by, so `byOutput` stays
+      // empty and only the flat fallback below is populated, exactly as `_pills` used to be built.
+      for (let index = 0; index < count; index++) {
+        const focused = index === 0;
+        byIndex.set(index, {
+          name: displayWorkspaceName(
+            this._config.workspaceNames.get(index + 1) ?? String(index + 1),
+            this._config.stripWorkspaceNumbers,
+          ),
+          focused,
+          visible: focused,
+          occupied: false,
+          urgent: false,
+        });
+      }
+    }
+    this._pillsByOutput = byOutput;
+    this._flatPills = Array.from({length: count}, (_, index) => byIndex.get(index)!);
+    this._ports.indicator.setPills(this._copyPillsByOutput());
     if (this._disposed) return;
     this._ports.decorations.apply(decorationPlan({
       roots: decoRoots,
@@ -947,9 +987,21 @@ export class Engine {
       configPath: l.path,
       errors: l.diagnostics.filter(d => d.severity === 'error').length,
       warnings: l.diagnostics.filter(d => d.severity === 'warning').length,
-      pills: this._copyPills(),
+      pills: this._copyFlatPills(),
       focusedOutput: this._tree?.focusedOutput ?? null,
     };
+  }
+
+  /**
+   * The real, zero-based workspace index at `position` in `output`'s own ascending pill list -- the
+   * inverse of how `_pillsByOutput` groups them. A bar now shows only its own output's pills (Task 8),
+   * so a click on the pill at `position` no longer names the workspace by its position in one shared,
+   * contiguous list; this is how the shell resolves a click back to the workspace it was built for
+   * before turning it into a `workspace <n>` command, i3bar's own behaviour for a pill click. Null
+   * before a tree exists, or if `position` is out of range for what `output` owns right now.
+   */
+  workspaceIndexOn(output: MonitorId, position: number): number | null {
+    return this._tree?.workspacesOn(output)[position] ?? null;
   }
 
   /** A grabbed accelerator fired. */
@@ -992,8 +1044,14 @@ export class Engine {
     });
   }
 
-  private _copyPills(): PillState[] {
-    return this._pills.map(pill => ({...pill}));
+  private _copyFlatPills(): PillState[] {
+    return this._flatPills.map(pill => ({...pill}));
+  }
+
+  private _copyPillsByOutput(): Map<MonitorId, PillState[]> {
+    const copy = new Map<MonitorId, PillState[]>();
+    for (const [output, list] of this._pillsByOutput) copy.set(output, list.map(pill => ({...pill})));
+    return copy;
   }
 
   private _modeBindings(name: string): Binding[] {
