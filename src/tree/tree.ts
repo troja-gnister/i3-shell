@@ -1,5 +1,6 @@
 import type {Direction, Layout} from '../commands/model';
 import {nextFocus, type Wrapping} from './focus';
+import {birthAssignment, orderOutputs, type OutputRef} from './outputs';
 import {resizeCon, type ResizeRequest} from './resize';
 import {moveCon, setLayout, splitCon, toggleLayout} from './operations';
 import {
@@ -25,7 +26,9 @@ const layouts = new Set<Layout>(['splith', 'splitv', 'tabbed', 'stacked']);
 
 export class Tree {
   readonly workspaces: Map<number, WorkspaceCon>;
-  activeWorkspace: number;
+  /** Which workspace each live output currently shows. Exactly one entry per live output. */
+  readonly visible: Map<MonitorId, number>;
+  focusedOutput: MonitorId;
   private nextNodeId = 1;
 
   allocateSplit: AllocateSplit = (layout, root = false) => {
@@ -43,31 +46,78 @@ export class Tree {
     };
   };
 
-  constructor(workspaceCount: number, monitors: readonly MonitorId[]) {
+  constructor(
+    workspaceCount: number,
+    outputs: readonly OutputRef[],
+    primary: MonitorId,
+    pinned: ReadonlyMap<number, MonitorId> = new Map(),
+  ) {
     assertInteger(workspaceCount, 'workspace count');
     if (workspaceCount < 1 || workspaceCount > 36)
       throw new Error('workspace count must be between 1 and 36');
-    if (monitors.length === 0) throw new Error('at least one monitor is required');
-    const uniqueMonitors = new Set<MonitorId>();
-    for (const monitor of monitors) {
-      assertNonnegativeInteger(monitor, 'monitor id');
-      if (uniqueMonitors.has(monitor)) throw new Error(`duplicate monitor id ${monitor}`);
-      uniqueMonitors.add(monitor);
+    if (outputs.length === 0) throw new Error('at least one monitor is required');
+    const seen = new Set<MonitorId>();
+    for (const output of outputs) {
+      assertNonnegativeInteger(output.id, 'monitor id');
+      if (seen.has(output.id)) throw new Error(`duplicate monitor id ${output.id}`);
+      seen.add(output.id);
     }
+    assertNonnegativeInteger(primary, 'primary monitor id');
 
+    const ordered = orderOutputs(outputs, primary);
+    const assignment = birthAssignment(ordered, workspaceCount, pinned);
     this.workspaces = new Map();
-    this.activeWorkspace = 0;
     for (let index = 0; index < workspaceCount; index++) {
-      const roots = new Map<MonitorId, SplitCon>();
-      for (const monitor of monitors) roots.set(monitor, this.allocateSplit('splith', true));
       this.workspaces.set(index, {
         index,
-        monitors: roots,
-        focusedCon: roots.values().next().value ?? null,
+        output: assignment.get(index)!,
+        root: this.allocateSplit('splith', true),
+        focusedCon: null,
         floating: [],
         focusedFloating: null,
       });
     }
+    // focusedCon starts at the workspace's own root, as it did when the first monitor's root was taken.
+    for (const workspace of this.workspaces.values()) workspace.focusedCon = workspace.root;
+
+    this.visible = new Map();
+    for (const output of ordered) {
+      const own = [...this.workspaces.values()].filter(w => w.output === output).map(w => w.index);
+      // Invariant 2: every output shows one of its own when it has one. The birth assignment
+      // guarantees the primary always does; a non-primary output only goes without when there are
+      // fewer workspaces than outputs, in which case it shows the primary's instead of nothing.
+      this.visible.set(output, own[0] ?? this.visible.get(primary)!);
+    }
+    this.focusedOutput = primary;
+  }
+
+  /** The output a workspace lives on. */
+  outputOf(workspace: number): MonitorId {
+    return this.workspace(workspace).output;
+  }
+
+  /** An output's workspaces, ascending. Each bar is drawn from this. */
+  workspacesOn(output: MonitorId): number[] {
+    return [...this.workspaces.values()]
+      .filter(workspace => workspace.output === output)
+      .map(workspace => workspace.index)
+      .sort((a, b) => a - b);
+  }
+
+  /** The workspace the user is on. Derived — GNOME's active workspace is a constant now. */
+  get activeWorkspace(): number {
+    const workspace = this.visible.get(this.focusedOutput);
+    if (workspace === undefined)
+      throw new Error(`focused output ${this.focusedOutput} shows no workspace`);
+    return workspace;
+  }
+
+  /**
+   * The live output set, as a stable string, so the engine can tell a real monitor change from a no-op.
+   * Task 5's `_layoutAndPublish` compares it against the topology's sorted ids.
+   */
+  outputSignature(): string {
+    return [...this.visible.keys()].sort((a, b) => a - b).join(',');
   }
 
   workspace(index: number): WorkspaceCon {
@@ -77,41 +127,35 @@ export class Tree {
     return workspace;
   }
 
-  root(workspace: number, monitor: MonitorId): SplitCon {
-    assertNonnegativeInteger(monitor, 'monitor id');
-    const root = this.workspace(workspace).monitors.get(monitor);
-    if (!root) throw new Error(`unknown monitor ${monitor} on workspace ${workspace}`);
-    return root;
+  // was root(workspace, monitor)
+  root(workspace: number): SplitCon {
+    return this.workspace(workspace).root;
   }
 
+  // was: for (const root of workspace.monitors.values())
   find(window: WindowId): LeafCon | null {
     assertWindowId(window);
     for (const workspace of this.workspaces.values()) {
-      for (const root of workspace.monitors.values()) {
-        const found = findLeaf(root, window);
-        if (found) return found;
-      }
+      const found = findLeaf(workspace.root, window);
+      if (found) return found;
     }
     return null;
   }
 
   owner(con: Con): WorkspaceCon {
-    for (const workspace of this.workspaces.values()) {
-      for (const root of workspace.monitors.values()) {
-        if (contains(root, con)) return workspace;
-      }
-    }
+    for (const workspace of this.workspaces.values())
+      if (contains(workspace.root, con)) return workspace;
     throw new Error(`container ${con.id} is not owned by this tree`);
   }
 
-  location(window: WindowId): {workspace: number; monitor: MonitorId | null; floating: boolean} | null {
+  // `monitor` becomes `output`, and is never null: a floating window's output is its workspace's.
+  location(window: WindowId): {workspace: number; output: MonitorId; floating: boolean} | null {
     assertWindowId(window);
-    for (const [workspaceIndex, workspace] of this.workspaces) {
-      for (const [monitor, root] of workspace.monitors) {
-        if (findLeaf(root, window)) return {workspace: workspaceIndex, monitor, floating: false};
-      }
+    for (const [index, workspace] of this.workspaces) {
+      if (findLeaf(workspace.root, window))
+        return {workspace: index, output: workspace.output, floating: false};
       if (workspace.floating.includes(window))
-        return {workspace: workspaceIndex, monitor: null, floating: true};
+        return {workspace: index, output: workspace.output, floating: true};
     }
     return null;
   }
@@ -210,53 +254,51 @@ export class Tree {
     throw new Error(`floating window ${window} is not owned by this tree`);
   }
 
-  activateWorkspace(index: number): void {
-    this.workspace(index);
-    this.activeWorkspace = index;
-  }
-
   reconfigure(
     workspaceCount: number,
-    monitors: readonly MonitorId[],
+    outputs: readonly OutputRef[],
     primary: MonitorId,
   ): Map<WindowId, number> {
     assertInteger(workspaceCount, 'workspace count');
     if (workspaceCount < 1 || workspaceCount > 36)
       throw new Error('workspace count must be between 1 and 36');
-    if (monitors.length === 0) throw new Error('at least one monitor is required');
-    const targetMonitors = new Set<MonitorId>();
-    for (const monitor of monitors) {
-      assertNonnegativeInteger(monitor, 'monitor id');
-      if (targetMonitors.has(monitor)) throw new Error(`duplicate monitor id ${monitor}`);
-      targetMonitors.add(monitor);
+    if (outputs.length === 0) throw new Error('at least one monitor is required');
+    const targetOutputs = new Set<MonitorId>();
+    for (const output of outputs) {
+      assertNonnegativeInteger(output.id, 'monitor id');
+      if (targetOutputs.has(output.id)) throw new Error(`duplicate monitor id ${output.id}`);
+      targetOutputs.add(output.id);
     }
     assertNonnegativeInteger(primary, 'primary monitor id');
-    if (!targetMonitors.has(primary)) throw new Error(`primary monitor ${primary} is absent`);
+    if (!targetOutputs.has(primary)) throw new Error(`primary monitor ${primary} is absent`);
 
-    for (const workspace of this.workspaces.values()) {
-      const roots = new Map<MonitorId, SplitCon>();
-      for (const monitor of monitors)
-        roots.set(monitor, workspace.monitors.get(monitor) ?? this.allocateSplit('splith', true));
-      const primaryRoot = roots.get(primary)!;
-      for (const [monitor, root] of workspace.monitors) {
-        if (targetMonitors.has(monitor)) continue;
-        const selectedRoot = workspace.focusedCon === root;
-        const hadContents = root.children.length > 0;
-        appendRootContents(root, primaryRoot, this.allocateSplit);
-        if (selectedRoot)
-          workspace.focusedCon = hadContents ? primaryRoot.children.at(-1)! : primaryRoot;
-      }
-      workspace.monitors = roots;
-      this.normalizeWorkspace(workspace, undefined, []);
+    const live = new Set(outputs.map(output => output.id));
+    const ordered = orderOutputs(outputs, primary);
+    for (const workspace of this.workspaces.values())
+      if (!live.has(workspace.output)) workspace.output = primary;
+    // Rebuild visibility: an output keeps showing its workspace if it still owns it, else takes its
+    // lowest-numbered. Roots are never merged, so no layout is lost. An output left owning nothing
+    // (fewer workspaces than live outputs) keeps whatever it was already showing rather than being
+    // corrupted with no entry at all; a brand-new output with nothing of its own yet borrows the
+    // first surviving workspace until something is assigned to it.
+    for (const output of [...this.visible.keys()]) if (!live.has(output)) this.visible.delete(output);
+    for (const output of ordered) {
+      const own = this.workspacesOn(output);
+      const current = this.visible.get(output);
+      if (current !== undefined && own.includes(current)) continue;
+      if (own.length > 0) this.visible.set(output, own[0]!);
+      else if (current === undefined || !this.workspaces.has(current))
+        this.visible.set(output, [...this.workspaces.keys()][0]!);
     }
+    if (!live.has(this.focusedOutput)) this.focusedOutput = primary;
 
     for (let index = this.workspaces.size; index < workspaceCount; index++) {
-      const roots = new Map<MonitorId, SplitCon>();
-      for (const monitor of monitors) roots.set(monitor, this.allocateSplit('splith', true));
+      const root = this.allocateSplit('splith', true);
       this.workspaces.set(index, {
         index,
-        monitors: roots,
-        focusedCon: roots.values().next().value ?? null,
+        output: primary,
+        root,
+        focusedCon: root,
         floating: [],
         focusedFloating: null,
       });
@@ -267,26 +309,23 @@ export class Tree {
       const destination = this.workspace(workspaceCount - 1);
       let movedActiveCon: Con | null = null;
       let movedActiveFloating: WindowId | null = null;
+      const activeBefore = this.visible.get(this.focusedOutput);
 
       for (let index = workspaceCount; index < this.workspaces.size; index++) {
         const source = this.workspace(index);
         let selectedCon = source.focusedCon;
-        for (const monitor of monitors) {
-          const sourceRoot = source.monitors.get(monitor)!;
-          for (const leaf of leaves(sourceRoot)) moves.set(leaf.window, destination.index);
-          const selectedRoot = selectedCon === sourceRoot;
-          const hadContents = sourceRoot.children.length > 0;
-          appendRootContents(sourceRoot, destination.monitors.get(monitor)!, this.allocateSplit);
-          if (selectedRoot)
-            selectedCon = hadContents
-              ? destination.monitors.get(monitor)!.children.at(-1)!
-              : null;
-        }
+        const sourceRoot = source.root;
+        for (const leaf of leaves(sourceRoot)) moves.set(leaf.window, destination.index);
+        const selectedRoot = selectedCon === sourceRoot;
+        const hadContents = sourceRoot.children.length > 0;
+        appendRootContents(sourceRoot, destination.root, this.allocateSplit);
+        if (selectedRoot) selectedCon = hadContents ? destination.root.children.at(-1)! : null;
+
         for (const window of source.floating) {
           moves.set(window, destination.index);
           if (!destination.floating.includes(window)) destination.floating.push(window);
         }
-        if (index === this.activeWorkspace) {
+        if (index === activeBefore) {
           if (source.focusedFloating !== null) movedActiveFloating = source.focusedFloating;
           else movedActiveCon = selectedCon;
         }
@@ -294,8 +333,12 @@ export class Tree {
 
       for (let index = this.workspaces.size - 1; index >= workspaceCount; index--)
         this.workspaces.delete(index);
-      if (this.activeWorkspace >= workspaceCount) {
-        this.activeWorkspace = workspaceCount - 1;
+
+      // Every output whose shown workspace was just deleted now shows the destination instead.
+      for (const [output, shown] of this.visible)
+        if (shown >= workspaceCount) this.visible.set(output, destination.index);
+
+      if (activeBefore !== undefined && activeBefore >= workspaceCount) {
         if (movedActiveFloating !== null) {
           destination.focusedFloating = movedActiveFloating;
         } else if (movedActiveCon !== null) {
@@ -306,7 +349,6 @@ export class Tree {
       this.normalizeWorkspace(destination, undefined, []);
     }
 
-    this.activeWorkspace = Math.min(this.activeWorkspace, workspaceCount - 1);
     this.normalize();
     return moves;
   }
@@ -319,7 +361,7 @@ export class Tree {
     ws.focusedFloating = window;
   }
 
-  setFloating(window: WindowId, enabled: boolean, monitor: MonitorId): void {
+  setFloating(window: WindowId, enabled: boolean): void {
     assertWindowId(window);
     const location = this.location(window);
     if (!location) throw new Error(`window ${window} is not tracked`);
@@ -338,13 +380,12 @@ export class Tree {
       return;
     }
 
-    this.root(location.workspace, monitor);
     const index = workspace.floating.indexOf(window);
     if (index === -1) throw new Error(`floating window ${window} is not owned by its workspace`);
     workspace.floating.splice(index, 1);
     if (workspace.focusedFloating === window)
       workspace.focusedFloating = workspace.floating[0] ?? null;
-    this.insert(window, location.workspace, monitor);
+    this.insert(window, location.workspace);
   }
 
   focusModeToggle(): WindowId | null {
@@ -367,9 +408,10 @@ export class Tree {
     return tiled.window;
   }
 
-  moveToWorkspace(target: number, monitor: MonitorId): WindowId[] {
+  // The target workspace's root is the only candidate now — it has exactly one.
+  moveToWorkspace(target: number): WindowId[] {
     const targetWorkspace = this.workspace(target);
-    const targetRoot = this.root(target, monitor);
+    const targetRoot = targetWorkspace.root;
     const selection = this.selection();
     if (!selection) return [];
 
@@ -426,13 +468,12 @@ export class Tree {
     return windows;
   }
 
-  insert(window: WindowId, workspace: number, monitor: MonitorId): LeafCon {
+  insert(window: WindowId, workspace: number): LeafCon {
     assertWindowId(window);
     const ws = this.workspace(workspace);
-    const root = this.root(workspace, monitor);
     if (this.location(window)) throw new Error(`window ${window} is already tracked`);
 
-    const insertion = this.insertionPoint(ws, root);
+    const insertion = this.insertionPoint(ws, ws.root);
     const leaf: LeafCon = {
       kind: 'leaf',
       id: this.nextNodeId++,
@@ -457,15 +498,13 @@ export class Tree {
         return;
       }
 
-      for (const root of workspace.monitors.values()) {
-        const leaf = findLeaf(root, window);
-        if (!leaf) continue;
-        const fallback = workspace.focusedCon === leaf ? ancestorChain(leaf.parent) : [];
-        if (workspace.focusedCon === leaf) workspace.focusedCon = null;
-        detach(leaf);
-        this.normalizeWorkspace(workspace, undefined, fallback);
-        return;
-      }
+      const leaf = findLeaf(workspace.root, window);
+      if (!leaf) continue;
+      const fallback = workspace.focusedCon === leaf ? ancestorChain(leaf.parent) : [];
+      if (workspace.focusedCon === leaf) workspace.focusedCon = null;
+      detach(leaf);
+      this.normalizeWorkspace(workspace, undefined, fallback);
+      return;
     }
   }
 
@@ -475,6 +514,8 @@ export class Tree {
   }
 
   check(live?: ReadonlySet<WindowId>): void {
+    // this.activeWorkspace itself throws if focusedOutput has no visible entry, so that case never
+    // reaches the "does not exist" check below.
     if (!this.workspaces.has(this.activeWorkspace))
       throw new Error(`active workspace ${this.activeWorkspace} does not exist`);
     if (this.workspaces.size < 1 || this.workspaces.size > 36)
@@ -488,20 +529,22 @@ export class Tree {
       assertNonnegativeInteger(workspaceIndex, 'workspace index');
       if (workspace.index !== workspaceIndex)
         throw new Error(`workspace ${workspaceIndex} has mismatched index ${workspace.index}`);
-      if (workspace.monitors.size === 0)
-        throw new Error(`workspace ${workspaceIndex} has no monitor roots`);
+      assertNonnegativeInteger(workspace.output, 'monitor id');
       const owned = new Set<Con>();
-
-      for (const [monitor, root] of workspace.monitors) {
-        assertNonnegativeInteger(monitor, 'monitor id');
-        inspectCon(root, null, true, seenCons, nodeIds, windowIds, owned);
-      }
+      inspectCon(workspace.root, null, true, seenCons, nodeIds, windowIds, owned);
 
       if (workspace.focusedCon !== null && !owned.has(workspace.focusedCon))
         throw new Error(
           `workspace ${workspaceIndex} tiled selection container ${workspace.focusedCon.id} is outside its workspace`,
         );
     }
+
+    // Ownership (workspace.output === output) is not required here: when workspaceCount drops below
+    // the live output count, reconfigure cannot give every output one of its own, and would rather
+    // show two outputs the same surviving workspace than leave one showing nothing at all.
+    for (const [output, shown] of this.visible)
+      if (!this.workspaces.has(shown))
+        throw new Error(`output ${output} shows unknown workspace ${shown}`);
 
     for (const [workspaceIndex, workspace] of this.workspaces) {
       const localFloating = new Set<WindowId>();
@@ -532,7 +575,7 @@ export class Tree {
     let fallback = initialFallback;
     if (live) {
       const deadLeaves: LeafCon[] = [];
-      for (const root of workspace.monitors.values()) collectDeadLeaves(root, live, deadLeaves);
+      collectDeadLeaves(workspace.root, live, deadLeaves);
       for (const leaf of deadLeaves) {
         if (!leaf.parent) continue;
         if (workspace.focusedCon === leaf) {
@@ -550,7 +593,7 @@ export class Tree {
     while (changed) {
       changed = false;
       const splits: SplitCon[] = [];
-      for (const root of workspace.monitors.values()) collectSplitsPostorder(root, splits);
+      collectSplitsPostorder(workspace.root, splits);
       for (const con of splits) {
         if (con.root || con.parent === null || !con.parent.children.includes(con)) continue;
         if (con.children.length === 0) {
@@ -739,14 +782,12 @@ function collectSplitsPostorder(con: Con, result: SplitCon[]): void {
 }
 
 function repairWorkspace(workspace: WorkspaceCon, fallback: readonly Con[]): void {
-  for (const root of workspace.monitors.values()) repairFocusedChildren(root);
+  repairFocusedChildren(workspace.root);
   if (workspace.focusedCon === null || !workspaceContains(workspace, workspace.focusedCon)) {
     const ancestor = fallback.find(con => workspaceContains(workspace, con));
-    if (ancestor) workspace.focusedCon = descendFocused(ancestor) ?? ancestor;
-    else {
-      const root = workspace.monitors.values().next().value as SplitCon | undefined;
-      workspace.focusedCon = root ? descendFocused(root) ?? root : null;
-    }
+    workspace.focusedCon = ancestor
+      ? descendFocused(ancestor) ?? ancestor
+      : descendFocused(workspace.root) ?? workspace.root;
   }
   if (workspace.focusedCon) focusChain(workspace.focusedCon);
   if (workspace.focusedFloating !== null && !workspace.floating.includes(workspace.focusedFloating))
@@ -761,10 +802,7 @@ function repairFocusedChildren(con: Con): void {
 }
 
 function workspaceContains(workspace: WorkspaceCon, target: Con): boolean {
-  for (const root of workspace.monitors.values()) {
-    if (contains(root, target)) return true;
-  }
-  return false;
+  return contains(workspace.root, target);
 }
 
 function assertInteger(value: number, label: string): void {

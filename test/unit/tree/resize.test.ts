@@ -145,11 +145,11 @@ describe('tiled resize', () => {
   });
 
   it('keeps a selected parent container as the resize target', () => {
-    const tree = new Tree(1, [0]);
-    const root = tree.root(0, 0);
-    const first = tree.insert(1, 0, 0);
-    const second = tree.insert(2, 0, 0);
-    const third = tree.insert(3, 0, 0);
+    const tree = new Tree(1, [{id: 0, index: 0}], 0);
+    const root = tree.root(0);
+    const first = tree.insert(1, 0);
+    const second = tree.insert(2, 0);
+    const third = tree.insert(3, 0);
     const inner = tree.allocateSplit('splitv');
     wire(inner, [first, second]);
     wire(root, [inner, third]);
@@ -166,11 +166,11 @@ describe('tiled resize', () => {
   });
 
   it('does nothing for floating selection', () => {
-    const tree = new Tree(1, [0]);
-    const tiled = tree.insert(1, 0, 0);
+    const tree = new Tree(1, [{id: 0, index: 0}], 0);
+    const tiled = tree.insert(1, 0);
     tree.workspace(0).floating = [2];
     tree.selectFloating(2);
-    const root = tree.root(0, 0);
+    const root = tree.root(0);
     const before = [...root.percents];
 
     expect(tree.resize({action: 'grow', dimension: 'width', px: 10, ppt: 10}, new Map())).toBe(false);

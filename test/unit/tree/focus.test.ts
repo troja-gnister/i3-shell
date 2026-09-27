@@ -104,9 +104,9 @@ function wire(parent: SplitCon, children: Con[]): void {
 
 describe('Tree focus selection', () => {
   it('selects a directional target and reports a blocked direction without changing selection', () => {
-    const tree = new Tree(1, [0]);
-    const a = tree.insert(1, 0, 0);
-    const b = tree.insert(2, 0, 0);
+    const tree = new Tree(1, [{id: 0, index: 0}], 0);
+    const a = tree.insert(1, 0);
+    const b = tree.insert(2, 0);
     tree.select(a);
 
     expect(tree.focus('right', 'no')).toBe(b);
@@ -116,10 +116,10 @@ describe('Tree focus selection', () => {
   });
 
   it('selects immediate parents up to and including the monitor root', () => {
-    const tree = new Tree(1, [0]);
-    const child = tree.insert(1, 0, 0);
+    const tree = new Tree(1, [{id: 0, index: 0}], 0);
+    const child = tree.insert(1, 0);
     const parent = tree.allocateSplit('tabbed');
-    const root = tree.root(0, 0);
+    const root = tree.root(0);
     wire(parent, [child]);
     wire(root, [parent]);
     tree.select(child);
@@ -133,11 +133,11 @@ describe('Tree focus selection', () => {
   });
 
   it('selects only the immediate focused child of a selected parent', () => {
-    const tree = new Tree(1, [0]);
-    const child = tree.insert(1, 0, 0);
+    const tree = new Tree(1, [{id: 0, index: 0}], 0);
+    const child = tree.insert(1, 0);
     const inner = tree.allocateSplit('stacked');
     const parent = tree.allocateSplit('tabbed');
-    const root = tree.root(0, 0);
+    const root = tree.root(0);
     wire(inner, [child]);
     wire(parent, [inner]);
     wire(root, [parent]);
@@ -148,8 +148,8 @@ describe('Tree focus selection', () => {
   });
 
   it('does nothing for floating selections', () => {
-    const tree = new Tree(1, [0]);
-    const tiled = tree.insert(1, 0, 0);
+    const tree = new Tree(1, [{id: 0, index: 0}], 0);
+    const tiled = tree.insert(1, 0);
     const workspace = tree.workspace(0);
     workspace.floating = [2];
     tree.selectFloating(2);
@@ -162,8 +162,8 @@ describe('Tree focus selection', () => {
   });
 
   it('does nothing when the selected root is empty', () => {
-    const tree = new Tree(1, [0]);
-    const root = tree.root(0, 0);
+    const tree = new Tree(1, [{id: 0, index: 0}], 0);
+    const root = tree.root(0);
 
     for (const direction of ['left', 'right', 'up', 'down'] satisfies Direction[])
       expect(tree.focus(direction, 'yes')).toBeNull();
