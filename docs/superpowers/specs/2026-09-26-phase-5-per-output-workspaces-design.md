@@ -72,7 +72,21 @@ it, so §7.2's invariants and every `parent.root` test in the main spec are unaf
 Pinned by `normalize()` and by property tests:
 
 1. Every workspace has exactly one output, and that output is live.
-2. Every output shows exactly one workspace, and that workspace's `output` is that output.
+2. Every live output **owns** at least one workspace, and shows exactly one workspace it owns.
+
+   Ownership is the load-bearing half and does not hold by construction. Two things break it: a
+   workspace moved to the primary when its output vanished does not return on replug, and a
+   `workspace N output …` pin can concentrate several workspaces on one output. Either leaves an output
+   owning nothing, and an output owning nothing cannot show one of its own. A count large enough is
+   **not** sufficient — this was asserted twice during implementation and was false both times.
+
+   It is therefore enforced, not assumed, by a repair pass (`coverOutputs` in `src/tree/outputs.ts`)
+   run after every assignment change, in the constructor and in `reconfigure`. The pass always
+   succeeds: with K live outputs and W ≥ K workspaces (guaranteed by §2.3's clamp), if one output owns
+   none then the other ≤ K−1 own all W > K−1, so some output owns ≥ 2 and can spare one; taking from an
+   owner of ≥ 2 leaves it ≥ 1, so the pass is monotone and terminates. The donor is the output owning
+   the most, ties by lowest `MonitorId`, and it gives up a workspace it is not currently showing where
+   it can, since taking the shown one would move what the user is looking at.
 3. `focusedOutput` always names a live output.
 4. A window **in a workspace's tree** (tiled or floating) is on GNOME's *live* workspace if and only
    if that workspace is visible; otherwise it is on the *attic* (§5). Windows `excludedFromTree`
@@ -86,8 +100,10 @@ the one a user describes as "primary is workspace one, external is workspace two
 first**, then the remainder by ascending Mutter monitor index. The primary must come first because
 "primary is workspace one" is the behaviour being asked for; `geometryTopology.ts:55` sorts monitors by
 index and tracks the primary separately, so the primary is not index 0 in general and sorting by index
-alone would hand workspace I to whichever output Mutter happened to enumerate first. Workspaces beyond the output count are assigned to the
-**primary**, which keeps invariant 1 total; §2.4 moves one to the focused output the first time it is
+alone would hand workspace I to whichever output Mutter happened to enumerate first. The requested count is first clamped to
+`max(requested, live output count)` — i3 creates one workspace per output at startup whatever the config
+names, and the clamp is what makes §2.2's coverage repair always able to find a donor. Workspaces beyond
+the output count are assigned to the **primary**, which keeps invariant 1 total; §2.4 moves one to the focused output the first time it is
 shown. i3 instead hides a never-visited workspace from every bar, so its output is unobservable; with
 the fixed set of §2.5 this design shows all *N* pills, and a workspace therefore always belongs to
 exactly one output's bar. A third divergence, recorded for the same reason as §2.5's.

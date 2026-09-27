@@ -3197,7 +3197,10 @@ rule, and the window moves the engine owes Mutter afterwards.
 - Test: `test/unit/tree/topology.test.ts`, `test/unit/tree/outputsModel.test.ts`, `test/unit/engine/lifecycle.test.ts`
 
 **Interfaces:**
-- Consumes: `reassignLost`, `adoptOutput` from Task 2.
+- Consumes: `reassignLost`, `adoptOutput` and `coverOutputs` from `src/tree/outputs.ts`. **`coverOutputs`
+  already guarantees every live output owns a workspace** — Task 3 added it after the review found two
+  reachable states writing `undefined` into `visible`. Do not reimplement donor selection here; by the
+  time this task's visibility rebuild runs, every output owns something, so `own[0]!` is sound.
 - Produces: `tree.remembered(): ReadonlyMap<number, MonitorId>` — exposed for the tests and for `GetTree` if a later phase wants it.
 
 - [ ] **Step 1: Write the failing tests**
@@ -3312,15 +3315,7 @@ Replace the reassignment block from Task 3 Step 4 with:
       const own = this.workspacesOn(output);
       const current = this.visible.get(output);
       if (current !== undefined && own.includes(current)) continue;
-      if (own.length > 0) { this.visible.set(output, own[0]!); continue; }
-      // Invariant 2: an output must show one of its own, so take one from whoever holds the most.
-      const donor = ordered
-        .filter(candidate => candidate !== output && this.workspacesOn(candidate).length > 1)
-        .sort((a, b) => this.workspacesOn(b).length - this.workspacesOn(a).length || a - b)[0];
-      if (donor === undefined) throw new Error('no output can spare a workspace');
-      const taken = this.workspacesOn(donor).at(-1)!;
-      this.workspace(taken).output = output;
-      this.visible.set(output, taken);
+      this.visible.set(output, own[0]!);
     }
     if (!live.has(this.focusedOutput)) this.focusedOutput = primary;
 ```
