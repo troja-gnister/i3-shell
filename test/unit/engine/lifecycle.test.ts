@@ -26,7 +26,10 @@ describe('engine lifecycle', () => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
     const before = f.engine.windowsSnapshot()[0].generation!;
     f.change(1, event === 'fullscreen' ? {fullscreen: true} : event === 'minimized' ? {minimized: true} : {maximizedH: true, maximizedV: true}, event); f.flush();
-    if (event === 'minimized') expect(f.pills[0].occupied).toBe(true);
+    // Minimizing evicts a window from the tree outright (excludedFromTree), and occupancy is now read
+    // from the tree, not from WindowInfo.workspace: a minimized window no longer keeps its workspace's
+    // pill lit.
+    if (event === 'minimized') expect(f.pills[0].occupied).toBe(false);
     if (event === 'maximized') {
       f.change(1, {maximizedH: false}, event); f.flush();
       expect(f.calls.filter(c => c === 'unmaximize:1')).toHaveLength(1);
@@ -90,13 +93,19 @@ describe('engine lifecycle', () => {
     expect(f.engine.treeSnapshot().workspaces).toHaveLength(10); expect(notified).toBeGreaterThan(0);
     f.add(2); f.flush(); expect(f.engine.windowsSnapshot()).toHaveLength(2);
   });
-  it('workspace move acknowledgement keeps unchanged geometry and external move occurs once', () => {
+  it('workspace move acknowledgement keeps unchanged geometry for a workspace that is not shown', () => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.flush(); f.applied.length = 0;
-    const node = f.engine.treeSnapshot().workspaces[0].monitors[0].root;
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 1); f.flush();
-    expect(f.applied).toHaveLength(0); expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: node.kind === 'split' ? node.children : []});
-    f.change(1, {workspace: 3}, 'workspace'); f.change(1, {workspace: 3}, 'workspace'); f.flush();
-    expect(f.engine.treeSnapshot().workspaces[3].monitors[0].root).toMatchObject({children: [{window: 1}]});
+    // Workspace 1 is not the (single) output's visible workspace, so its geometry is never computed --
+    // there is nothing to apply, per the note at engine.ts's layout loop -- and the parked leaf's rect
+    // is therefore null rather than the one it had while still on the visible workspace.
+    expect(f.applied).toHaveLength(0);
+    expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{kind: 'leaf', window: 1, rect: null}]});
+    // A native 'workspace' echo for a window the tree already tracks is a no-op now: Mutter's workspace
+    // field says nothing about which i3 workspace a window belongs to (spec 2.6), so it can no longer
+    // relocate a tracked window the way it once could.
+    f.change(1, {workspace: 3}, 'workspace'); f.flush();
+    expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{kind: 'leaf', window: 1, rect: null}]});
   });
   it('retains nodes on reload and rejects restart without changing selection', () => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.add(2); f.flush();
@@ -119,19 +128,27 @@ describe('engine lifecycle', () => {
     // the (unchanged) decoration plan — but does nothing else observable.
     f.focus(1); f.calls.length = 0; f.focus(1); f.flush(); expect(f.calls).toEqual(['decorations']);
   });
-  it('enforces effective count for zero, moves before shrinking, and defers growing geometry', () => {
+  it('enforces effective count for zero and moves before shrinking', () => {
     const f = fakeEngine(); f.engine.start(); expect(f.engine.config.workspaceCount).toBe(0);
     f.setNativeCount(7); expect(f.ports.workspaces.count).toBe(10);
-    f.add(1, {workspace: 9}); f.flush(); const old = f.engine.treeSnapshot().workspaces[9].monitors[0].root;
+    // A new window always adopts onto the visible workspace now (there is no `workspace N` yet to move
+    // it away with a real switch), so getting it onto workspace 9 goes through `move_to_workspace`.
+    f.add(1); f.flush();
+    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 10, name: '10'}}], 0); f.flush();
+    const old = f.engine.treeSnapshot().workspaces[9].monitors[0].root;
     const loaded = f.load('bindsym Mod4+q kill');
     f.setNextLoad({...loaded, config: {...loaded.config!, workspaceCount: 2}}); f.calls.length = 0;
     f.engine.run([{type: 'reload'}], 0); f.flush();
     expect(f.calls.indexOf('moveTo:1:1')).toBeLessThan(f.calls.indexOf('settings.apply'));
     expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{children: old.kind === 'split' ? old.children : []}]});
     f.setNextLoad({...loaded, config: {...loaded.config!, workspaceCount: 12}});
-    f.applied.length = 0; f.engine.run([{type: 'reload'}], 0);
-    expect(f.engine.treeSnapshot()).toMatchObject({ready: false, workspaces: []}); expect(f.applied).toEqual([]);
-    f.setTopology(topology(12)); f.engine.onWorkspacesChanged(); f.flush(); expect(f.engine.treeSnapshot().workspaces).toHaveLength(12);
+    f.applied.length = 0; f.engine.run([{type: 'reload'}], 0); f.flush();
+    // Work areas are per output now (Task 4), not per workspace, so growing the count no longer strands
+    // the new workspaces without geometry the way the old per-workspace work-area map could: there is
+    // nothing left to defer.
+    expect(f.engine.treeSnapshot()).toMatchObject({ready: true});
+    expect(f.engine.treeSnapshot().workspaces).toHaveLength(12);
+    expect(f.applied).toEqual([]);
   });
   it('does not consume stale observations against a newer generation', () => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
@@ -140,13 +157,29 @@ describe('engine lifecycle', () => {
     const before = f.applied.length; f.flush(); expect(f.applied.length).toBe(before);
     f.engine.onWindowEvent({type: 'frame', id: 1}); f.flush(); expect(f.applied.length).toBe(before + 1);
   });
-  it.each(['fullscreen', 'minimized'] as const)('uses current truth for mismatched move acknowledgements while %s', state => {
+  it('ignores a mismatched native workspace report while fullscreen', () => {
+    // A native 'workspace' echo that disagrees with the tree is not trusted any more: Mutter's
+    // workspace field says nothing about which i3 workspace a window belongs to (spec 2.6). Fullscreen
+    // never excludes a window from the tree either, so it stays exactly where the tree's own move put it.
     const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
-    f.ports.windows.moveToWorkspace = id => { f.change(id, {workspace: 4, [state]: true}, 'workspace'); return true; };
+    f.ports.windows.moveToWorkspace = id => { f.change(id, {workspace: 4, fullscreen: true}, 'workspace'); return true; };
+    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 0); f.flush();
+    expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{window: 1}]});
+    f.change(1, {fullscreen: false}, 'fullscreen'); f.flush();
+    expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{window: 1}]});
+  });
+  it('re-adopts a minimized window onto the visible workspace, not its former one, on restore', () => {
+    // Minimizing evicts a window from the tree outright, and nothing remembers its former workspace
+    // (only its floating-ness survives in `_minimized`), so a mismatched native report at the moment it
+    // minimizes changes nothing: on restore it comes back like a window the tree has never seen --
+    // adopted onto the output's currently visible workspace, not onto workspace 1 (the tree's actual
+    // move target) or 4 (Mutter's mismatched report).
+    const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
+    f.ports.windows.moveToWorkspace = id => { f.change(id, {workspace: 4, minimized: true}, 'workspace'); return true; };
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 0); f.flush();
     expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: []});
-    f.change(1, {[state]: false}, state); f.flush();
-    expect(f.engine.treeSnapshot().workspaces[4].monitors[0].root).toMatchObject({children: [{window: 1}]});
+    f.change(1, {minimized: false}, 'minimized'); f.flush();
+    expect(f.engine.treeSnapshot().workspaces[0].monitors[0].root).toMatchObject({children: [{window: 1}]});
   });
   it('preserves pending destination until an asynchronous native acknowledgement', () => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
@@ -414,34 +447,23 @@ describe('decorations', () => {
     expect(applied.get(1)!.y).toBe(50);   // work area y 30 + 20
   });
 
-  it('draws nothing for a workspace that is not the active one', () => {
-    // Every workspace is laid out on every commit -- inactive ones are
-    // pre-tiled -- but only the active one is on screen. Mutter hides an
-    // inactive workspace's windows; the renderer's actors are plain children
-    // of window_group with no tie to window visibility, so a plan naming an
-    // inactive workspace paints its borders, frame and tab bar straight over
-    // the active workspace, where the tabs also swallow clicks.
-    const f = fakeEngine();
+  it('draws nothing for a workspace that is not shown on any output', () => {
+    // Every output's visible workspace is on screen at once now and is decorated (Task 5); a workspace
+    // that no output shows is parked -- untiled, unobserved -- and gets no chrome. There is no
+    // `workspace N` yet (Task 7) to change what is shown, so the only way to get content onto a parked
+    // workspace during this task is `move_to_workspace`.
+    const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 10, index: 0}, {id: 11, index: 1}], primary: 10, workspaceCount: 3});
     f.engine.start();
     f.engine.setRowHeight(20);
-    f.add(1);                                   // workspace 0, the active one
-    f.flush();
-    f.ports.workspaces.activate(4, 0);
-    f.flush();
-    f.add(2, {workspace: 4});
-    f.add(3, {workspace: 4});
-    f.flush();
-    f.engine.run(parseCommands('layout tabbed').commands, 0);
-    f.flush();
-    // While workspace 4 is the active one its chrome is exactly what is drawn.
-    expect(f.plan!.titleRows).toHaveLength(1);
-    expect(f.plan!.borders.map(b => b.window).sort()).toEqual([2, 3]);
+    f.add(1); f.flush();                 // workspace 0, output 10 -- visible
+    f.add(2, {monitor: 11}); f.flush();  // workspace 1, output 11 -- visible
+    f.add(3); f.flush();                 // adopts onto workspace 0, output 10's visible workspace
 
-    f.ports.workspaces.activate(0, 0);
-    f.flush();
-    expect(f.plan!.borders.map(b => b.window)).toEqual([1]);
-    expect(f.plan!.titleRows).toEqual([]);
-    expect(f.plan!.frames).toEqual([]);
+    f.engine.focusWindow(3);
+    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 3, name: '3'}}], 0); f.flush();
+    // Workspace 2 belongs to output 10 (the surplus goes to the primary) but neither output shows it.
+    expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: [{window: 3}]});
+    expect(f.plan!.borders.map(b => b.window).sort()).toEqual([1, 2]);
   });
 });
 
@@ -499,8 +521,14 @@ describe('focusWindow', () => {
     // selection reads the active workspace's selection -- so accepting one
     // from elsewhere would move the focus to whatever that workspace happened
     // to have selected.
+    //
+    // There is no `workspace N` yet (Task 7) to switch what is active, so getting window 3 onto
+    // "another workspace" goes through `move_to_workspace` instead of the old `workspace: 4` fixture shorthand.
     const f = tabbed();
-    f.add(3, {workspace: 4});
+    f.add(3);
+    f.flush();
+    f.engine.focusWindow(3);
+    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 0);
     f.flush();
     f.calls.length = 0;
     f.engine.focusWindow(3);
@@ -594,18 +622,18 @@ describe('focusNode', () => {
     // Same reason focusWindow refuses one: only the active workspace has
     // chrome on screen, and activating the selection reads that workspace's
     // selection.
+    //
+    // There is no `workspace N` yet (Task 7), so a node lands on "another workspace" via
+    // `move_to_workspace` rather than the old `workspace: 4` fixture shorthand; the refusal itself
+    // (searching only the active workspace's root) does not care whether the id names a leaf or a
+    // nested container, so a plain leaf id exercises the same code path.
     const f = fakeEngine();
     f.engine.start();
     f.engine.setRowHeight(20);
-    f.ports.workspaces.activate(4, 0);
+    f.add(1);
     f.flush();
-    f.add(1, {workspace: 4});
-    f.add(2, {workspace: 4});
-    f.flush();
-    f.engine.run(parseCommands('layout tabbed').commands, 0);
-    f.flush();
-    const nodeId = f.plan!.titleRows[0].nodeId;
-    f.ports.workspaces.activate(0, 0);
+    const nodeId = f.tree().find(1)!.id;
+    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 0);
     f.flush();
     f.calls.length = 0;
     f.engine.focusNode(nodeId);

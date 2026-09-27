@@ -133,4 +133,43 @@ describe('Engine', () => {
     e.stop();
     expect(f.calls).toEqual(['ungrabAll', 'settings.restore']);
   });
+
+  it('lays out only the visible workspace of each output', () => {
+    // Two outputs, ten workspaces. The old loop laid out twenty roots; two are visible.
+    const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+    const e = f.engine;
+    e.start();
+    f.add(1, {workspace: 0, monitor: 0});
+    f.add(2, {workspace: 0, monitor: 1});
+    const laid = f.appliedRects();
+    expect([...laid.keys()].sort()).toEqual([1, 2]);
+  });
+
+  it('derives a pill’s occupancy from the tree, not from the window’s GNOME workspace', () => {
+    // Every window's GNOME workspace is 0 under the attic; occupancy must still follow the tree.
+    const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+    const e = f.engine;
+    e.start();
+    f.add(1, {workspace: 0, monitor: 1});
+    expect(e.state().pills[1]!.occupied).toBe(true);
+    expect(e.state().pills[0]!.occupied).toBe(false);
+  });
+
+  it('reports the focused output', () => {
+    const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+    const e = f.engine;
+    e.start();
+    expect(e.state().focusedOutput).toBe(0);
+  });
+
+  it('adopts a window onto the visible workspace of the output it is on', () => {
+    // Spec 2.6: the pre-enable workspace is unrecoverable once num-workspaces drops to 2.
+    const f = fakePorts(referenceText, {
+      monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10,
+      existingWindows: [{id: 5, workspace: 0, monitor: 1}],
+    });
+    const e = f.engine;
+    e.start();
+    expect(f.tree().location(5)).toEqual({workspace: 1, output: 1, floating: false});
+  });
 });

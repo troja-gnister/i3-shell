@@ -269,13 +269,15 @@ describe('engine command dispatch', () => {
   });
 
   it('resolves numeric strings and workspace names before moving the selection', () => {
+    // `workspace N` (Task 7) is what would let a second move act on window 1 again after switching to
+    // where it landed; until then, a second window on the (single, always-visible) active workspace
+    // exercises the same name/number resolution for the second move.
     const f = fakeEngine(referenceText); f.engine.start(); f.add(1); f.flush();
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'name', name: '2:II'}}], 1);
     expect(f.calls).toContain('moveTo:1:1');
-    f.ports.workspaces.activate(1, 2);
-    f.focus(1);
+    f.add(2); f.flush();
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'name', name: '3'}}], 3);
-    expect(f.calls).toContain('moveTo:1:2');
+    expect(f.calls).toContain('moveTo:2:2');
   });
 
   it('reports failed workspace activation and does not wrap at workspace zero', () => {

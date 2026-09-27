@@ -6,7 +6,13 @@ describe('engine resilience to states it cannot complete', () => {
     const f = fakeEngine();
     f.engine.start();
     f.add(1);
-    f.add(2, {workspace: 1});
+    f.add(2);
+    f.flush();
+    // A new window always adopts onto the visible workspace now (there is no `workspace N` yet to move
+    // it away with a real switch), so getting window 2 onto a second occupied workspace goes through
+    // `move_to_workspace`.
+    f.engine.focusWindow(2);
+    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 0);
     f.flush();
     expect(f.pills.filter(pill => pill.occupied)).toHaveLength(2);
 

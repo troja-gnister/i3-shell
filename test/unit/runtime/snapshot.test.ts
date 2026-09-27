@@ -3,7 +3,7 @@ import {Tree} from '../../../src/tree/tree';
 import {serializeTree} from '../../../src/runtime/snapshot';
 import {topology, windowInfo} from '../engine/fakeEngine';
 it('projects roots, selection and titles into detached JSON values', () => {
-  const tree = new Tree(1, [10]); const leaf = tree.insert(1, 0, 10);
+  const tree = new Tree(1, [{id: 10, index: 0}], 10); const leaf = tree.insert(1, 0);
   const area = {x: 0, y: 30, width: 1000, height: 700};
   const snapshot = serializeTree(tree, topology(1), new Map([[leaf, area]]), new Map([[1, windowInfo(1)]]), 7, 0);
   expect(snapshot).toMatchObject({version: 1, revision: 7, ready: true, activeWorkspace: 0,
@@ -14,10 +14,10 @@ it('projects roots, selection and titles into detached JSON values', () => {
 });
 
 it('reserves one row for a tabbed split and one row per child for a stacked split', () => {
-  const tree = new Tree(1, [10]);
-  tree.insert(1, 0, 10);
-  tree.insert(2, 0, 10);
-  const root = tree.workspace(0).monitors.get(10)!;
+  const tree = new Tree(1, [{id: 10, index: 0}], 10);
+  tree.insert(1, 0);
+  tree.insert(2, 0);
+  const root = tree.workspace(0).root;
   const area = {x: 0, y: 30, width: 1000, height: 700};
   const windows = new Map([[1, windowInfo(1)], [2, windowInfo(2)]]);
 

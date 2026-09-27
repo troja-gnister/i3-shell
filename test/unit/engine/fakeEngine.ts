@@ -4,7 +4,8 @@ import type {Binding, Colors} from '../../../src/config/model';
 import type {Accent} from '../../../src/config/colors';
 import type {PillState, Topology, WindowEvent, WindowInfo} from '../../../src/runtime/model';
 import type {DecorationPlan} from '../../../src/runtime/decoration';
-import type {Rect, WindowId} from '../../../src/tree/node';
+import type {MonitorId, Rect, WindowId} from '../../../src/tree/node';
+import type {Tree} from '../../../src/tree/tree';
 import type {LauncherRequest} from '../../../src/launcher/model';
 
 export function windowInfo(id: number, patch: Partial<WindowInfo> = {}): WindowInfo {
@@ -33,15 +34,38 @@ export function twoMonitorTopology(count = 10): Topology {
     workAreas: new Map([[10, {...PRIMARY_AREA}], [11, {...SECOND_AREA}]]),
   };
 }
-export function fakeEngine(initialText = 'bindsym Mod4+q kill') {
+
+/** A topology built from a plain list of outputs, one work area per output, laid out left to right. */
+export function outputsTopology(monitors: Array<{id: MonitorId; index: number}>, primary: MonitorId): Topology {
+  return {
+    primary,
+    monitors: monitors.map(m => ({id: m.id, index: m.index, connectors: [`fixture-${m.id}`]})),
+    workAreas: new Map(monitors.map(m => [m.id, {x: m.index * 1000, y: 0, width: 1000, height: 700}])),
+  };
+}
+
+export interface FakeEngineOptions {
+  /** Builds the initial topology in place of the single-monitor default. */
+  monitors?: Array<{id: MonitorId; index: number}>;
+  primary?: MonitorId;
+  /** Overrides the fake's native GNOME workspace count (the `count` the ports.workspaces getter reports). */
+  workspaceCount?: number;
+  /** Windows present in the port's window list before `engine.start()` runs, for adoption-on-enable scenarios. */
+  existingWindows?: Array<Partial<WindowInfo> & {id: WindowId}>;
+}
+
+export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEngineOptions = {}) {
   const calls: string[] = [];
   const windows = new Map<WindowId, WindowInfo>();
   const applied: Array<Map<WindowId, Rect>> = [];
   const queue = new Map<number, () => void>();
-  let token = 0, active = 0, count = 10;
+  let token = 0, active = 0, count = options.workspaceCount ?? 10;
   let focused: WindowId | null = null;
-  let currentTopology: Topology | null = topology();
+  let currentTopology: Topology | null = options.monitors
+    ? outputsTopology(options.monitors, options.primary ?? options.monitors[0]!.id)
+    : topology();
   let nextLoad: LoadedConfig | null = null;
+  for (const patch of options.existingWindows ?? []) windows.set(patch.id, windowInfo(patch.id, patch));
   let grabbed: Binding[] = [];
   let accent: Accent | null = {background: '#6f8396', text: '#ffffff'};
   let accentChanged: (() => void) | null = null;
@@ -129,6 +153,18 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill') {
     setNativeCount(value: number) { count = value; engine.onWorkspacesChanged(); },
     grabbedAccels: () => grabbed.map(b => b.accel),
     setAccent(value: Accent | null) { accent = value; accentChanged?.(); },
+    /** Every rect ever applied, merged in call order — the union of what has been laid out so far. */
+    appliedRects(): Map<WindowId, Rect> {
+      const merged = new Map<WindowId, Rect>();
+      for (const rects of applied) for (const [id, rect] of rects) merged.set(id, rect);
+      return merged;
+    },
+    /** The engine's live tree, for assertions the JSON snapshot cannot make (e.g. exact `location()`). */
+    tree(): Tree {
+      const tree = (engine as unknown as {_tree: Tree | null})._tree;
+      if (!tree) throw new Error('engine has no tree yet');
+      return tree;
+    },
   };
   return f;
 }
