@@ -1009,7 +1009,8 @@ typecheck with the new model underneath.
 - Test: `test/unit/engine.test.ts`, `test/unit/engine/lifecycle.test.ts`, `test/unit/engine/commands.test.ts`, `test/unit/runtime/snapshot.test.ts`
 
 **Interfaces:**
-- Consumes: everything Tasks 2–4 produce.
+- Consumes: everything Tasks 2–4 produce, including `effectiveWorkspaceCount(requested, outputCount)` from
+  `src/tree/outputs.ts` — import it and use it for the count comparison; do not re-derive `Math.max`.
 - Produces: `engine.state().focusedOutput: MonitorId` on the `GetState` payload, read by Task 17's native scenarios.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1062,9 +1063,13 @@ In `_layoutAndPublish`, replace the construction and reconfigure block (`engine.
 
 ```ts
       const outputs = topology.monitors.map(m => ({id: m.id, index: m.index}));
+      // The Tree clamps its own count to at least one workspace per output (i3 creates one per output
+      // at startup whatever the config names), so the comparison below must clamp identically or it is
+      // permanently unequal and reconfigure runs on every commit. Same function, one definition.
+      const wanted = effectiveWorkspaceCount(this._workspaceCount, outputs.length);
       if (!this._tree)
         this._tree = new Tree(this._workspaceCount, outputs, topology.primary, this._pinnedOutputs());
-      else if (this._tree.workspaces.size !== this._workspaceCount ||
+      else if (this._tree.workspaces.size !== wanted ||
         this._tree.outputSignature() !== outputs.map(o => o.id).sort((a, b) => a - b).join(','))
         this._moveReconfigured(this._tree.reconfigure(this._workspaceCount, outputs, topology.primary));
 ```
@@ -1110,7 +1115,10 @@ only the *source* of `occupied` and `urgent` changes, from `WindowInfo.workspace
 
 ```ts
     const tree = this._tree;
-    this._pills = Array.from({length: this._workspaceCount}, (_, index) => {
+    // The tree's own size, not `_workspaceCount`: the clamp can raise it above what the config named,
+    // and a workspace with no pill is a workspace the user cannot see or click.
+    const count = tree ? tree.workspaces.size : this._workspaceCount;
+    this._pills = Array.from({length: count}, (_, index) => {
       // From the tree, never from WindowInfo.workspace: under the attic that field is 0 or 1 for
       // every window, so a workspace's occupancy is not observable from Mutter any more.
       const members = tree ? this._workspaceMembers(tree, index) : [];
