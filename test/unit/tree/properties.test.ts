@@ -73,7 +73,9 @@ interface GeneratedOperation {
 const operation = fc.record({
   kind: fc.constantFrom(...kinds),
   pick: fc.nat(11),
-  workspace: fc.integer({min: 0, max: 1}),
+  // Wide enough that the 'topology' op's requested count (workspace + 1) both shrinks below and
+  // grows above the tree's current size — 1 is too narrow to ever generate real growth.
+  workspace: fc.integer({min: 0, max: 4}),
   direction: fc.constantFrom<Direction>('left', 'right', 'up', 'down'),
   orientation: fc.constantFrom<'h' | 'v' | 'toggle'>('h', 'v', 'toggle'),
   layout: fc.constantFrom<Layout>('splith', 'splitv', 'tabbed', 'stacked'),
@@ -183,22 +185,22 @@ function applyGeneratedOperation(
       return;
     }
     case 'topology': {
-      // Both outputs stay live here; only which one is primary varies. Actually losing an output
-      // (and later regaining one that currently owns no workspace) is covered deterministically by
-      // topology.test.ts instead of by this fuzzer — see the report for why.
+      // grow also drops to a single output, so losing one — and regaining one that currently owns no
+      // workspace, on a later op — is exercised here, not just deterministically in topology.test.ts.
+      const requested = op.workspace + 1;
       const outputs = op.grow
-        ? [{id: 1, index: 0}, {id: 0, index: 1}]
-        : [{id: 0, index: 0}, {id: 1, index: 1}];
-      // reconfigure raises a request below the live output count (here, always 2) to match — this
-      // predicts the same clamped count so `want` lines up with what actually moves.
-      const count = effectiveWorkspaceCount(op.workspace + 1, outputs.length);
+        ? [{id: 0, index: 0}, {id: 1, index: 1}]
+        : [{id: 0, index: 0}];
+      // reconfigure raises a request below the live output count to match — predicting the same
+      // clamped count is what keeps `want` accurate instead of vacuous.
+      const count = effectiveWorkspaceCount(requested, outputs.length);
       const want = new Map<WindowId, number>();
       for (const [window, owner] of expected) {
         if (owner < count) continue;
         want.set(window, count - 1);
         expected.set(window, count - 1);
       }
-      expect(tree.reconfigure(count, outputs, outputs[0]!.id)).toEqual(want);
+      expect(tree.reconfigure(requested, outputs, outputs[0]!.id)).toEqual(want);
       return;
     }
     default: {

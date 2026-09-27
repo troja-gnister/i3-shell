@@ -172,10 +172,11 @@ describe('Tree ownership and selection', () => {
   });
 
   it.each([
-    // A requested count below the output count is no longer invalid: it is raised to cover every
-    // output instead (see outputsModel.test.ts). 0 and negative requests are covered by that same
-    // clamp, so only a request too high to fix by raising it further, or otherwise-malformed input,
-    // remain here.
+    // A nonnegative requested count below the output count is no longer invalid on its own: it is
+    // raised to cover every output instead (see outputsModel.test.ts). A negative count is rejected
+    // explicitly rather than silently absorbed by that clamp, so it remains invalid here alongside a
+    // count too high to fix by raising it further, and otherwise-malformed input.
+    [-1, [{id: 0, index: 0}], 0],
     [37, [{id: 0, index: 0}], 0],
     [1.5, [{id: 0, index: 0}], 0],
     [1, [], 0],

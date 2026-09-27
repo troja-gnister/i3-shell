@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import {
-  adoptOutput, birthAssignment, effectiveWorkspaceCount, orderOutputs, reassignLost, resolveOutputArg,
+  adoptOutput, birthAssignment, coverOutputs, effectiveWorkspaceCount, orderOutputs, reassignLost,
+  resolveOutputArg,
 } from '../../../src/tree/outputs';
 import type {MonitorId, Rect} from '../../../src/tree/node';
 
@@ -97,6 +98,38 @@ describe('reassignLost', () => {
   it('survives every workspace living on the output that vanished', () => {
     const before = new Map([[0, 2], [1, 2], [2, 2]]);
     expect(reassignLost(before, new Set([3]), 3)).toEqual(new Map([[0, 3], [1, 3], [2, 3]]));
+  });
+});
+
+describe('coverOutputs', () => {
+  it('returns an already-covered assignment unchanged', () => {
+    const assignment = new Map([[0, 3], [1, 2]]);
+    expect(coverOutputs(assignment, [3, 2], new Map())).toEqual(assignment);
+  });
+
+  it('gives a needy output a workspace when a pin concentrated every workspace elsewhere', () => {
+    const assignment = new Map(Array.from({length: 10}, (_, index) => [index, 3]));
+    const repaired = coverOutputs(assignment, [3, 2], new Map());
+    expect(repaired.get(9)).toBe(2);
+    for (let index = 0; index < 9; index++) expect(repaired.get(index)).toBe(3);
+  });
+
+  it("never takes the donor's shown workspace when it has an alternative", () => {
+    const assignment = new Map([[0, 10], [1, 10], [2, 10]]);
+    const showing = new Map([[10, 2]]);
+    const repaired = coverOutputs(assignment, [10, 20], showing);
+    expect(repaired.get(2)).toBe(10);
+    expect(repaired.get(1)).toBe(20);
+  });
+
+  it('covers two needy outputs out of three, each from the current largest owner', () => {
+    const assignment = new Map(Array.from({length: 5}, (_, index) => [index, 1]));
+    const repaired = coverOutputs(assignment, [1, 2, 3], new Map());
+    expect(repaired.get(4)).toBe(2);
+    expect(repaired.get(3)).toBe(3);
+    expect(repaired.get(0)).toBe(1);
+    expect(repaired.get(1)).toBe(1);
+    expect(repaired.get(2)).toBe(1);
   });
 });
 

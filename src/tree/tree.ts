@@ -1,6 +1,8 @@
 import type {Direction, Layout} from '../commands/model';
 import {nextFocus, type Wrapping} from './focus';
-import {birthAssignment, effectiveWorkspaceCount, orderOutputs, type OutputRef} from './outputs';
+import {
+  birthAssignment, coverOutputs, effectiveWorkspaceCount, orderOutputs, reassignLost, type OutputRef,
+} from './outputs';
 import {resizeCon, type ResizeRequest} from './resize';
 import {moveCon, setLayout, splitCon, toggleLayout} from './operations';
 import {
@@ -53,6 +55,9 @@ export class Tree {
     pinned: ReadonlyMap<number, MonitorId> = new Map(),
   ) {
     assertInteger(requestedWorkspaceCount, 'workspace count');
+    // Rejected explicitly, before the clamp: only a request that is merely low, not negative, is
+    // meant to be widened. Math.max would otherwise absorb a negative count silently.
+    if (requestedWorkspaceCount < 0) throw new Error('workspace count must be nonnegative');
     if (outputs.length === 0) throw new Error('at least one monitor is required');
     const seen = new Set<MonitorId>();
     for (const output of outputs) {
@@ -69,7 +74,10 @@ export class Tree {
       throw new Error('workspace count must be between 1 and 36');
 
     const ordered = orderOutputs(outputs, primary);
-    const assignment = birthAssignment(ordered, workspaceCount, pinned);
+    // The clamp guarantees enough workspaces exist; it does not guarantee birthAssignment's pins
+    // distributed them so every output has one — coverOutputs repairs that. Nothing is shown yet, so
+    // there is no "currently displayed" workspace for it to avoid taking.
+    const assignment = coverOutputs(birthAssignment(ordered, workspaceCount, pinned), ordered, new Map());
     this.workspaces = new Map();
     for (let index = 0; index < workspaceCount; index++) {
       this.workspaces.set(index, {
@@ -87,9 +95,8 @@ export class Tree {
     this.visible = new Map();
     for (const output of ordered) {
       const own = [...this.workspaces.values()].filter(w => w.output === output).map(w => w.index);
-      // Invariant 2: every output shows one of its own. Sound because workspaceCount is at least
-      // outputs.length, so birthAssignment gives every output at least one workspace; a failure here
-      // is a genuine invariant violation, not a case to degrade gracefully from.
+      // Invariant 2: every output shows one of its own — sound because coverOutputs guarantees every
+      // output above owns at least one workspace, not merely because workspaceCount is large enough.
       this.visible.set(output, own[0]!);
     }
     this.focusedOutput = primary;
@@ -264,6 +271,9 @@ export class Tree {
     primary: MonitorId,
   ): Map<WindowId, number> {
     assertInteger(requestedWorkspaceCount, 'workspace count');
+    // Rejected explicitly, before the clamp: only a request that is merely low, not negative, is
+    // meant to be widened. Math.max would otherwise absorb a negative count silently.
+    if (requestedWorkspaceCount < 0) throw new Error('workspace count must be nonnegative');
     if (outputs.length === 0) throw new Error('at least one monitor is required');
     const targetOutputs = new Set<MonitorId>();
     for (const output of outputs) {
@@ -280,23 +290,24 @@ export class Tree {
     if (workspaceCount < 1 || workspaceCount > 36)
       throw new Error('workspace count must be between 1 and 36');
 
+    // Captured before anything below mutates this.visible, so the shrink block still knows which
+    // workspace the user was actually on when this call started.
+    const activeBefore = this.visible.get(this.focusedOutput);
+
     const live = new Set(outputs.map(output => output.id));
     const ordered = orderOutputs(outputs, primary);
-    for (const workspace of this.workspaces.values())
-      if (!live.has(workspace.output)) workspace.output = primary;
 
-    // Growth: a live output that currently owns nothing — a brand-new one, or the clamp above having
-    // just raised the count to cover it — claims the earliest new workspace, in output order, before
-    // any further growth defaults to the primary. This is what keeps every output's `own[0]!` below
-    // sound instead of merely hopeful.
-    const needy = ordered.filter(output => this.workspacesOn(output).length === 0);
-    let needyIndex = 0;
+    const lossAssignment = new Map<number, MonitorId>(
+      [...this.workspaces].map(([index, workspace]) => [index, workspace.output]),
+    );
+    for (const [index, output] of reassignLost(lossAssignment, live, primary))
+      this.workspace(index).output = output;
+
     for (let index = this.workspaces.size; index < workspaceCount; index++) {
-      const output = needyIndex < needy.length ? needy[needyIndex++]! : primary;
       const root = this.allocateSplit('splith', true);
       this.workspaces.set(index, {
         index,
-        output,
+        output: primary,
         root,
         focusedCon: root,
         floating: [],
@@ -304,22 +315,16 @@ export class Tree {
       });
     }
 
-    // Rebuild visibility: an output keeps showing its workspace if it still owns it, else takes its
-    // lowest-numbered. Roots are never merged, so no layout is lost.
-    for (const output of [...this.visible.keys()]) if (!live.has(output)) this.visible.delete(output);
-    for (const output of ordered) {
-      const own = this.workspacesOn(output);
-      const current = this.visible.get(output);
-      if (current === undefined || !own.includes(current)) this.visible.set(output, own[0]!);
-    }
-    if (!live.has(this.focusedOutput)) this.focusedOutput = primary;
+    // Set only when the shrink below runs, so the rebuild after it can prefer "wherever the content
+    // just merged to" over an unrelated lowest-numbered workspace when an output owns both.
+    let destinationIndex: number | undefined;
 
     const moves = new Map<WindowId, number>();
     if (workspaceCount < this.workspaces.size) {
       const destination = this.workspace(workspaceCount - 1);
+      destinationIndex = destination.index;
       let movedActiveCon: Con | null = null;
       let movedActiveFloating: WindowId | null = null;
-      const activeBefore = this.visible.get(this.focusedOutput);
 
       for (let index = workspaceCount; index < this.workspaces.size; index++) {
         const source = this.workspace(index);
@@ -344,10 +349,6 @@ export class Tree {
       for (let index = this.workspaces.size - 1; index >= workspaceCount; index--)
         this.workspaces.delete(index);
 
-      // Every output whose shown workspace was just deleted now shows the destination instead.
-      for (const [output, shown] of this.visible)
-        if (shown >= workspaceCount) this.visible.set(output, destination.index);
-
       if (activeBefore !== undefined && activeBefore >= workspaceCount) {
         if (movedActiveFloating !== null) {
           destination.focusedFloating = movedActiveFloating;
@@ -358,6 +359,34 @@ export class Tree {
       }
       this.normalizeWorkspace(destination, undefined, []);
     }
+
+    // Coverage repair: reassignment, growth and the shrink above only move content and existence
+    // around by index, never by ownership, so any of them can still leave a live output owning
+    // nothing (see coverOutputs). This runs after the shrink, not just after growth, because shrink
+    // does not consult ownership either — repairing only beforehand would let it delete the very
+    // workspace just given to a needy output and re-orphan it in the same call.
+    const preRepair = new Map<number, MonitorId>(
+      [...this.workspaces].map(([index, workspace]) => [index, workspace.output]),
+    );
+    for (const [index, output] of coverOutputs(preRepair, ordered, this.visible))
+      this.workspace(index).output = output;
+
+    // Rebuild visibility from scratch, now that ownership is final: an output keeps showing its
+    // workspace if it still owns it; failing that, it prefers wherever the shrink above just merged
+    // content to if it owns that (so the active output keeps watching what it was watching, rather
+    // than jumping to an unrelated workspace merely because it is numbered lowest); failing that, it
+    // takes its lowest-numbered. Roots are never merged, so no layout is lost.
+    for (const output of [...this.visible.keys()]) if (!live.has(output)) this.visible.delete(output);
+    for (const output of ordered) {
+      const own = this.workspacesOn(output);
+      const current = this.visible.get(output);
+      if (current !== undefined && own.includes(current)) continue;
+      this.visible.set(
+        output,
+        destinationIndex !== undefined && own.includes(destinationIndex) ? destinationIndex : own[0]!,
+      );
+    }
+    if (!live.has(this.focusedOutput)) this.focusedOutput = primary;
 
     this.normalize();
     return moves;
@@ -549,8 +578,8 @@ export class Tree {
         );
     }
 
-    // Invariant 2: every output shows a workspace it owns. workspaceCount is always clamped to at
-    // least the live output count (effectiveWorkspaceCount), so no output should ever have to share —
+    // Invariant 2: every output shows a workspace it owns. The constructor and reconfigure both run
+    // coverOutputs so every live output owns at least one — no output should ever have to share — so
     // a violation here is a real bug, not a degraded-but-acceptable state, and must throw.
     for (const [output, shown] of this.visible) {
       const workspace = this.workspaces.get(shown);

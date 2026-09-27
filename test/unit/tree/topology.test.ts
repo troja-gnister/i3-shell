@@ -70,9 +70,11 @@ describe('Tree topology reconfiguration', () => {
   });
 
   it.each([
-    // A requested count below the output count is no longer invalid: reconfigure raises it to cover
-    // every output instead (see outputsModel.test.ts), so only counts too high to fix that way, or
-    // otherwise-malformed input, remain here.
+    // A nonnegative requested count below the output count is no longer invalid on its own: reconfigure
+    // raises it to cover every output instead (see outputsModel.test.ts). A negative count is rejected
+    // explicitly rather than silently absorbed by that clamp, so it remains invalid here alongside a
+    // count too high to fix by raising it further, and otherwise-malformed input.
+    [-1, [{id: 10, index: 0}], 10],
     [37, [{id: 10, index: 0}], 10],
     [1.5, [{id: 10, index: 0}], 10],
     [2, [], 10],
@@ -188,5 +190,22 @@ describe('Tree topology reconfiguration', () => {
     empty.reconfigure(1, [{id: 10, index: 0}], 10);
     expect(empty.selection()).toEqual({kind: 'tiled', con: retained});
     empty.check(new Set([3]));
+  });
+
+  // Reproduces a corruption the visibility rebuild used to have when it ran before the shrink: it
+  // repointed *every* output whose shown workspace was deleted at the destination by index alone,
+  // without checking that output actually owned it — so an unrelated output could end up showing a
+  // workspace another output owns. Running the rebuild after the shrink (and letting an output that
+  // owns nothing of its own fall back to its own lowest, never to another output's) fixes it.
+  it('never lets two outputs show one workspace after a shrink', () => {
+    const tree = new Tree(5, [{id: 0, index: 0}, {id: 1, index: 1}], 0);
+    tree.visible.set(0, 2);
+
+    tree.reconfigure(2, [{id: 0, index: 0}, {id: 1, index: 1}], 0);
+
+    expect(tree.visible.get(0)).not.toBe(tree.visible.get(1));
+    expect(tree.outputOf(tree.visible.get(0)!)).toBe(0);
+    expect(tree.outputOf(tree.visible.get(1)!)).toBe(1);
+    tree.check();
   });
 });

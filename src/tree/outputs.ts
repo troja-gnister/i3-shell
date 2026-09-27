@@ -66,6 +66,52 @@ export function birthAssignment(
   return assignment;
 }
 
+/**
+ * Repair an assignment so every live output owns at least one workspace.
+ *
+ * The clamp guarantees enough workspaces exist; it does not guarantee they cover every output. A
+ * workspace moved to the primary when its output vanished does not come back on replug, and a
+ * `workspace N output …` pin can concentrate several workspaces on one output. Either leaves an output
+ * owning nothing, and an output that owns nothing cannot show one of its own.
+ *
+ * Always succeeds: with K live outputs and W ≥ K workspaces, if one output owns none then the other
+ * ≤ K−1 own all W > K−1, so some output owns ≥ 2 and can spare one. Taking from an owner of ≥ 2 leaves
+ * it ≥ 1, so the pass is monotone and terminates.
+ *
+ * `showing` names the workspace each output currently displays, so the donor gives up one it is not
+ * displaying where it can — taking the shown one would move what the user is looking at.
+ */
+export function coverOutputs(
+  assignment: ReadonlyMap<number, MonitorId>,
+  ordered: readonly MonitorId[],
+  showing: ReadonlyMap<MonitorId, number>,
+): Map<number, MonitorId> {
+  const result = new Map(assignment);
+  const owned = (output: MonitorId): number[] =>
+    [...result].filter(([, owner]) => owner === output).map(([workspace]) => workspace).sort((a, b) => a - b);
+
+  for (const needy of ordered) {
+    if (owned(needy).length > 0) continue;
+
+    // Donor: the output owning the most workspaces, ties broken by lowest id. Guaranteed to own at
+    // least two — see the proof above — so it always has one to spare.
+    const counts = new Map<MonitorId, number>();
+    for (const owner of result.values()) counts.set(owner, (counts.get(owner) ?? 0) + 1);
+    const mostOwned = Math.max(...counts.values());
+    const donor = [...counts]
+      .filter(([, count]) => count === mostOwned)
+      .map(([output]) => output)
+      .sort((a, b) => a - b)[0]!;
+
+    const donorWorkspaces = owned(donor);
+    const highest = donorWorkspaces.at(-1)!;
+    const taken = highest !== showing.get(donor) ? highest : donorWorkspaces.at(-2)!;
+    result.set(taken, needy);
+  }
+
+  return result;
+}
+
 /** `left|right|up|down` through geometry, `primary`, or a connector name. Null = no such output. */
 export function resolveOutputArg(
   arg: OutputArg,

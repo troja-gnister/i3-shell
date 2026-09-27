@@ -78,4 +78,48 @@ describe('Tree, per-output', () => {
     expect(t.outputOf(t.visible.get(3)!)).toBe(3);
     expect(t.outputOf(t.visible.get(2)!)).toBe(2);
   });
+
+  // A pin can concentrate every workspace on one output at birth (here: pinning workspace 1, which
+  // would otherwise be output 1's, onto output 0 as well), stranding output 1 with nothing of its own.
+  it('repairs a birth pin that would strand an output, giving every output one it owns', () => {
+    const t = new Tree(10, [{id: 0, index: 0}, {id: 1, index: 1}], 0, new Map([[1, 0]]));
+    for (const output of [0, 1]) {
+      const shown = t.visible.get(output);
+      expect(shown).not.toBeUndefined();
+      expect(t.outputOf(shown!)).toBe(output);
+    }
+  });
+
+  // Unplug then replug, with no shrink: the workspace output 1 owned moves to the primary on loss and
+  // does not come back on its own when output 1 returns — reconfigure must repair that, not just the
+  // constructor.
+  it('repairs an output that regains liveness owning nothing, after an unplug and replug', () => {
+    const t = new Tree(10, [{id: 0, index: 0}, {id: 1, index: 1}], 0);
+    t.reconfigure(10, [{id: 0, index: 0}], 0);
+    t.reconfigure(10, [{id: 0, index: 0}, {id: 1, index: 1}], 0);
+    const shown = t.visible.get(1);
+    expect(shown).not.toBeUndefined();
+    expect(t.outputOf(shown!)).toBe(1);
+  });
+
+  it('reconfigure also raises a request below the live output count', () => {
+    const t = new Tree(4, outputs, 3);
+    t.reconfigure(1, outputs, 3);
+    expect(t.workspaces.size).toBe(2);
+    expect(t.visible.get(3)).not.toBe(t.visible.get(2));
+    expect(t.outputOf(t.visible.get(3)!)).toBe(3);
+    expect(t.outputOf(t.visible.get(2)!)).toBe(2);
+  });
+
+  // Invariant 3 (the focused output is always live) is only enforced by one line, and every other
+  // loss test in this suite has the primary focused, which never dies — so this is its only exercise.
+  it('moves focus to the primary when the focused, non-primary output is lost', () => {
+    const t = new Tree(2, outputs, 3);
+    t.focusedOutput = 2;
+
+    t.reconfigure(2, [{id: 3, index: 1}], 3);
+
+    expect(t.focusedOutput).toBe(3);
+    expect(t.activeWorkspace).toBe(t.visible.get(3));
+  });
 });
