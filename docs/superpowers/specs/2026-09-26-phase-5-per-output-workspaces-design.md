@@ -313,13 +313,26 @@ Showing workspace *W* on output *M*:
 4. Relayout (§5.4).
 5. Drive focus explicitly to *W*'s selection, or to the output when *W* is empty.
 
-Step 5 is the subtlest thing in this phase and the one most likely to pass a test while being wrong.
-Parking the focused window makes **Mutter choose a replacement on its own**, which fires
-`notify::focus-window`, reaches `_acceptFocus`, and calls `_selectWindow` on an arbitrary window —
-silently corrupting the selection mid-swap. The engine already owns the instrument for this:
-`_expectedFocus`, which `_acceptFocus` consults to tell a focus change it asked for from one it must
-react to. The swap brackets its parking with those expectations. A test whose window fake confirms
-focus synchronously cannot observe this failure, so §8.4 requires a native scenario for it.
+Step 5 is the subtlest thing in this phase. Parking the focused window makes **Mutter choose a
+replacement on its own**, which fires `notify::focus-window`, reaches `_acceptFocus`, and calls
+`_selectWindow` on a window nobody selected.
+
+An earlier draft of this spec said the swap should bracket its parking in `_expectedFocus`. **That was
+wrong, and the implementation disproved it by instrumenting `_acceptFocus`.** Two independent reasons:
+`_activateSelection` begins with an unconditional `_expectedFocus.clear()`, so the swap's own final step
+wipes any bracket; and more fundamentally `_expectedFocus` holds ids the engine *asked* to focus, while
+Mutter's replacement is by definition a still-**visible** window and therefore never a parked one. No
+pre-registration of parked ids can suppress that report.
+
+What actually settles the incoming workspace's selection is the trailing `_activateSelection`: its
+request produces the last focus report to arrive, so it re-selects the intended window even when an
+unexpected report was honoured first. The **unverified residual** is that the earlier unexpected report
+can transiently re-select on a *different* workspace, changing that workspace's selection and MRU order.
+
+No unit test can distinguish this: the visible outcome self-corrects, which is why an adversarial
+attempt to make the unit test fail could not. §8.4's native scenario 3 is the only test that can decide
+it. Until that runs, this design does not claim the residual is benign — only that the visible selection
+ends up correct.
 
 The whole swap is one `Engine.commit()`, so Mutter paints once, at the end.
 
@@ -475,8 +488,10 @@ Native scenarios in the nested harness, for the claims a fake cannot support:
 
 1. A parked window is not rendered and does not take focus.
 2. Switching one output's workspace leaves the other output's windows and geometry untouched.
-3. After a swap, focus is on the incoming workspace's selection — not on whatever Mutter picked when
-   the focused window was parked (§5.2, step 5).
+3. After a swap, focus is on the incoming workspace's selection, **and no other workspace's selection
+   moved**. The second half is the point: the visible selection self-corrects via the trailing
+   `_activateSelection`, so only the collateral case can fail, and only here. See §5.2 for why no unit
+   test reaches it.
 4. Unplugging an output preserves its workspaces' layout; replugging restores the assignment.
 5. `focus-mode`, `num-workspaces` and `current-workspace-only` are restored on `disable()`.
 6. `focus_follows_mouse` moves the focused output, and a keyboard `focus output` warps the pointer.
@@ -538,8 +553,10 @@ one commit, which is the shape of change that produced 34 St-CRITICALs in Phase 
   window's workspace.
 - **A54** A window on a parked workspace is not rendered, takes no keyboard input, and does not
   appear in alt-tab.
-- **A55** After a workspace swap, focus is on the incoming workspace's selection; parking the
-  previously focused window does not leave focus on a window Mutter chose.
+- **A55** After a workspace swap, focus is on the incoming workspace's selection, and every other
+  workspace's selection is unchanged. Parking the previously focused window makes Mutter pick a
+  replacement; the trailing activation corrects the visible workspace, and this criterion is what
+  establishes whether the replacement damaged another one (§5.2).
 - **A56** `move container to output right` moves the selected window to the neighbouring output's
   visible workspace, preserving a moved subtree's structure, layout, percentages and focused child;
   focus does not follow.
