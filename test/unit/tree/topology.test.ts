@@ -70,7 +70,9 @@ describe('Tree topology reconfiguration', () => {
   });
 
   it.each([
-    [0, [{id: 10, index: 0}], 10],
+    // A requested count below the output count is no longer invalid: reconfigure raises it to cover
+    // every output instead (see outputsModel.test.ts), so only counts too high to fix that way, or
+    // otherwise-malformed input, remain here.
     [37, [{id: 10, index: 0}], 10],
     [1.5, [{id: 10, index: 0}], 10],
     [2, [], 10],
@@ -96,7 +98,10 @@ describe('Tree topology reconfiguration', () => {
   // monitor's root survived the reorder. There is no such map now, so this checks the analogous
   // property instead: changing which output is primary does not disturb any existing workspace's
   // output or root (reassignment only happens on loss), and growth adds new workspaces to the primary.
-  it('changing the primary preserves every existing workspace root, and growth adds to the primary', () => {
+  // Growth gives the earliest new workspace to whichever live output currently owns nothing — here,
+  // the newly added output 30 — rather than blindly to the primary; a needy output would otherwise
+  // have to share another output's workspace, which invariant 2 forbids.
+  it('changing the primary preserves every existing workspace root, and growth covers a new output first', () => {
     const tree = new Tree(2, [{id: 10, index: 0}, {id: 20, index: 1}], 10);
     const rootA = tree.root(0);
     const rootB = tree.root(1);
@@ -108,7 +113,7 @@ describe('Tree topology reconfiguration', () => {
     expect(tree.root(1)).toBe(rootB);
     expect(tree.outputOf(0)).toBe(10);
     expect(tree.outputOf(1)).toBe(20);
-    expect(tree.outputOf(2)).toBe(20);
+    expect(tree.outputOf(2)).toBe(30);
     tree.check();
   });
 

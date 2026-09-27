@@ -1,6 +1,6 @@
 import type {Direction, Layout} from '../commands/model';
 import {nextFocus, type Wrapping} from './focus';
-import {birthAssignment, orderOutputs, type OutputRef} from './outputs';
+import {birthAssignment, effectiveWorkspaceCount, orderOutputs, type OutputRef} from './outputs';
 import {resizeCon, type ResizeRequest} from './resize';
 import {moveCon, setLayout, splitCon, toggleLayout} from './operations';
 import {
@@ -47,14 +47,12 @@ export class Tree {
   };
 
   constructor(
-    workspaceCount: number,
+    requestedWorkspaceCount: number,
     outputs: readonly OutputRef[],
     primary: MonitorId,
     pinned: ReadonlyMap<number, MonitorId> = new Map(),
   ) {
-    assertInteger(workspaceCount, 'workspace count');
-    if (workspaceCount < 1 || workspaceCount > 36)
-      throw new Error('workspace count must be between 1 and 36');
+    assertInteger(requestedWorkspaceCount, 'workspace count');
     if (outputs.length === 0) throw new Error('at least one monitor is required');
     const seen = new Set<MonitorId>();
     for (const output of outputs) {
@@ -63,6 +61,12 @@ export class Tree {
       seen.add(output.id);
     }
     assertNonnegativeInteger(primary, 'primary monitor id');
+
+    // i3 creates one workspace per output at startup whatever the config names; raising a request
+    // that falls short keeps invariant 2 (every output shows one of its own) total.
+    const workspaceCount = effectiveWorkspaceCount(requestedWorkspaceCount, outputs.length);
+    if (workspaceCount < 1 || workspaceCount > 36)
+      throw new Error('workspace count must be between 1 and 36');
 
     const ordered = orderOutputs(outputs, primary);
     const assignment = birthAssignment(ordered, workspaceCount, pinned);
@@ -83,10 +87,10 @@ export class Tree {
     this.visible = new Map();
     for (const output of ordered) {
       const own = [...this.workspaces.values()].filter(w => w.output === output).map(w => w.index);
-      // Invariant 2: every output shows one of its own when it has one. The birth assignment
-      // guarantees the primary always does; a non-primary output only goes without when there are
-      // fewer workspaces than outputs, in which case it shows the primary's instead of nothing.
-      this.visible.set(output, own[0] ?? this.visible.get(primary)!);
+      // Invariant 2: every output shows one of its own. Sound because workspaceCount is at least
+      // outputs.length, so birthAssignment gives every output at least one workspace; a failure here
+      // is a genuine invariant violation, not a case to degrade gracefully from.
+      this.visible.set(output, own[0]!);
     }
     this.focusedOutput = primary;
   }
@@ -255,13 +259,11 @@ export class Tree {
   }
 
   reconfigure(
-    workspaceCount: number,
+    requestedWorkspaceCount: number,
     outputs: readonly OutputRef[],
     primary: MonitorId,
   ): Map<WindowId, number> {
-    assertInteger(workspaceCount, 'workspace count');
-    if (workspaceCount < 1 || workspaceCount > 36)
-      throw new Error('workspace count must be between 1 and 36');
+    assertInteger(requestedWorkspaceCount, 'workspace count');
     if (outputs.length === 0) throw new Error('at least one monitor is required');
     const targetOutputs = new Set<MonitorId>();
     for (const output of outputs) {
@@ -272,37 +274,45 @@ export class Tree {
     assertNonnegativeInteger(primary, 'primary monitor id');
     if (!targetOutputs.has(primary)) throw new Error(`primary monitor ${primary} is absent`);
 
+    // i3 creates one workspace per output whatever the config names; raising a request that falls
+    // short of the live output count keeps invariant 2 (every output shows one of its own) total.
+    const workspaceCount = effectiveWorkspaceCount(requestedWorkspaceCount, outputs.length);
+    if (workspaceCount < 1 || workspaceCount > 36)
+      throw new Error('workspace count must be between 1 and 36');
+
     const live = new Set(outputs.map(output => output.id));
     const ordered = orderOutputs(outputs, primary);
     for (const workspace of this.workspaces.values())
       if (!live.has(workspace.output)) workspace.output = primary;
-    // Rebuild visibility: an output keeps showing its workspace if it still owns it, else takes its
-    // lowest-numbered. Roots are never merged, so no layout is lost. An output left owning nothing
-    // (fewer workspaces than live outputs) keeps whatever it was already showing rather than being
-    // corrupted with no entry at all; a brand-new output with nothing of its own yet borrows the
-    // first surviving workspace until something is assigned to it.
-    for (const output of [...this.visible.keys()]) if (!live.has(output)) this.visible.delete(output);
-    for (const output of ordered) {
-      const own = this.workspacesOn(output);
-      const current = this.visible.get(output);
-      if (current !== undefined && own.includes(current)) continue;
-      if (own.length > 0) this.visible.set(output, own[0]!);
-      else if (current === undefined || !this.workspaces.has(current))
-        this.visible.set(output, [...this.workspaces.keys()][0]!);
-    }
-    if (!live.has(this.focusedOutput)) this.focusedOutput = primary;
 
+    // Growth: a live output that currently owns nothing — a brand-new one, or the clamp above having
+    // just raised the count to cover it — claims the earliest new workspace, in output order, before
+    // any further growth defaults to the primary. This is what keeps every output's `own[0]!` below
+    // sound instead of merely hopeful.
+    const needy = ordered.filter(output => this.workspacesOn(output).length === 0);
+    let needyIndex = 0;
     for (let index = this.workspaces.size; index < workspaceCount; index++) {
+      const output = needyIndex < needy.length ? needy[needyIndex++]! : primary;
       const root = this.allocateSplit('splith', true);
       this.workspaces.set(index, {
         index,
-        output: primary,
+        output,
         root,
         focusedCon: root,
         floating: [],
         focusedFloating: null,
       });
     }
+
+    // Rebuild visibility: an output keeps showing its workspace if it still owns it, else takes its
+    // lowest-numbered. Roots are never merged, so no layout is lost.
+    for (const output of [...this.visible.keys()]) if (!live.has(output)) this.visible.delete(output);
+    for (const output of ordered) {
+      const own = this.workspacesOn(output);
+      const current = this.visible.get(output);
+      if (current === undefined || !own.includes(current)) this.visible.set(output, own[0]!);
+    }
+    if (!live.has(this.focusedOutput)) this.focusedOutput = primary;
 
     const moves = new Map<WindowId, number>();
     if (workspaceCount < this.workspaces.size) {
@@ -539,12 +549,17 @@ export class Tree {
         );
     }
 
-    // Ownership (workspace.output === output) is not required here: when workspaceCount drops below
-    // the live output count, reconfigure cannot give every output one of its own, and would rather
-    // show two outputs the same surviving workspace than leave one showing nothing at all.
-    for (const [output, shown] of this.visible)
-      if (!this.workspaces.has(shown))
-        throw new Error(`output ${output} shows unknown workspace ${shown}`);
+    // Invariant 2: every output shows a workspace it owns. workspaceCount is always clamped to at
+    // least the live output count (effectiveWorkspaceCount), so no output should ever have to share —
+    // a violation here is a real bug, not a degraded-but-acceptable state, and must throw.
+    for (const [output, shown] of this.visible) {
+      const workspace = this.workspaces.get(shown);
+      if (!workspace) throw new Error(`output ${output} shows unknown workspace ${shown}`);
+      if (workspace.output !== output)
+        throw new Error(
+          `output ${output} shows workspace ${shown}, which belongs to output ${workspace.output}`,
+        );
+    }
 
     for (const [workspaceIndex, workspace] of this.workspaces) {
       const localFloating = new Set<WindowId>();

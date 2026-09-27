@@ -26,6 +26,18 @@ export function orderOutputs(outputs: readonly OutputRef[], primary: MonitorId):
 }
 
 /**
+ * How many workspaces a tree really has: at least one per output.
+ *
+ * i3 creates one workspace per output at startup whatever the config names, and the invariant that
+ * every output shows exactly one of its own workspaces is only total if this holds. Without it, an
+ * output with no workspace of its own would have to show another output's — laying one root into two
+ * different work areas.
+ */
+export function effectiveWorkspaceCount(requested: number, outputCount: number): number {
+  return Math.max(requested, outputCount);
+}
+
+/**
  * i3's startup rule: workspace N to output N, for as many outputs as exist.
  *
  * Every workspace gets an output — the surplus go to the primary — so "a workspace has exactly one

@@ -4,6 +4,7 @@ import type {Direction, Layout} from '../../../src/commands/model';
 import type {Wrapping} from '../../../src/tree/focus';
 import {layoutWithRects} from '../../../src/tree/layout';
 import {leaves, type Con, type Rect, type WindowId} from '../../../src/tree/node';
+import {effectiveWorkspaceCount} from '../../../src/tree/outputs';
 import {Tree} from '../../../src/tree/tree';
 
 function checkGeometry(con: Con, rects: ReadonlyMap<Con, Rect>): void {
@@ -185,10 +186,12 @@ function applyGeneratedOperation(
       // Both outputs stay live here; only which one is primary varies. Actually losing an output
       // (and later regaining one that currently owns no workspace) is covered deterministically by
       // topology.test.ts instead of by this fuzzer — see the report for why.
-      const count = op.workspace + 1;
       const outputs = op.grow
         ? [{id: 1, index: 0}, {id: 0, index: 1}]
         : [{id: 0, index: 0}, {id: 1, index: 1}];
+      // reconfigure raises a request below the live output count (here, always 2) to match — this
+      // predicts the same clamped count so `want` lines up with what actually moves.
+      const count = effectiveWorkspaceCount(op.workspace + 1, outputs.length);
       const want = new Map<WindowId, number>();
       for (const [window, owner] of expected) {
         if (owner < count) continue;

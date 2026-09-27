@@ -70,4 +70,12 @@ describe('Tree, per-output', () => {
     expect(t.workspacesOn(0)).toEqual([0, 1, 2]);
     expect(t.activeWorkspace).toBe(0);
   });
+
+  it('raises the workspace count so every output gets one of its own, never sharing one', () => {
+    const t = new Tree(1, [{id: 2, index: 0}, {id: 3, index: 1}], 3);
+    expect(t.workspaces.size).toBe(2);
+    expect(t.visible.get(3)).not.toBe(t.visible.get(2));
+    expect(t.outputOf(t.visible.get(3)!)).toBe(3);
+    expect(t.outputOf(t.visible.get(2)!)).toBe(2);
+  });
 });

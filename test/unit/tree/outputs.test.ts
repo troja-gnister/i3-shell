@@ -1,11 +1,25 @@
 import {describe, expect, it} from 'vitest';
 import {
-  adoptOutput, birthAssignment, orderOutputs, reassignLost, resolveOutputArg,
+  adoptOutput, birthAssignment, effectiveWorkspaceCount, orderOutputs, reassignLost, resolveOutputArg,
 } from '../../../src/tree/outputs';
 import type {MonitorId, Rect} from '../../../src/tree/node';
 
 const rect = (x: number, y: number, width: number, height: number): Rect => ({x, y, width, height});
 const desk = new Map<MonitorId, Rect>([[3, rect(0, 32, 3840, 1048)], [2, rect(3840, 28, 1920, 1052)]]);
+
+describe('effectiveWorkspaceCount', () => {
+  it('leaves the requested count alone when it already covers every output', () => {
+    expect(effectiveWorkspaceCount(10, 2)).toBe(10);
+  });
+
+  it('raises the requested count to the output count when it falls short', () => {
+    expect(effectiveWorkspaceCount(1, 3)).toBe(3);
+  });
+
+  it('leaves the requested count alone when it exactly matches the output count', () => {
+    expect(effectiveWorkspaceCount(2, 2)).toBe(2);
+  });
+});
 
 describe('orderOutputs', () => {
   it('puts the primary first, then ascending Mutter index', () => {
