@@ -25,7 +25,14 @@ describe('Engine', () => {
     e.start();
     f.calls.length = 0;
     e.onBinding(binding(e.config, 'default', '<Super>3'), 1);
-    expect(f.calls).toEqual(['activate:2', 'decorations']);
+    // `case 'workspace'` still moves GNOME's raw active index for real (Task 7 replaces this with a
+    // true `workspace N`), which the new attic guard immediately corrects back to live -- GNOME's own
+    // active workspace is a constant while the extension is enabled -- so every such switch is now
+    // self-defeating at the GNOME level even though the tree's own active workspace (below) never
+    // moved regardless.
+    expect(f.calls).toEqual([
+      'activate:2', 'warn:active workspace left live; switching back', 'activate:0', 'decorations', 'decorations',
+    ]);
     // A new window always adopts onto the visible workspace now (there is no `workspace N` yet, Task 7,
     // to really move GNOME's activate() above onto it), so window 1 lands -- and is selected -- on
     // workspace 0, which is what the move below actually moves.
@@ -34,7 +41,9 @@ describe('Engine', () => {
     // 'decorations' trails every commit, including the extra one a moved window's
     // own workspace-changed event queues; filter it out to keep this assertion
     // about the port calls the move itself makes.
-    expect(f.calls.filter(c => c !== 'decorations')).toEqual(['activate:2', 'moveTo:1:9']);
+    expect(f.calls.filter(c => c !== 'decorations')).toEqual([
+      'activate:2', 'warn:active workspace left live; switching back', 'activate:0', 'moveTo:1:9',
+    ]);
     expect(e.run([{type: 'workspace', target: {kind: 'name', name: '10:X'}}], 3)).toBe('workspace 10');
     expect(e.run([{type: 'workspace', target: {kind: 'number', number: 11, name: '11'}}], 7)).toBe('workspace: no such workspace');
 
@@ -197,5 +206,70 @@ describe('Engine', () => {
     const e = f.engine;
     e.start();
     expect(f.tree().location(5)).toEqual({workspace: 1, output: 1, floating: false});
+  });
+
+  describe('showOnOutputForTest (the attic swap)', () => {
+    it('parks the outgoing workspace’s windows and un-parks the incoming ones', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      f.add(1, {workspace: 0, monitor: 0});   // lands on i3-workspace 0, visible on output 0
+      f.add(2, {workspace: 0, monitor: 0});
+      e.showOnOutputForTest(0, 4);
+      expect(f.windows.get(1)!.workspace).toBe(1);   // ATTIC
+      expect(f.windows.get(2)!.workspace).toBe(1);
+      e.showOnOutputForTest(0, 0);
+      expect(f.windows.get(1)!.workspace).toBe(0);   // LIVE
+      expect(f.windows.get(2)!.workspace).toBe(0);
+    });
+
+    it('does nothing when the incoming workspace is the one already shown', () => {
+      // Review Focus 2: the naive swap would park and immediately un-park, flashing the screen.
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      f.add(1, {workspace: 0, monitor: 0});
+      const before = f.calls.filter(c => c.startsWith('moveTo:')).length;
+      e.showOnOutputForTest(0, 0);
+      expect(f.calls.filter(c => c.startsWith('moveTo:')).length).toBe(before);
+    });
+
+    it('warns and continues when Mutter refuses to move a window', () => {
+      // Review Focus 1: a half-swapped output is recoverable; an exception mid-swap is not.
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      f.add(1, {workspace: 0, monitor: 0});
+      f.add(2, {workspace: 0, monitor: 0});
+      f.refuseMove(1);
+      expect(() => e.showOnOutputForTest(0, 4)).not.toThrow();
+      expect(f.windows.get(2)!.workspace).toBe(1);   // ATTIC despite window 1's refusal
+      expect(f.calls.filter(c => c.startsWith('warn:')).join('\n')).toMatch(/could not park window 1/);
+    });
+
+    it('forces the active GNOME workspace back to live and warns', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      f.calls.length = 0;
+      f.setActiveIndex(1);
+      e.onWorkspacesChanged();
+      expect(f.calls).toContain('activate:0');
+      expect(f.calls.filter(c => c.startsWith('warn:')).join('\n')).toMatch(/active workspace left live/);
+    });
+
+    it('keeps focus on the incoming workspace’s selection, not on Mutter’s replacement pick', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      f.add(1, {workspace: 0, monitor: 0});
+      e.showOnOutputForTest(0, 4);
+      f.add(2, {workspace: 0, monitor: 0});   // adopts onto workspace 4, now visible on output 0
+      f.focus(2);
+      f.calls.length = 0;
+      e.showOnOutputForTest(0, 0);
+      const activated = f.calls.filter(c => c.startsWith('focus:')).map(c => Number(c.split(':')[1]));
+      expect(activated).toEqual([1]);
+    });
   });
 });

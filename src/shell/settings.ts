@@ -32,6 +32,16 @@ const FOREIGN_BINDING_KEYS: ReadonlyArray<readonly [string, readonly string[]]> 
 ];
 const WM_PREFS = 'org.gnome.desktop.wm.preferences';
 const MUTTER = 'org.gnome.mutter';
+const APP_SWITCHER = 'org.gnome.shell.app-switcher';
+const WM_KEYBINDINGS = 'org.gnome.desktop.wm.keybindings';
+/**
+ * GNOME's own workspace switching must never move the active workspace off `live`: every parked window
+ * would appear at once and every visible one would vanish. These are cleared whatever they are bound
+ * to, not only when they collide with a config accelerator.
+ */
+const WORKSPACE_SWITCH_KEYS = Array.from({length: 12}, (_, i) => `switch-to-workspace-${i + 1}`)
+  .concat(['switch-to-workspace-left', 'switch-to-workspace-right',
+           'switch-to-workspace-up', 'switch-to-workspace-down', 'switch-to-workspace-last']);
 
 type Saved = string[] | string | boolean | number;
 /** {schemaId: {key: originalValue}} — persisted as JSON in the extension's `overridden-settings` key. */
@@ -87,15 +97,25 @@ export class SettingsOverrides implements SettingsPort {
       if (mutter)
         this._applyValue(MUTTER, mutter, 'dynamic-workspaces', false);
       const prefs = this._settings(WM_PREFS);
-      if (prefs) {
-        this._applyValue(WM_PREFS, prefs, 'num-workspaces', plan.workspaceCount);
-        this._applyValue(WM_PREFS, prefs, 'workspace-names', plan.workspaceNames);
-      }
+      // Two, always: `live` plus the attic. The config's own workspace count is i3-shell's notion and
+      // GNOME no longer represents it, so applying workspace-names would name nothing the user sees.
+      if (prefs)
+        this._applyValue(WM_PREFS, prefs, 'num-workspaces', 2);
+      const switcher = this._settings(APP_SWITCHER);
+      // Without this, alt-tab lists every parked window.
+      if (switcher)
+        this._applyValue(APP_SWITCHER, switcher, 'current-workspace-only', true);
+      this._applyWorkspaceSwitchKeys();
     } else {
       this._restoreSaved(MUTTER, 'dynamic-workspaces');
       this._restoreSaved(WM_PREFS, 'num-workspaces');
-      this._restoreSaved(WM_PREFS, 'workspace-names');
+      this._restoreSaved(APP_SWITCHER, 'current-workspace-only');
+      for (const key of WORKSPACE_SWITCH_KEYS)
+        this._restoreSaved(WM_KEYBINDINGS, key);
     }
+    // Restored unconditionally: it was applied by earlier versions and a user upgrading in place must
+    // get their own names back even though nothing applies them now.
+    this._restoreSaved(WM_PREFS, 'workspace-names');
 
     const mutter = this._settings(MUTTER);
     if (mutter) {
@@ -114,6 +134,18 @@ export class SettingsOverrides implements SettingsPort {
     for (const c of cleared)
       log.info(`cleared conflicting binding ${c.schema} ${c.key} = ${c.accel}`);
     return cleared;
+  }
+
+  /** Clears every switch-to-workspace-* binding, whatever it is bound to (see WORKSPACE_SWITCH_KEYS). */
+  private _applyWorkspaceSwitchKeys(): void {
+    const settings = this._settings(WM_KEYBINDINGS);
+    if (!settings)
+      return;
+    const present = new Set(settings.settings_schema.list_keys());
+    for (const key of WORKSPACE_SWITCH_KEYS) {
+      if (present.has(key))
+        this._applyValue(WM_KEYBINDINGS, settings, key, []);
+    }
   }
 
   /** Drops any accelerator in `wanted` from one key, remembering what was there. */

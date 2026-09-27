@@ -1,5 +1,15 @@
 import type {WindowId, MonitorId, Rect} from '../tree/node';
 
+/**
+ * GNOME holds exactly two workspaces while the extension is enabled.
+ *
+ * `live` is the active one for the extension's whole lifetime and holds every window that should be on
+ * screen. `attic` holds every window on a workspace no output is showing: Mutter does not render a
+ * non-active workspace, so this is the hiding primitive, and it costs nothing.
+ */
+export const LIVE_WORKSPACE = 0;
+export const ATTIC_WORKSPACE = 1;
+
 export type WindowKind = 'tiled' | 'floating';
 export interface WindowFacts {
   type: 'normal' | 'dialog' | 'modal-dialog' | 'utility' | 'ignored';

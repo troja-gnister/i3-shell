@@ -2,7 +2,7 @@ import {Engine, type EnginePorts, type LoadedConfig} from '../../../src/engine';
 import {loadConfigText} from '../../../src/config';
 import type {Binding, Colors} from '../../../src/config/model';
 import type {Accent} from '../../../src/config/colors';
-import type {PillState, Topology, WindowEvent, WindowInfo} from '../../../src/runtime/model';
+import {LIVE_WORKSPACE, type PillState, type Topology, type WindowEvent, type WindowInfo} from '../../../src/runtime/model';
 import type {DecorationPlan} from '../../../src/runtime/decoration';
 import type {MonitorId, Rect, WindowId} from '../../../src/tree/node';
 import type {Tree} from '../../../src/tree/tree';
@@ -61,6 +61,7 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
   const queue = new Map<number, () => void>();
   let token = 0, active = 0, count = options.workspaceCount ?? 10;
   let focused: WindowId | null = null;
+  const refusedMoves = new Set<WindowId>();
   let currentTopology: Topology | null = options.monitors
     ? outputsTopology(options.monitors, options.primary ?? options.monitors[0]!.id)
     : topology();
@@ -85,7 +86,21 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
       activate: id => { calls.push(`focus:${id}`); if (f.activationFails) return false; f.focus(id); return windows.has(id); },
       kill: id => { calls.push(`kill:${id}`); return windows.has(id); },
       fullscreen: (id, action) => { calls.push(`fullscreen:${id}:${action}`); return windows.has(id); },
-      moveToWorkspace: (id, index) => { calls.push(`moveTo:${id}:${index}`); f.change(id, {workspace: index}, 'workspace'); return windows.has(id); },
+      moveToWorkspace: (id, index) => {
+        calls.push(`moveTo:${id}:${index}`);
+        if (refusedMoves.has(id) || !windows.has(id)) return false;
+        // Mutter picks a replacement focus on its own when the window it is moving away from LIVE
+        // currently holds native focus -- observable only because this fake, unlike a synchronous
+        // confirm-and-forget stub, actually emits the native report the real compositor would.
+        const wasFocused = focused === id;
+        f.change(id, {workspace: index}, 'workspace');
+        if (wasFocused && index !== LIVE_WORKSPACE) {
+          const replacement = [...windows.keys()]
+            .find(other => other !== id && windows.get(other)!.workspace === LIVE_WORKSPACE) ?? null;
+          f.focus(replacement);
+        }
+        return true;
+      },
       unmaximize: id => { calls.push(`unmaximize:${id}`); return windows.has(id); },
       raise: id => { calls.push(`raise:${id}`); return windows.has(id); },
     },
@@ -103,7 +118,15 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
     }},
     deferred: {defer: callback => { queue.set(++token, callback); return token; }, cancel: id => { queue.delete(id); }},
     settings: {
-      apply: (_config, wanted) => { calls.push('settings.apply'); count = wanted; active = Math.min(active, count - 1); },
+      // GNOME's own native workspace count is held at two (live + attic) whenever i3-shell is naming
+      // any workspaces at all, independent of `wanted` (the i3 workspace count) -- matching what the
+      // real SettingsOverrides.apply() now forces num-workspaces to. `wanted <= 0` leaves it alone, as
+      // the real adapter restores rather than touches it in that case.
+      apply: (_config, wanted) => {
+        calls.push('settings.apply');
+        if (wanted > 0) count = 2;
+        active = Math.min(active, count - 1);
+      },
       restoreAll: () => { calls.push('settings.restore'); },
     },
     indicator: {
@@ -150,6 +173,15 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
     flush() { let limit = 1000; while (queue.size) { if (--limit === 0) throw new Error('deferred loop'); const [id, cb] = queue.entries().next().value!; queue.delete(id); cb(); } },
     setNextLoad(loaded: LoadedConfig | null) { nextLoad = loaded; },
     setTopology(value: Topology | null) { currentTopology = value; },
+    /** Makes a subsequent `moveToWorkspace(id, ...)` report refusal, the way Mutter itself might. */
+    refuseMove(id: WindowId) { refusedMoves.add(id); },
+    /**
+     * Pokes GNOME's own active workspace directly, without going through `activate()` (which would
+     * itself call `engine.onWorkspacesChanged()`) -- the way a touchpad gesture changes it, with no
+     * port call the engine issued. The test then calls `engine.onWorkspacesChanged()` itself to
+     * simulate the native signal that change would raise.
+     */
+    setActiveIndex(value: number) { active = value; },
     setNativeCount(value: number) { count = value; engine.onWorkspacesChanged(); },
     grabbedAccels: () => grabbed.map(b => b.accel),
     setAccent(value: Accent | null) { accent = value; accentChanged?.(); },

@@ -6,6 +6,7 @@ import {RectReconciler} from './runtime/reconcile';
 import {serializeTree, type TreeSnapshot, type WindowSnapshot} from './runtime/snapshot';
 import {decorationPlan, type DecorationPlan} from './runtime/decoration';
 import type {WindowsPort, GeometryPort, DeferredPort, PillState, Topology, WindowInfo, WindowEvent} from './runtime/model';
+import {LIVE_WORKSPACE, ATTIC_WORKSPACE} from './runtime/model';
 import {displayWorkspaceName} from './config/workspaceNames';
 import {excludedFromTree} from './runtime/classify';
 import {matchesCriteria} from './runtime/rules';
@@ -267,7 +268,15 @@ export class Engine {
 
   onWorkspacesChanged(): void {
     this.commit(() => {
-      if (this._ports.workspaces.count !== this._workspaceCount)
+      // GNOME's active workspace is a constant while the extension is enabled. Touchpad workspace
+      // gestures have no GSetting to clear, so this is the only cover for them.
+      if (this._started && !this._disposed && this._ports.workspaces.activeIndex !== LIVE_WORKSPACE) {
+        this._ports.log.warn('active workspace left live; switching back');
+        this._ports.workspaces.activate(LIVE_WORKSPACE, 0);
+      }
+      // GNOME's own workspace count is always two now (live + attic), independent of the config's
+      // i3 workspace count, which the settings port never sees translated 1:1 into GNOME any more.
+      if (this._ports.workspaces.count !== 2)
         this._ports.settings.apply(this._config, this._workspaceCount);
     });
   }
@@ -324,6 +333,42 @@ export class Engine {
       this._activateSelection(0);
       return true;
     });
+  }
+
+  /**
+   * Show workspace `incoming` on `output`. The five steps, in this order.
+   *
+   * Step 5 is the subtle one. Parking the focused window makes Mutter choose a replacement on its own,
+   * which fires notify::focus-window, reaches _acceptFocus and calls _selectWindow on an arbitrary
+   * window -- silently corrupting the selection mid-swap. Bracketing the parking with _expectedFocus is
+   * what tells _acceptFocus to ignore those reports.
+   */
+  private _showOnOutput(output: MonitorId, incoming: number): void {
+    const tree = this._tree;
+    if (!tree) return;
+    const outgoing = tree.visible.get(output);
+    // Not merely an optimisation: parking and immediately un-parking the same windows flashes them.
+    if (outgoing === incoming) return;
+    this.commit(() => {
+      const parked = outgoing === undefined ? [] : this._workspaceMembers(tree, outgoing);
+      for (const id of parked) this._expectedFocus.add(id);
+      for (const id of this._workspaceMembers(tree, incoming))
+        if (!this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE))
+          this._ports.log.warn(`could not show window ${id}; leaving it parked`);
+      for (const id of parked)
+        if (!this._ports.windows.moveToWorkspace(id, ATTIC_WORKSPACE))
+          this._ports.log.warn(`could not park window ${id}; leaving it on screen`);
+      tree.visible.set(output, incoming);
+      tree.workspace(incoming).output = output;
+      // 0 = no native event timestamp; the windows adapter substitutes the current server time.
+      this._activateSelection(0);
+      return true;
+    });
+  }
+
+  /** Test-only entry point for _showOnOutput; Task 7 is its first real caller. */
+  showOnOutputForTest(output: MonitorId, incoming: number): void {
+    this._showOnOutput(output, incoming);
   }
 
   /**
@@ -792,7 +837,9 @@ export class Engine {
     return {
       mode: this._mode,
       activeWorkspace: this._activeWorkspaceIndex(),
-      workspaceCount: this._ports.workspaces.count,
+      // The tree's own count once one exists, never GNOME's raw count: GNOME's is pinned at two
+      // (live + attic) under the attic, which would report 2 forever and say nothing useful.
+      workspaceCount: this._tree ? this._tree.workspaces.size : this._workspaceCount,
       grabbed: this._ports.keys.grabbedCount,
       configSource: l.source,
       configPath: l.path,
@@ -879,7 +926,11 @@ export class Engine {
     }
 
     const config = loaded.config;
-    const count = config.workspaceCount || this._ports.workspaces.count;
+    // A config naming no workspace count falls back to the running i3 workspace count on reload (the
+    // engine's own _workspaceCount) rather than to GNOME's, which is pinned at two (live + attic) and
+    // would silently shrink the tree on every reload; before the tree exists, GNOME's native count is
+    // the only sensible inheritance for a first enable, since _workspaceCount has no history yet.
+    const count = config.workspaceCount || (this._tree ? this._workspaceCount : this._ports.workspaces.count);
     if (!Number.isInteger(count) || count < 1 || count > 36) {
       this._ports.notify('i3-shell: config rejected', 'workspace count must be between 1 and 36');
       return false;
