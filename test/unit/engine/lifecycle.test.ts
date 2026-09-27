@@ -388,23 +388,31 @@ describe('engine lifecycle', () => {
   });
 
   it('stops a shrinking reload after a native workspace move disposes the engine', () => {
-    // The stale workspace: 9 must be set *after* adoption, not in the initial patch -- F2's own
-    // adoption-time sync (workspace 0 is visible, so LIVE) would otherwise immediately correct it
-    // away from 9 before the vestigial-count check below ever saw it.
+    // Two windows on workspace 9, moved there through the real command path (window 2, added last,
+    // is selected first; window 1 becomes the remaining selection once it leaves). The reload below
+    // shrinks to 2 workspaces, so workspace 9 is deleted and tree.reconfigure's own move map -- not a
+    // vestigial per-window check -- produces two real native moves, which is what lets this test
+    // observe the engine stopping after the first one.
     const f = fakeEngine(); f.engine.start(); f.add(1); f.add(2); f.flush();
-    f.change(1, {workspace: 9}, 'workspace'); f.change(2, {workspace: 9}, 'workspace'); f.flush();
+    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 10, name: '10'}}], 0); f.flush();
+    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 10, name: '10'}}], 1); f.flush();
+    expect(f.engine.treeSnapshot().workspaces[9].monitors[0].root).toMatchObject({
+      children: [{window: 2}, {window: 1}],
+    });
     const loaded = f.load('bindsym Mod4+x kill');
     f.setNextLoad({...loaded, config: {...loaded.config!, workspaceCount: 2}});
     const moved: number[] = [];
     f.ports.windows.moveToWorkspace = id => { moved.push(id); f.engine.stop(); return false; };
     f.calls.length = 0; f.applied.length = 0;
     f.engine.run([{type: 'reload'}], 0); f.flush();
-    expect(moved).toHaveLength(1);
+    // Window 2 moved to workspace 9 first, so tree.reconfigure's own leaf order puts it first in the
+    // move map too; window 1's move never happens because the mock disposes on the first one.
+    expect(moved).toEqual([2]);
     // _moveReconfigured now warns on a refused move (F1); the mock refuses and disposes in the same
     // call, and the warn is logged before the disposed check runs.
     expect(f.calls).toEqual([
       'launcher.close', 'ungrabAll', 'settings.restore',
-      'warn:could not move window 1 to workspace 2; leaving it where it was',
+      'warn:could not move window 2 to workspace 2; leaving it where it was',
     ]);
     expect(f.applied).toEqual([]);
   });

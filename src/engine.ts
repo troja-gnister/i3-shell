@@ -1015,12 +1015,6 @@ export class Engine {
       if (this._tree && this._topology) {
         const outputs = this._topology.monitors.map(m => ({id: m.id, index: m.index}));
         const moves = this._tree.reconfigure(count, outputs, this._topology.primary);
-        // Deliberately mixes coordinate systems: `info.workspace` is GNOME's index, `count` is the new
-        // i3 workspace count -- a vestige of the pre-Task-5 model, kept only because
-        // test/unit/engine/lifecycle.test.ts's "stops a shrinking reload after a native workspace move
-        // disposes the engine" currently depends on it to trigger the native move it counts. Removing it
-        // will break that test for a non-obvious reason.
-        for (const info of this._windows.values()) if (info.workspace >= count) moves.set(info.id, count - 1);
         this._moveReconfigured(moves);
         if (this._disposed) return;
       }
