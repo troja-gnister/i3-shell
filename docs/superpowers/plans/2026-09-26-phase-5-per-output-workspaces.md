@@ -466,7 +466,7 @@ export function adoptOutput(
 
 Run: `npx vitest run test/unit/tree/outputs.test.ts && npm run typecheck && npm run check:layer0 && npm run lint:tree`
 
-Expected: 17 passing across the five describes; guards clean.
+Expected: 18 passing across the five describes (3 + 5 + 4 + 3 + 3); guards clean.
 
 - [ ] **Step 5: Mutation-prove the primary-first rule**
 
@@ -2296,7 +2296,10 @@ boolean directives use (`workspaceAutoBackAndForth` is the nearest model):
 ```
 
 `OverridePlan` gains `focusMode: 'sloppy' | 'click'`, set by `planOverrides` from that boolean, and
-`settings.ts` applies it beside `mouse-button-modifier`:
+`settings.ts` applies it beside `mouse-button-modifier`. **Adding a required field to `OverridePlan`
+breaks every `{...plan, …}` fixture that does not carry it, including the five Task 6 added to
+`test/unit/shell/settings.test.ts`** — add `focusMode` to the shared fixture rather than to each call
+site, and expect the typecheck to name them all if you miss one:
 
 ```ts
     const prefs = this._settings(WM_PREFS);
@@ -2424,8 +2427,10 @@ it('does not warp while the launcher holds its grab', () => {
 });
 ```
 
-The last two depend on Task 13's `focus output`; write them now and expect them red until Task 13, or
-move just those two into Task 13 — either is fine, but say which in the record.
+**Controller ruling: the last two tests belong to Task 13, not here.** Do not write them in this task.
+Task 13 owns them, so every task except 3 and 4 ends with a fully green suite — an invariant a reviewer
+can check without cross-referencing the plan. Task 12's deliverable is `onPointerOutput` and
+`_warpToFocusedOutput`; Task 13 is what first calls the latter.
 
 - [ ] **Step 2: Run them and confirm they fail**
 
@@ -2567,8 +2572,8 @@ know about `MonitorId` allocation.
 
 Run: `npm test && npm run typecheck && npm run check:layer0`
 
-Expected: green apart from the two `focus output` tests, which Task 13 closes. Record exactly which are
-red and why.
+Expected: **all green.** `_warpToFocusedOutput` is written here but first called in Task 13, so nothing
+in this task exercises it; that is why its tests live there.
 
 - [ ] **Step 7: Mutation-prove the emptiness condition**
 
@@ -2642,6 +2647,21 @@ it('focus output is a no-op off the end and never wraps', () => {
   h.run('focus output left');
   expect(h.state().focusedOutput).toBe(0);
   expect(h.log.warnings()).toEqual([]);
+});
+it('warps the pointer when a command changes output, and not when mouse_warping is none', () => {
+  const warped = harness({monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+  warped.run('focus output right');
+  expect(warped.pointer.warps().length).toBe(1);
+  const still = harness({monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0,
+                         workspaceCount: 10, config: 'mouse_warping none\n'});
+  still.run('focus output right');
+  expect(still.pointer.warps()).toEqual([]);
+});
+it('does not warp while the launcher holds its grab', () => {
+  const h = harness({monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+  h.run('launcher');
+  h.run('focus output right');
+  expect(h.pointer.warps()).toEqual([]);
 });
 it('focus output resolves a connector name', () => {
   const h = harness({monitors: [{id: 0, index: 0, connectors: ['HDMI-1']},
@@ -2732,7 +2752,7 @@ requires a window, give it an early return for a rootless selection rather than 
 
 Run: `npm test && npm run typecheck && npm run check:layer0`
 
-Expected: **all green**, including the two warp tests deferred from Task 12.
+Expected: **all green**, including the two warp tests this task owns (see Task 12's controller ruling).
 
 - [ ] **Step 7: Commit**
 
@@ -3322,12 +3342,15 @@ can make a workspace visible or parked without moving any window between workspa
 Call it from `_layoutAndPublish` immediately after the reconfigure branch, and once after the tree is
 first constructed so adoption on enable parks anything that is not on a visible workspace.
 
-- [ ] **Step 5: Rewrite the flattening assertions in `topology.test.ts`**
+- [ ] **Step 5: Add the remembering assertions to `topology.test.ts`**
 
-Every case there that asserts a lost monitor's windows were appended into the primary's root now asserts
-the workspace kept its root and changed its `output`. A test still asserting flattening is asserting the
-bug this task removes. Keep the workspace-count-shrink cases exactly as they are — that path still
-flattens, deliberately, because the workspaces themselves cease to exist.
+**Controller ruling: Task 3 Step 5 already rewrote that file's flattening assertions to the reassign
+behaviour.** Do not rewrite them again — two tasks editing the same assertions is how one silently
+reverts the other. This task only *adds* cases for the remembering and the gained-output rule. If you
+find a flattening assertion still standing, Task 3 missed it: fix it and say so in the report.
+
+Keep the workspace-count-shrink cases exactly as they are — that path still flattens, deliberately,
+because the workspaces themselves cease to exist.
 
 - [ ] **Step 6: Run the suite and the guards**
 
