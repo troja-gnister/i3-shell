@@ -706,6 +706,14 @@ export class Tree {
       throw new Error(`focused output ${this.focusedOutput} shows no workspace`);
     return workspace;
   }
+
+  /**
+   * The live output set, as a stable string, so the engine can tell a real monitor change from a no-op.
+   * Task 5's `_layoutAndPublish` compares it against the topology's sorted ids.
+   */
+  outputSignature(): string {
+    return [...this.visible.keys()].sort((a, b) => a - b).join(',');
+  }
 ```
 
 Then change each member that named a monitor. Every one is mechanical; the compiler finds them all.
@@ -1061,14 +1069,7 @@ In `_layoutAndPublish`, replace the construction and reconfigure block (`engine.
         this._moveReconfigured(this._tree.reconfigure(this._workspaceCount, outputs, topology.primary));
 ```
 
-Add to `Tree` in `src/tree/tree.ts`:
-
-```ts
-  /** The live output set, as a stable string, so the engine can tell a monitor change from a no-op. */
-  outputSignature(): string {
-    return [...this.visible.keys()].sort((a, b) => a - b).join(',');
-  }
-```
+`outputSignature()` already exists on `Tree` — Task 3 added it. Do not redeclare it.
 
 `_pinnedOutputs()` returns `new Map()` for now and Task 10 fills it in from the config:
 
