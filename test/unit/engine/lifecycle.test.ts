@@ -137,7 +137,9 @@ describe('engine lifecycle', () => {
   });
   it('enforces effective count for zero and moves before shrinking', () => {
     const f = fakeEngine(); f.engine.start(); expect(f.engine.config.workspaceCount).toBe(0);
-    f.setNativeCount(7); expect(f.ports.workspaces.count).toBe(10);
+    // Self-healing now targets GNOME's own pinned count -- two, live + attic -- not the i3 workspace
+    // count: GNOME's raw number stopped meaning anything i3-relevant once the attic landed.
+    f.setNativeCount(7); expect(f.ports.workspaces.count).toBe(2);
     // A new window always adopts onto the visible workspace now (there is no `workspace N` yet to move
     // it away with a real switch), so getting it onto workspace 9 goes through `move_to_workspace`.
     f.add(1); f.flush();
@@ -175,18 +177,35 @@ describe('engine lifecycle', () => {
     f.change(1, {fullscreen: false}, 'fullscreen'); f.flush();
     expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{window: 1}]});
   });
-  it('re-adopts a minimized window onto the visible workspace, not its former one, on restore', () => {
-    // Minimizing evicts a window from the tree outright, and nothing remembers its former workspace
-    // (only its floating-ness survives in `_minimized`), so a mismatched native report at the moment it
-    // minimizes changes nothing: on restore it comes back like a window the tree has never seen --
-    // adopted onto the output's currently visible workspace, not onto workspace 1 (the tree's actual
-    // move target) or 4 (Mutter's mismatched report).
+  it('re-adopts a minimized window onto the workspace it came from, not Mutter’s mismatched report', () => {
+    // Minimizing evicts a window from the tree outright. `_minimized` remembers the i3 workspace it
+    // was on -- read from the tree's own location, not from Mutter's report -- alongside its
+    // floating-ness, so a mismatched native report at the moment it minimizes (4 here, matching
+    // nothing the move itself did) changes nothing: on restore it comes back onto workspace 1, where
+    // the move actually put it, not onto workspace 0 (the output's visible one) or 4 (Mutter's report).
     const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
     f.ports.windows.moveToWorkspace = id => { f.change(id, {workspace: 4, minimized: true}, 'workspace'); return true; };
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 0); f.flush();
     expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: []});
     f.change(1, {minimized: false}, 'minimized'); f.flush();
-    expect(f.engine.treeSnapshot().workspaces[0].monitors[0].root).toMatchObject({children: [{window: 1}]});
+    expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{window: 1}]});
+    expect(f.engine.treeSnapshot().workspaces[0].monitors[0].root).toMatchObject({children: []});
+  });
+  it('re-adopts a minimized window onto the workspace it came from, not the one now visible', () => {
+    // Addition beyond the brief (Task 6, item beyond the swap): before Phase 5, WindowInfo.workspace
+    // (a GNOME index) happened to remember where a window came from; the attic made that field always
+    // 0 or 1, so without this, a window evicted from a non-visible workspace re-adopted onto whichever
+    // workspace is visible when it returns -- and its pill went dark while it was away.
+    const f = fakeEngine(); f.engine.start();
+    f.tree().visible.set(f.tree().focusedOutput, 2);
+    f.add(1); f.flush();   // adopts onto workspace 2, which is visible right now
+    expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: [{window: 1}]});
+    f.tree().visible.set(f.tree().focusedOutput, 0);   // the output now shows workspace 0 instead
+    f.change(1, {minimized: true}, 'minimized'); f.flush();
+    expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: []});
+    f.change(1, {minimized: false}, 'minimized'); f.flush();
+    expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: [{window: 1}]});
+    expect(f.engine.treeSnapshot().workspaces[0].monitors[0].root).toMatchObject({children: []});
   });
   it('rebuilds restart from live classification with stable ids and announces cache', () => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();

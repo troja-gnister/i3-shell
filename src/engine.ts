@@ -123,7 +123,8 @@ export class Engine {
   private readonly _queued: Array<() => boolean | void> = [];
   private readonly _windows = new Map<WindowId, WindowInfo>();
   private readonly _manualFloating = new Map<WindowId, boolean>();
-  private readonly _minimized = new Map<WindowId, boolean>();
+  /** State a window that leaves the tree (minimized, sticky, or skip-taskbar) keeps until it returns. */
+  private readonly _minimized = new Map<WindowId, {floating: boolean; workspace: number}>();
   private readonly _expectedFocus = new Set<WindowId>();
   private _lastFocus: WindowId | null = null;
   private readonly _unmaximizing = new Set<WindowId>();
@@ -588,17 +589,22 @@ export class Engine {
     if (!tree) return;
     const existing = tree.location(id);
     if (excludedFromTree(info)) {
-      // _minimized now holds "the floating state this window had when it left
-      // the tree, for any reason" (minimized, sticky, or skip-taskbar), not
-      // just minimize; the name predates that and is left alone here.
-      this._minimized.set(id, this._minimized.get(id) ?? this._floating(info));
+      // _minimized now holds "the floating state and the i3 workspace this window had when it left
+      // the tree, for any reason" (minimized, sticky, or skip-taskbar), not just minimize; the name
+      // predates that and is left alone here. Recorded once, on the eviction that first removes it
+      // (existing?.workspace, read above before tree.remove()), and preserved across any later
+      // eviction while it stays excluded -- a repeat eviction has no tree location left to read.
+      this._minimized.set(id, this._minimized.get(id) ?? {
+        floating: this._floating(info),
+        workspace: existing?.workspace ?? this._adoptionWorkspace(tree, info),
+      });
       tree.remove(id);
     } else {
-      const floating = this._minimized.get(id);
-      if (floating !== undefined) { this._manualFloating.set(id, floating); this._minimized.delete(id); }
+      const evicted = this._minimized.get(id);
+      if (evicted !== undefined) { this._manualFloating.set(id, evicted.floating); this._minimized.delete(id); }
       // The engine is the authority now (spec 2.6). Mutter's workspace for this window is 0 or 1 and
       // says nothing about which i3 workspace it belongs to.
-      const target = existing ? existing.workspace : this._adoptionWorkspace(tree, info);
+      const target = existing ? existing.workspace : this._adoptionWorkspace(tree, info, evicted?.workspace);
       if (!tree.location(id) && tree.workspaces.has(target)) {
         if (this._floating(info)) tree.addFloating(id, target);
         else tree.insert(id, target);
@@ -632,12 +638,15 @@ export class Engine {
   }
 
   /**
-   * Where a window the tree has not seen belongs: the visible workspace of the output it is on.
+   * Where a window the tree has not seen belongs: the workspace it left, if a window that was
+   * evicted (minimized, sticky, or skip-taskbar) and is now returning still remembers one that
+   * exists, otherwise the visible workspace of the output it is on.
    *
    * On enable its pre-enable workspace is unrecoverable -- reducing num-workspaces to 2 makes Mutter
    * collapse the removed workspaces -- but its output is observable and is what the user sees.
    */
-  private _adoptionWorkspace(tree: Tree, info: WindowInfo): number {
+  private _adoptionWorkspace(tree: Tree, info: WindowInfo, remembered?: number): number {
+    if (remembered !== undefined && tree.workspaces.has(remembered)) return remembered;
     return tree.visible.get(info.monitor ?? tree.focusedOutput) ?? tree.activeWorkspace;
   }
 
