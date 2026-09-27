@@ -45,11 +45,10 @@ export function serializeTree(
   return {version: 1, revision, ready: true, activeWorkspace: tree.activeWorkspace,
     workspaces: [...tree.workspaces.values()].map(ws => {
       const selection = tree.selection(ws.index);
+      const area = topology.workAreas.get(ws.output);
       return {index: ws.index, selected: selection?.kind === 'tiled'
         ? {kind: 'tiled', nodeId: selection.con.id} : selection ? {...selection} : null,
-      floating: [...ws.floating], monitors: [...ws.monitors].map(([id, root]) => {
-        const area = topology.workAreas.get(ws.index)?.get(id);
-        return {id, workArea: area ? {...area} : null, root: node(root)};
-      })};
+      floating: [...ws.floating],
+      monitors: [{id: ws.output, workArea: area ? {...area} : null, root: node(ws.root)}]};
     })};
 }

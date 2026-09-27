@@ -8,6 +8,11 @@ export interface TopologySource<M, W> {
   connector(monitor: M): string;
   indexForConnector(connector: string): number;
   primaryIndex(): number;
+  /**
+   * Unused by readTopology's own work-area logic (it now reads only workspace 0), but kept on the
+   * interface because the real GNOME-backed source in src/shell/geometry.ts still implements it and
+   * that file is outside this task's scope to edit.
+   */
   workspaceCount(): number;
   workspace(index: number): W | null;
   workArea(workspace: W, monitorIndex: number): Rect | null;
@@ -35,19 +40,14 @@ export function readTopology<M, W>(
   const primaryIndex = source.primaryIndex();
   if (!Number.isInteger(primaryIndex) || !groups.has(primaryIndex)) return null;
 
-  const workspaceCount = source.workspaceCount();
-  if (!Number.isInteger(workspaceCount) || workspaceCount < 1) return null;
-  const rawWorkAreas: Array<Map<number, Rect>> = [];
-  for (let workspaceIndex = 0; workspaceIndex < workspaceCount; workspaceIndex++) {
-    const workspace = source.workspace(workspaceIndex);
-    if (!workspace) return null;
-    const areas = new Map<number, Rect>();
-    for (const monitorIndex of groups.keys()) {
-      const area = source.workArea(workspace, monitorIndex);
-      if (!area || !usableRect(area)) return null;
-      areas.set(monitorIndex, copyRect(area));
-    }
-    rawWorkAreas.push(areas);
+  // Workspace 0 is `live`: the only GNOME workspace any visible window occupies.
+  const liveWorkspace = source.workspace(0);
+  if (!liveWorkspace) return null;
+  const rawWorkAreas = new Map<number, Rect>();
+  for (const monitorIndex of groups.keys()) {
+    const area = source.workArea(liveWorkspace, monitorIndex);
+    if (!area || !usableRect(area)) return null;
+    rawWorkAreas.set(monitorIndex, copyRect(area));
   }
 
   const monitors = ids.update(
@@ -60,16 +60,11 @@ export function readTopology<M, W>(
   if (primary === undefined)
     throw new Error('validated primary monitor was not assigned an id');
 
-  const workAreas = new Map<number, ReadonlyMap<MonitorId, Rect>>();
-  for (let workspaceIndex = 0; workspaceIndex < rawWorkAreas.length; workspaceIndex++) {
-    const areas = new Map<MonitorId, Rect>();
-    for (const [monitorIndex, area] of rawWorkAreas[workspaceIndex]!) {
-      const id = idsByIndex.get(monitorIndex);
-      if (id === undefined)
-        throw new Error('validated monitor was not assigned an id');
-      areas.set(id, area);
-    }
-    workAreas.set(workspaceIndex, areas);
+  const workAreas = new Map<MonitorId, Rect>();
+  for (const [monitorIndex, area] of rawWorkAreas) {
+    const id = idsByIndex.get(monitorIndex);
+    if (id === undefined) throw new Error('validated monitor was not assigned an id');
+    workAreas.set(id, area);
   }
   return {primary, monitors, workAreas};
 }

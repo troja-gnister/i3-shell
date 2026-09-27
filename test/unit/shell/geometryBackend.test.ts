@@ -9,7 +9,7 @@ interface FakeWindow {
 const topology: Topology = {
   primary: 1,
   monitors: [{id: 1, index: 0, connectors: ['eDP-1']}],
-  workAreas: new Map([[0, new Map([[1, {x: 0, y: 30, width: 1920, height: 1050}]])]]),
+  workAreas: new Map([[1, {x: 0, y: 30, width: 1920, height: 1050}]]),
 };
 
 describe('GeometryBackend', () => {

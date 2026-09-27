@@ -387,8 +387,7 @@ export class Engine {
   private _layoutAndPublish(): void {
     const topology = this._ports.geometry.topology();
     this._ready = !!topology && topology.monitors.length > 0 &&
-      Array.from({length: this._workspaceCount}, (_, i) => i).every(index =>
-        topology.monitors.every(m => topology.workAreas.get(index)?.has(m.id)));
+      topology.monitors.every(m => topology.workAreas.has(m.id));
     const decoRoots: Array<{root: SplitCon; active: boolean}> = [];
     let decoFocused: Con | null = null;
     if (this._ready && topology) {
@@ -422,7 +421,7 @@ export class Engine {
       this._containerRects = new Map();
       for (const ws of tree.workspaces.values()) {
         for (const [monitor, root] of ws.monitors) {
-          const layout = layoutWithRects(root, topology.workAreas.get(ws.index)!.get(monitor)!, this._rowHeight);
+          const layout = layoutWithRects(root, topology.workAreas.get(ws.output)!, this._rowHeight);
           for (const [con, rect] of layout.containers) this._containerRects.set(con, rect);
           for (const [id, rect] of layout.windows) {
             const info = this._ports.windows.get(id);
@@ -922,8 +921,7 @@ export class Engine {
     const topology = this._topology;
     if (!topology || !this._tree) return null;
     const workspace = this._ports.workspaces.activeIndex;
-    const areas = topology.workAreas.get(workspace);
-    if (!areas) return null;
+    const areas = topology.workAreas;
 
     const selection = this._tree.selection(workspace);
     let monitor: MonitorId | null = null;
@@ -1116,7 +1114,7 @@ export class Engine {
           let position: {x: number; y: number};
           if (command.position === 'center') {
             const monitor = floating.info.monitor ?? this._topology.primary;
-            const area = this._topology.workAreas.get(floating.info.workspace)?.get(monitor);
+            const area = this._topology.workAreas.get(monitor);
             if (!area) { reject(); return false; }
             position = {
               x: area.x + Math.round((area.width - floating.info.rect.width) / 2),

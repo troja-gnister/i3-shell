@@ -52,8 +52,7 @@ describe('ControlObject', () => {
     f.setTopology({
       primary: 10,
       monitors: [{id: 10, index: 0, connectors: ['fixture']}],
-      workAreas: new Map(Array.from({length: 10}, (_, index) =>
-        [index, new Map([[10, {x: 0, y: 30, width: 1000, height: 700}]])])),
+      workAreas: new Map([[10, {x: 0, y: 30, width: 1000, height: 700}]]),
     });
     f.engine.relayout();
     shellReady = false;

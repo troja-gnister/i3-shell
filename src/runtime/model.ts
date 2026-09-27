@@ -55,7 +55,14 @@ export interface MonitorInfo {
 export interface Topology {
   primary: MonitorId;
   monitors: readonly MonitorInfo[];
-  workAreas: ReadonlyMap<number, ReadonlyMap<MonitorId, Rect>>;
+  /**
+   * One work area per output, read from the *live* GNOME workspace.
+   *
+   * A work area belongs to an output, not to a workspace. It was keyed by workspace only because
+   * GNOME owned workspaces; with two GNOME workspaces (live + attic) that keying would produce
+   * entries for 0 and 1 alone, and every i3 workspace above 1 would miss.
+   */
+  workAreas: ReadonlyMap<MonitorId, Rect>;
 }
 export interface GeometryPort {
   topology(): Topology | null;

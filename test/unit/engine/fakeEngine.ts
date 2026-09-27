@@ -13,9 +13,12 @@ export function windowInfo(id: number, patch: Partial<WindowInfo> = {}): WindowI
     minimized: false, fullscreen: false,
     maximizedH: false, maximizedV: false, sticky: false, skipTaskbar: false, ...patch};
 }
+// `count` is unused now that workAreas is keyed by output rather than by workspace; kept so callers
+// that still pass an explicit workspace count (a concern of Tree, not of Topology) do not need editing.
 export function topology(count = 10): Topology {
+  void count;
   return {primary: 10, monitors: [{id: 10, index: 0, connectors: ['fixture']}],
-    workAreas: new Map(Array.from({length: count}, (_, i) => [i, new Map([[10, {x: 0, y: 30, width: 1000, height: 700}]])]))};
+    workAreas: new Map([[10, {x: 0, y: 30, width: 1000, height: 700}]])};
 }
 
 export const PRIMARY_AREA = {x: 0, y: 30, width: 1000, height: 700};
@@ -23,11 +26,11 @@ export const SECOND_AREA = {x: 1000, y: 0, width: 1920, height: 1050};
 
 /** Two monitors: 10 is primary at the origin, 11 sits to its right. */
 export function twoMonitorTopology(count = 10): Topology {
+  void count;
   return {
     primary: 10,
     monitors: [{id: 10, index: 0, connectors: ['fixture']}, {id: 11, index: 1, connectors: ['second']}],
-    workAreas: new Map(Array.from({length: count}, (_, i) =>
-      [i, new Map([[10, {...PRIMARY_AREA}], [11, {...SECOND_AREA}]])])),
+    workAreas: new Map([[10, {...PRIMARY_AREA}], [11, {...SECOND_AREA}]]),
   };
 }
 export function fakeEngine(initialText = 'bindsym Mod4+q kill') {
