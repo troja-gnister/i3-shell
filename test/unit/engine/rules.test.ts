@@ -177,4 +177,35 @@ describe('for_window rules', () => {
     expect(f.calls.filter(c => c.startsWith('warn:'))).toEqual([]);
     expect(f.engine.windowsSnapshot().find(w => w.id === 1)?.state).toBe('floating');
   });
+
+  /**
+   * Task 7 fix round 2. The same class of bug as the test above, for `workspace` instead of
+   * `floating`/`resize`/`move`: `_applyRules` runs from inside the commit its matching 'added' event
+   * opened, so every `workspace` command it drives here opens a *nested* `commit()` that only queues
+   * -- it does not run until this rule's own commit unwinds. A comma-separated command list is
+   * ordinary i3 syntax, so `for_window ... workspace number 3, workspace number 4` queues two such
+   * closures, back to back, in one rule.
+   *
+   * `resident` is a tree member of workspace 2 ("number 3") before the rule ever fires, parked in the
+   * attic because workspace 0 is the one actually visible. The rule's first command brings workspace 2
+   * -- and `resident` with it -- live; its second command should then park whatever *is* visible at
+   * that moment (workspace 2, i.e. `resident`), not whatever was visible before either command ran
+   * (workspace 0, which has nothing to do with `resident` at all). A `workspace` command that reads
+   * `tree.visible` before its own closure runs, rather than inside it, parks the latter and leaves
+   * `resident` live -- alongside whatever workspace 3 has (nothing, here, but `resident` staying live
+   * is the defect on its own).
+   */
+  it('a for_window rule with two workspace commands parks each switch\'s own outgoing workspace', () => {
+    const f = fakeEngine('for_window [title="^probe$"] workspace number 3, workspace number 4');
+    f.engine.start();
+
+    f.add(2, {title: 'resident'}); f.flush();
+    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 3, name: '3'}}], 0); f.flush();
+    expect(f.windows.get(2)!.workspace).toBe(1); // ATTIC: workspace 2 is not visible yet
+
+    f.add(1, {title: 'probe'}); f.flush();
+
+    expect(f.tree().visible.get(f.tree().focusedOutput)).toBe(3); // workspace 3 ("number 4") ends up shown
+    expect(f.windows.get(2)!.workspace).toBe(1); // ATTIC: resident must be parked again, not left live
+  });
 });
