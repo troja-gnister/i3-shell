@@ -20,7 +20,14 @@ describe('engine lifecycle', () => {
     const f = fakeEngine(); f.windows.set(1, windowInfo(1)); f.windows.set(2, windowInfo(2));
     f.engine.start(); f.flush();
     f.engine.run([{type: 'kill'}], 1); expect(f.calls).toContain('kill:1');
-    f.add(3, {workspace: 4}); expect(f.engine.treeSnapshot().activeWorkspace).toBe(0);
+    f.add(3); f.flush();
+    // Moving window 3 onto a genuinely different workspace must not change which workspace is active:
+    // adding (or moving) content elsewhere is not a switch. There is no `workspace N` yet (Task 7), so
+    // this uses `move_to_workspace` rather than the old `workspace: 4` fixture shorthand -- adoption no
+    // longer reads `info.workspace`, so that shorthand would leave window 3 on workspace 0 too, and the
+    // assertion below could never fail.
+    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 5, name: '5'}}], 2);
+    expect(f.engine.treeSnapshot().activeWorkspace).toBe(0);
   });
   it.each(['fullscreen', 'minimized', 'maximized'] as const)('reapplies an unchanged tile after %s exit', event => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
@@ -180,14 +187,6 @@ describe('engine lifecycle', () => {
     expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: []});
     f.change(1, {minimized: false}, 'minimized'); f.flush();
     expect(f.engine.treeSnapshot().workspaces[0].monitors[0].root).toMatchObject({children: [{window: 1}]});
-  });
-  it('preserves pending destination until an asynchronous native acknowledgement', () => {
-    const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
-    f.ports.windows.moveToWorkspace = () => true;
-    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 0);
-    expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{window: 1}]});
-    f.change(1, {workspace: 1}, 'workspace'); f.flush();
-    expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{window: 1}]});
   });
   it('rebuilds restart from live classification with stable ids and announces cache', () => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();

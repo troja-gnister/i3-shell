@@ -26,18 +26,44 @@ describe('Engine', () => {
     f.calls.length = 0;
     e.onBinding(binding(e.config, 'default', '<Super>3'), 1);
     expect(f.calls).toEqual(['activate:2', 'decorations']);
-    f.add(1, {workspace: 2});
+    // A new window always adopts onto the visible workspace now (there is no `workspace N` yet, Task 7,
+    // to really move GNOME's activate() above onto it), so window 1 lands -- and is selected -- on
+    // workspace 0, which is what the move below actually moves.
+    f.add(1); f.flush();
     e.onBinding(binding(e.config, 'default', '<Super><Shift>0'), 2);
     // 'decorations' trails every commit, including the extra one a moved window's
     // own workspace-changed event queues; filter it out to keep this assertion
     // about the port calls the move itself makes.
     expect(f.calls.filter(c => c !== 'decorations')).toEqual(['activate:2', 'moveTo:1:9']);
     expect(e.run([{type: 'workspace', target: {kind: 'name', name: '10:X'}}], 3)).toBe('workspace 10');
-    expect(e.run([{type: 'workspace', target: {kind: 'next'}}], 4)).toBe('workspace: no such workspace');
-    expect(e.run([{type: 'workspace', target: {kind: 'prev'}}], 5)).toBe('workspace 9');
-    expect(e.run([{type: 'workspace', target: {kind: 'number', number: 9, name: '9'}}], 6)).toBe('workspace: already active');
     expect(e.run([{type: 'workspace', target: {kind: 'number', number: 11, name: '11'}}], 7)).toBe('workspace: no such workspace');
-    expect(e.run([{type: 'move_to_workspace', target: {kind: 'number', number: 9, name: '9'}}], 8)).toBe('move container to workspace: already there');
+
+    // `next`, `prev` and "already active"/"already there" all resolve against the tree's own active
+    // workspace now (spec 2.6), not GNOME's raw index -- and the `workspace`/`activate()` calls above
+    // never moved it (there is no `workspace N` yet, Task 7, to move what an output shows), so it is
+    // still workspace 0. Poke `tree.visible` directly to simulate a switch having landed, and confirm
+    // the resolution follows that, not GNOME's index.
+    expect(e.run([{type: 'workspace', target: {kind: 'next'}}], 4)).toBe('workspace 2');
+    f.tree().visible.set(f.tree().focusedOutput, 1);
+    expect(e.run([{type: 'workspace', target: {kind: 'number', number: 2, name: '2'}}], 5)).toBe('workspace: already active');
+    expect(e.run([{type: 'workspace', target: {kind: 'prev'}}], 6)).toBe('workspace 1');
+    expect(e.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 8)).toBe('move container to workspace: already there');
+  });
+
+  it('does not treat a target as already active just because GNOME switched to it', () => {
+    // Before this fix, `_workspaceIndex` and the "already active"/"already there" guards read
+    // `ports.workspaces.activeIndex` -- GNOME's raw index. `workspace 3` moves only that (real
+    // switching is Task 7), so a following `move_to_workspace 3` would wrongly compare its target
+    // against GNOME's now-moved index and report "already there", even though window 1 -- and the
+    // tree's own notion of active -- never left workspace 0.
+    const f = fakePorts(referenceText);
+    const e = f.engine;
+    e.start();
+    f.add(1); f.flush();
+    expect(e.run([{type: 'workspace', target: {kind: 'number', number: 3, name: '3'}}], 1)).toBe('workspace 3');
+    expect(e.state().activeWorkspace).toBe(0); // the tree's own active workspace never moved
+    expect(e.run([{type: 'move_to_workspace', target: {kind: 'number', number: 3, name: '3'}}], 2))
+      .toBe('moved to workspace 3');
   });
 
   it('modes swap the grabbed set and show the label; Escape returns to default', () => {

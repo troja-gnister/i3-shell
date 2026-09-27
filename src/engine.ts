@@ -123,7 +123,6 @@ export class Engine {
   private readonly _windows = new Map<WindowId, WindowInfo>();
   private readonly _manualFloating = new Map<WindowId, boolean>();
   private readonly _minimized = new Map<WindowId, boolean>();
-  private readonly _expectedWorkspace = new Map<WindowId, number>();
   private readonly _expectedFocus = new Set<WindowId>();
   private _lastFocus: WindowId | null = null;
   private readonly _unmaximizing = new Set<WindowId>();
@@ -260,7 +259,7 @@ export class Engine {
         // focus-stealing prevention cannot drop the activation.
         if (selected && location?.workspace === this._tree?.activeWorkspace) this._activateSelection(0);
       } else {
-        this._syncWindow(event.id, event.type === 'workspace');
+        this._syncWindow(event.id);
         if (event.type === 'added' || event.type === 'title') this._applyRules(event.id, 0);
       }
     });
@@ -464,9 +463,10 @@ export class Engine {
       if (this._disposed) return;
       this._raiseChanged();
     } else {
-      // Keep ready ids known even while the compositor has no complete topology,
-      // but still drop ids that are gone: the pill occupancy below is computed
-      // from this map, so a stale id would keep its workspace lit forever.
+      // Keep ready ids known even while the compositor has no complete topology, but still drop ids
+      // that are gone: pill occupancy is computed from the tree below, and `_forget` (called from the
+      // loop right after this) removes a dropped id from the tree too, so a stale id would otherwise
+      // keep its workspace lit forever.
       const live = this._ports.windows.list();
       const ids = new Set(live.map(w => w.id));
       for (const id of this._windows.keys()) if (!ids.has(id)) this._forget(id);
@@ -532,14 +532,13 @@ export class Engine {
     return this._manualFloating.get(info.id) ?? info.kind === 'floating';
   }
 
-  private _syncWindow(id: WindowId, workspaceEvent = false): void {
+  private _syncWindow(id: WindowId): void {
     const info = this._ports.windows.get(id);
     if (!info) { this._forget(id); return; }
     const old = this._windows.get(id);
     this._windows.set(id, {...info, rect: {...info.rect}});
     if (old?.fullscreen && !info.fullscreen) this._forced.add(id);
     if (old && excludedFromTree(old) && !excludedFromTree(info)) this._forced.add(id);
-    if (workspaceEvent) this._expectedWorkspace.delete(id);
     const tree = this._tree;
     if (!tree) return;
     const existing = tree.location(id);
@@ -602,7 +601,6 @@ export class Engine {
     this._windows.delete(id);
     this._manualFloating.delete(id);
     this._minimized.delete(id);
-    this._expectedWorkspace.delete(id);
     this._expectedFocus.delete(id);
     this._unmaximizing.delete(id);
     this._unmaximizeAttempts.delete(id);
@@ -748,12 +746,11 @@ export class Engine {
     if (!activated) this._expectedFocus.delete(id);
   }
 
+  /** Drives Mutter's real per-window workspace to match a tree-side move the engine already made. */
   private _moveReconfigured(moves: ReadonlyMap<WindowId, number>): void {
-    for (const [id, destination] of moves) this._expectedWorkspace.set(id, destination);
     for (const [id, destination] of moves) {
-      const moved = this._ports.windows.moveToWorkspace(id, destination);
+      this._ports.windows.moveToWorkspace(id, destination);
       if (this._disposed) return;
-      if (!moved) this._expectedWorkspace.delete(id);
     }
   }
 
@@ -780,11 +777,21 @@ export class Engine {
       this._ports.windows.raise(this._lastFocus);
   }
 
+  /**
+   * The active i3 workspace: the tree's own answer once a tree exists (the coordinate system every
+   * other reader of "active" uses -- pills, `focusedOutput`, `serializeTree`), never GNOME's raw index
+   * once there is a tree to ask instead. Only reached before the tree exists, when there is nothing
+   * better to report.
+   */
+  private _activeWorkspaceIndex(): number {
+    return this._tree?.activeWorkspace ?? this._ports.workspaces.activeIndex;
+  }
+
   state(): EngineState {
     const l = this._loaded;
     return {
       mode: this._mode,
-      activeWorkspace: this._ports.workspaces.activeIndex,
+      activeWorkspace: this._activeWorkspaceIndex(),
       workspaceCount: this._ports.workspaces.count,
       grabbed: this._ports.keys.grabbedCount,
       configSource: l.source,
@@ -885,6 +892,11 @@ export class Engine {
       if (this._tree && this._topology) {
         const outputs = this._topology.monitors.map(m => ({id: m.id, index: m.index}));
         const moves = this._tree.reconfigure(count, outputs, this._topology.primary);
+        // Deliberately mixes coordinate systems: `info.workspace` is GNOME's index, `count` is the new
+        // i3 workspace count -- a vestige of the pre-Task-5 model, kept only because
+        // test/unit/engine/lifecycle.test.ts's "stops a shrinking reload after a native workspace move
+        // disposes the engine" currently depends on it to trigger the native move it counts. Removing it
+        // will break that test for a non-obvious reason.
         for (const info of this._windows.values()) if (info.workspace >= count) moves.set(info.id, count - 1);
         this._moveReconfigured(moves);
         if (this._disposed) return;
@@ -917,10 +929,18 @@ export class Engine {
     return true;
   }
 
-  /** i3 workspace target → GNOME workspace index, or null when it does not exist (§9). */
+  /**
+   * i3 workspace target → i3 workspace index, or null when it does not exist (§9).
+   *
+   * `count` and `current` are both read from the tree, not from GNOME: they are different coordinate
+   * systems now (spec 2.6), and agree with `ports.workspaces` today only because `case 'workspace'`
+   * below still calls `ports.workspaces.activate()` to move GNOME's index in lockstep -- correct only
+   * while GNOME still has one workspace per i3 workspace. Task 7 replaces that call with a real
+   * `workspace N` (moving what an output shows) and this stops needing GNOME's numbers at all.
+   */
   private _workspaceIndex(target: WorkspaceTarget): number | null {
-    const count = this._ports.workspaces.count;
-    const current = this._ports.workspaces.activeIndex;
+    const count = this._tree?.workspaces.size ?? this._workspaceCount;
+    const current = this._activeWorkspaceIndex();
     switch (target.kind) {
       case 'number':
         return target.number >= 1 && target.number <= count ? target.number - 1 : null;
@@ -983,7 +1003,7 @@ export class Engine {
         const index = this._workspaceIndex(command.target);
         if (index === null)
           return 'workspace: no such workspace';
-        if (index === ports.workspaces.activeIndex)
+        if (index === this._activeWorkspaceIndex())
           return 'workspace: already active';
         return ports.workspaces.activate(index, timestamp)
           ? `workspace ${index + 1}` : 'workspace: activation failed';
@@ -994,7 +1014,7 @@ export class Engine {
         const index = this._workspaceIndex(command.target);
         if (index === null)
           return 'move container to workspace: no such workspace';
-        if (index === ports.workspaces.activeIndex)
+        if (index === this._activeWorkspaceIndex())
           return 'move container to workspace: already there';
         let moved = false;
         this.commit(() => {

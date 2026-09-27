@@ -130,8 +130,11 @@ describe('engine launcher command', () => {
     // missed cross-monitor case ("it opened on the laptop again") that it once was, so it is silent.
     const f = twoMonitors();
     f.engine.start();
-    // An output the topology no longer lists -- the shape a mid-flight monitor change leaves behind if
-    // the tree has not been reconfigured yet.
+    // This is unreachable by construction in production: `Tree.reconfigure` resets `focusedOutput` to
+    // the primary the moment its output goes (src/tree/tree.ts:389), and the readiness check means
+    // `_topology` is only ever the last topology a live tree was built or reconfigured against -- so
+    // `focusedOutput` is always one of `topology.workAreas`'s keys. Reached here only by this poke, to
+    // exercise the defensive fallback anyway.
     f.tree().focusedOutput = 99;
     f.calls.length = 0;
     f.engine.run(parseCommands('launcher').commands, 0);
