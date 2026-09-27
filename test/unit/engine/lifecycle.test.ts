@@ -184,7 +184,14 @@ describe('engine lifecycle', () => {
     // nothing the move itself did) changes nothing: on restore it comes back onto workspace 1, where
     // the move actually put it, not onto workspace 0 (the output's visible one) or 4 (Mutter's report).
     const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
-    f.ports.windows.moveToWorkspace = id => { f.change(id, {workspace: 4, minimized: true}, 'workspace'); return true; };
+    // The mismatch fires only for the move itself; F2's own adoption-time re-sync on restore (below)
+    // must not re-trigger it, or restoring would immediately re-evict the window it just placed.
+    let mismatched = false;
+    f.ports.windows.moveToWorkspace = (id, index) => {
+      if (!mismatched) { mismatched = true; f.change(id, {workspace: 4, minimized: true}, 'workspace'); }
+      else f.change(id, {workspace: index}, 'workspace');
+      return true;
+    };
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 0); f.flush();
     expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: []});
     f.change(1, {minimized: false}, 'minimized'); f.flush();
@@ -196,15 +203,21 @@ describe('engine lifecycle', () => {
     // (a GNOME index) happened to remember where a window came from; the attic made that field always
     // 0 or 1, so without this, a window evicted from a non-visible workspace re-adopted onto whichever
     // workspace is visible when it returns -- and its pill went dark while it was away.
+    //
+    // F2: re-adopting onto the *tree* workspace is only half of it -- nothing previously moved the
+    // window's *native* GNOME workspace to match, so it could sit on a hidden tree workspace while
+    // GNOME still rendered it live. Asserts the GNOME workspace alongside the tree one for that.
     const f = fakeEngine(); f.engine.start();
     f.tree().visible.set(f.tree().focusedOutput, 2);
     f.add(1); f.flush();   // adopts onto workspace 2, which is visible right now
     expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: [{window: 1}]});
+    expect(f.windows.get(1)!.workspace).toBe(0);   // LIVE: workspace 2 is visible
     f.tree().visible.set(f.tree().focusedOutput, 0);   // the output now shows workspace 0 instead
     f.change(1, {minimized: true}, 'minimized'); f.flush();
     expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: []});
     f.change(1, {minimized: false}, 'minimized'); f.flush();
     expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: [{window: 1}]});
+    expect(f.windows.get(1)!.workspace).toBe(1);   // ATTIC: workspace 2 is hidden now
     expect(f.engine.treeSnapshot().workspaces[0].monitors[0].root).toMatchObject({children: []});
   });
   it('rebuilds restart from live classification with stable ids and announces cache', () => {
@@ -375,7 +388,11 @@ describe('engine lifecycle', () => {
   });
 
   it('stops a shrinking reload after a native workspace move disposes the engine', () => {
-    const f = fakeEngine(); f.engine.start(); f.add(1, {workspace: 9}); f.add(2, {workspace: 9}); f.flush();
+    // The stale workspace: 9 must be set *after* adoption, not in the initial patch -- F2's own
+    // adoption-time sync (workspace 0 is visible, so LIVE) would otherwise immediately correct it
+    // away from 9 before the vestigial-count check below ever saw it.
+    const f = fakeEngine(); f.engine.start(); f.add(1); f.add(2); f.flush();
+    f.change(1, {workspace: 9}, 'workspace'); f.change(2, {workspace: 9}, 'workspace'); f.flush();
     const loaded = f.load('bindsym Mod4+x kill');
     f.setNextLoad({...loaded, config: {...loaded.config!, workspaceCount: 2}});
     const moved: number[] = [];
@@ -383,7 +400,12 @@ describe('engine lifecycle', () => {
     f.calls.length = 0; f.applied.length = 0;
     f.engine.run([{type: 'reload'}], 0); f.flush();
     expect(moved).toHaveLength(1);
-    expect(f.calls).toEqual(['launcher.close', 'ungrabAll', 'settings.restore']);
+    // _moveReconfigured now warns on a refused move (F1); the mock refuses and disposes in the same
+    // call, and the warn is logged before the disposed check runs.
+    expect(f.calls).toEqual([
+      'launcher.close', 'ungrabAll', 'settings.restore',
+      'warn:could not move window 1 to workspace 2; leaving it where it was',
+    ]);
     expect(f.applied).toEqual([]);
   });
 

@@ -300,24 +300,30 @@ describe('SettingsOverrides', () => {
       'switch-to-workspace-1': ['<Super>1'],       // collides with a configured accelerator too
       'switch-to-workspace-3': ['<Super>3'],       // no collision: only the unconditional clear catches this
       'switch-to-workspace-left': ['<Super><Alt>Left'],
+      // F5: move-to-workspace-* moves the focused window into the attic and drags the active
+      // workspace with it -- the same defeat as switch-to-workspace-*, from the other side.
+      'move-to-workspace-2': ['<Super><Shift>2'],
       'switch-applications': ['<Super>Tab'],       // unrelated; must survive untouched
     });
     overrides(f.extension).apply({...plan, workspaceCount: 10});
     expect(wmKeybindings.values['switch-to-workspace-1']).toEqual([]);
     expect(wmKeybindings.values['switch-to-workspace-3']).toEqual([]);
     expect(wmKeybindings.values['switch-to-workspace-left']).toEqual([]);
+    expect(wmKeybindings.values['move-to-workspace-2']).toEqual([]);
     expect(wmKeybindings.values['switch-applications']).toEqual(['<Super>Tab']);
   });
 
-  it('restores the workspace-switch bindings on disable', () => {
+  it('restores the workspace-switch and move-to-workspace bindings on disable', () => {
     const f = fixture();
     const wmKeybindings = new FakeSettings(WM_KEYBINDINGS, {
       'switch-to-workspace-3': ['<Super>3'],
+      'move-to-workspace-2': ['<Super><Shift>2'],
     });
     const settings = overrides(f.extension);
     settings.apply({...plan, workspaceCount: 10});
     settings.restoreAll();
     expect(wmKeybindings.values['switch-to-workspace-3']).toEqual(['<Super>3']);
+    expect(wmKeybindings.values['move-to-workspace-2']).toEqual(['<Super><Shift>2']);
   });
 });
 

@@ -124,7 +124,7 @@ export class Engine {
   private readonly _windows = new Map<WindowId, WindowInfo>();
   private readonly _manualFloating = new Map<WindowId, boolean>();
   /** State a window that leaves the tree (minimized, sticky, or skip-taskbar) keeps until it returns. */
-  private readonly _minimized = new Map<WindowId, {floating: boolean; workspace: number}>();
+  private readonly _minimized = new Map<WindowId, {floating: boolean; workspace: number | undefined}>();
   private readonly _expectedFocus = new Set<WindowId>();
   private _lastFocus: WindowId | null = null;
   private readonly _unmaximizing = new Set<WindowId>();
@@ -273,7 +273,8 @@ export class Engine {
       // gestures have no GSetting to clear, so this is the only cover for them.
       if (this._started && !this._disposed && this._ports.workspaces.activeIndex !== LIVE_WORKSPACE) {
         this._ports.log.warn('active workspace left live; switching back');
-        this._ports.workspaces.activate(LIVE_WORKSPACE, 0);
+        if (!this._ports.workspaces.activate(LIVE_WORKSPACE, 0))
+          this._ports.log.warn('could not switch the active workspace back to live');
       }
       // GNOME's own workspace count is always two now (live + attic), independent of the config's
       // i3 workspace count, which the settings port never sees translated 1:1 into GNOME any more.
@@ -343,14 +344,19 @@ export class Engine {
    * which arrives as an unexpected focus report. There is no pre-registration that can suppress it:
    * `_expectedFocus` holds ids we *asked* to focus, and Mutter's replacement is a still-visible
    * window, never one of the ids being parked -- so bracketing the parking with it, as an earlier
-   * version of this method did, could never match the report it was meant to catch. What actually
-   * settles the incoming workspace's selection is the trailing _activateSelection below: its own
-   * report arrives last (native reports are FIFO relative to this synchronous method, and this one
-   * is queued after any replacement's) and re-selects the intended window regardless of what an
-   * earlier unexpected report did. The unverified residual is that such an earlier report can
-   * transiently re-select on a *different* workspace than the one this swap is showing -- out of
-   * reach of a synchronous fake; Task 17's native harness is what can show whether Mutter actually
-   * produces one.
+   * version of this method did, could never match the report it was meant to catch. Provided the
+   * incoming workspace has a selection *and* the trailing `_activateSelection` below succeeds in
+   * activating it, that call settles things: its own report arrives last (native reports are FIFO
+   * relative to this synchronous method, and this one is queued after any replacement's) and
+   * re-selects the intended window regardless of what an earlier unexpected report did. Two residuals
+   * are unverified by any test here: such an earlier report can transiently re-select on a
+   * *different* workspace than the one this swap is showing, and if `_activateSelection` never
+   * activates -- an empty incoming workspace (handled below), or Mutter refusing the activate
+   * request -- the replacement pick stands, since nothing follows it. Both are out of reach of a
+   * synchronous fake; Task 17's native harness is what can show whether Mutter actually produces one.
+   * Native focus for an empty incoming workspace is Task 13's job (spec §4.1): this method only
+   * makes the *tree* agree that the incoming workspace's root is selected, so `activeWorkspace`, the
+   * selection and the pills are right regardless of whether anything native follows.
    */
   private _showOnOutput(output: MonitorId, incoming: number): void {
     const tree = this._tree;
@@ -358,9 +364,18 @@ export class Engine {
     const outgoing = tree.visible.get(output);
     // Not merely an optimisation: parking and immediately un-parking the same windows flashes them.
     if (outgoing === incoming) return;
+    // Validated before any window is moved: tree.workspace() throws on an unknown index, and by then
+    // the park loop would already have moved every outgoing window into the attic and tree.visible
+    // would already point at a workspace that does not exist -- Tree.activeWorkspace and
+    // _layoutAndPublish would throw on every commit after that, with no way back short of a restart.
+    if (!tree.workspaces.has(incoming)) {
+      this._ports.log.warn(`cannot show unknown workspace ${incoming} on output ${output}`);
+      return;
+    }
     this.commit(() => {
       const parked = outgoing === undefined ? [] : this._workspaceMembers(tree, outgoing);
-      for (const id of this._workspaceMembers(tree, incoming))
+      const arriving = this._workspaceMembers(tree, incoming);
+      for (const id of arriving)
         if (!this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE))
           this._ports.log.warn(`could not show window ${id}; leaving it parked`);
       for (const id of parked)
@@ -368,6 +383,10 @@ export class Engine {
           this._ports.log.warn(`could not park window ${id}; leaving it on screen`);
       tree.visible.set(output, incoming);
       tree.workspace(incoming).output = output;
+      // No window to select: make the tree agree the workspace's own root is what is showing, so
+      // activeWorkspace/selection/pills are right regardless of what happens to native focus (spec
+      // §4.1, Task 13's job, not this method's).
+      if (arriving.length === 0) tree.select(tree.workspace(incoming).root);
       // 0 = no native event timestamp; the windows adapter substitutes the current server time.
       this._activateSelection(0);
       return true;
@@ -598,12 +617,19 @@ export class Engine {
     if (excludedFromTree(info)) {
       // _minimized now holds "the floating state and the i3 workspace this window had when it left
       // the tree, for any reason" (minimized, sticky, or skip-taskbar), not just minimize; the name
-      // predates that and is left alone here. Recorded once, on the eviction that first removes it
-      // (existing?.workspace, read above before tree.remove()), and preserved across any later
-      // eviction while it stays excluded -- a repeat eviction has no tree location left to read.
+      // predates that and is left alone here. Recorded once, on the eviction that first removes it,
+      // and preserved across any later eviction while it stays excluded.
+      //
+      // `workspace` is left undefined when `existing` is: that is not a repeat eviction (which truly
+      // has no tree location left to read) but the *common* case of a window excluded from birth --
+      // sticky or skip-taskbar from the moment it is first seen, which never had a tree location at
+      // all. Falling back to _adoptionWorkspace here, as an earlier version of this did, would make
+      // such a window remember whichever workspace happened to be visible when it first appeared and
+      // stick to that forever, rather than adopting normally -- onto whatever is current -- the first
+      // time it actually becomes eligible for the tree.
       this._minimized.set(id, this._minimized.get(id) ?? {
         floating: this._floating(info),
-        workspace: existing?.workspace ?? this._adoptionWorkspace(tree, info),
+        workspace: existing?.workspace,
       });
       tree.remove(id);
     } else {
@@ -615,6 +641,12 @@ export class Engine {
       if (!tree.location(id) && tree.workspaces.has(target)) {
         if (this._floating(info)) tree.addFloating(id, target);
         else tree.insert(id, target);
+        // A window re-entering the tree (adopted fresh, or returning from eviction) is laid out only
+        // if `target` is visible (_layoutAndPublish lays out visible workspaces alone), but nothing
+        // upstream of here ever moves its *native* GNOME workspace to match: without this it can sit
+        // on a hidden tree workspace while GNOME still renders it live, or the reverse.
+        this._parkOrShow(id, target);
+        if (this._disposed) return;
       }
     }
     // The same predicate as tree membership, not `minimized` alone: a window
@@ -807,10 +839,34 @@ export class Engine {
     if (!activated) this._expectedFocus.delete(id);
   }
 
-  /** Drives Mutter's real per-window workspace to match a tree-side move the engine already made. */
+  /**
+   * Puts window `id` on whichever native GNOME workspace its i3 workspace's own visibility says it
+   * belongs on: LIVE if some output currently shows that i3 workspace, the attic otherwise. Warns
+   * (naming the window) rather than throwing when Mutter refuses, in the same style as
+   * `_showOnOutput`. Named and kept small so Task 16's `_reconcileParking` -- which generalises
+   * exactly this over every workspace -- can call it rather than duplicate it.
+   */
+  private _parkOrShow(id: WindowId, workspace: number): void {
+    const tree = this._tree;
+    const native = tree && [...tree.visible.values()].includes(workspace) ? LIVE_WORKSPACE : ATTIC_WORKSPACE;
+    if (!this._ports.windows.moveToWorkspace(id, native))
+      this._ports.log.warn(`could not move window ${id} to workspace ${workspace + 1}; leaving it where it was`);
+  }
+
+  /**
+   * Drives Mutter's real per-window workspace to match a tree-side move the engine already made.
+   *
+   * `destination` is the window's new i3 workspace, not a native GNOME one: GNOME has exactly two
+   * now (live + attic), and whether this i3 workspace is currently shown by some output -- not the
+   * index itself -- decides which of the two the window actually belongs on (see `_parkOrShow`).
+   * Passing the i3 index straight through, as this method did before the attic, would park the
+   * window when its i3 workspace happens to be visible, or move it onto GNOME's one native
+   * workspace when the index is 1 and elsewhere fail silently for any higher index Mutter does not
+   * have.
+   */
   private _moveReconfigured(moves: ReadonlyMap<WindowId, number>): void {
     for (const [id, destination] of moves) {
-      this._ports.windows.moveToWorkspace(id, destination);
+      this._parkOrShow(id, destination);
       if (this._disposed) return;
     }
   }

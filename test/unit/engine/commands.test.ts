@@ -277,7 +277,39 @@ describe('engine command dispatch', () => {
     expect(f.calls).toContain('moveTo:1:1');
     f.add(2); f.flush();
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'name', name: '3'}}], 3);
-    expect(f.calls).toContain('moveTo:2:2');
+    // i3 workspace 2 (0-indexed) is not visible on any output, so _moveReconfigured translates the
+    // move to the attic (1), not the raw i3 index.
+    expect(f.calls).toContain('moveTo:2:1');
+  });
+
+  it('translates a move destination through visibility, not the raw i3 workspace index (F1)', () => {
+    // Before the attic, moveToWorkspace(id, N) meant GNOME's own workspace N. GNOME now has exactly
+    // two: whether some output currently shows the i3 workspace the window is moving to -- not the
+    // index itself -- decides whether the window lands on LIVE or the attic.
+    const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 10, index: 0}, {id: 11, index: 1}], primary: 10, workspaceCount: 3});
+    f.engine.start();
+    f.add(1); f.add(2); f.flush();   // both land on workspace 0, output 10 -- visible
+
+    f.calls.length = 0;
+    // Window 2 (added last, so it is the active workspace's own selection) moves first. Workspace 1
+    // (i3 "number 2") is visible on output 11: the window must land on LIVE, not on 1.
+    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 0);
+    expect(f.calls).toContain('moveTo:2:0');
+
+    f.calls.length = 0;
+    // Window 1 is still on workspace 0 (the active one), selected now that 2 has left it. Workspace 2
+    // (i3 "number 3") is not shown by either output: the window is parked, in the attic.
+    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 3, name: '3'}}], 1);
+    expect(f.calls).toContain('moveTo:1:1');
+  });
+
+  it('warns and continues when Mutter refuses a reconfigured move (F1)', () => {
+    const f = fakeEngine('bindsym Mod4+q kill', {workspaceCount: 3});
+    f.engine.start(); f.add(1); f.flush();
+    f.ports.windows.moveToWorkspace = () => false;
+    expect(() => f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 0))
+      .not.toThrow();
+    expect(f.calls.join('\n')).toMatch(/could not move window 1 to workspace 2; leaving it where it was/);
   });
 
   it('reports failed workspace activation and does not wrap at workspace zero', () => {

@@ -41,8 +41,11 @@ describe('Engine', () => {
     // 'decorations' trails every commit, including the extra one a moved window's
     // own workspace-changed event queues; filter it out to keep this assertion
     // about the port calls the move itself makes.
+    // 'moveTo:1:0' is F2's adoption-time sync from f.add(1) above (workspace 0 is visible, so LIVE).
+    // Workspace 9 (i3 "number 10") is not visible on any output, so _moveReconfigured translates
+    // the move to the attic (1), not the raw i3 index -- see F1's fix to _moveReconfigured.
     expect(f.calls.filter(c => c !== 'decorations')).toEqual([
-      'activate:2', 'warn:active workspace left live; switching back', 'activate:0', 'moveTo:1:9',
+      'activate:2', 'warn:active workspace left live; switching back', 'activate:0', 'moveTo:1:0', 'moveTo:1:1',
     ]);
     expect(e.run([{type: 'workspace', target: {kind: 'name', name: '10:X'}}], 3)).toBe('workspace 10');
     expect(e.run([{type: 'workspace', target: {kind: 'number', number: 11, name: '11'}}], 7)).toBe('workspace: no such workspace');
@@ -114,7 +117,10 @@ describe('Engine', () => {
     e.onBinding(binding(e.config, 'default', '<Super>Return'), 1);
     e.onBinding(binding(e.config, 'default', '<Super><Shift>q'), 2);
     e.onBinding(binding(e.config, 'default', '<Super>f'), 3);
-    expect(f.calls).toEqual(['decorations', 'exec:kitty', 'kill:1', 'fullscreen:1:toggle']);
+    // 'moveTo:1:0' is F2's adoption-time sync: window 1 lands on workspace 0, which is visible, so
+    // it is confirmed onto LIVE even though it was already there. The extra 'decorations' is the
+    // one that move's own queued workspace-changed event triggers, same as any other move.
+    expect(f.calls).toEqual(['moveTo:1:0', 'decorations', 'decorations', 'exec:kitty', 'kill:1', 'fullscreen:1:toggle']);
     expect(e.run([{type: 'nop', text: ''}, {type: 'unknown', text: 'frob'}], 5)).toBe('nop; unknown command: frob');
   });
 
@@ -258,6 +264,20 @@ describe('Engine', () => {
       expect(f.calls.filter(c => c.startsWith('warn:')).join('\n')).toMatch(/active workspace left live/);
     });
 
+    it('warns again when the forced switch back to live itself is refused', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      f.setActiveIndex(1);
+      f.ports.workspaces.activate = () => false;
+      f.calls.length = 0;
+      e.onWorkspacesChanged();
+      expect(f.calls.filter(c => c.startsWith('warn:'))).toEqual([
+        'warn:active workspace left live; switching back',
+        'warn:could not switch the active workspace back to live',
+      ]);
+    });
+
     it('ends the swap with the incoming workspace’s selection activated', () => {
       // What this asserts: the *final* state after the swap is the incoming workspace's own
       // selection, activated -- exactly what _activateSelection's trailing, always-last report
@@ -278,6 +298,38 @@ describe('Engine', () => {
       e.showOnOutputForTest(0, 0);
       const activated = f.calls.filter(c => c.startsWith('focus:')).map(c => Number(c.split(':')[1]));
       expect(activated).toEqual([1]);
+    });
+
+    it('selects the incoming workspace’s root when it has no window, leaving native focus to Mutter’s pick until Task 13 (F3)', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      f.add(1, {workspace: 0, monitor: 0});   // output 0's own window, currently focused
+      f.add(2, {workspace: 0, monitor: 1});   // output 1's own window, unrelated to this swap
+      f.focus(1);
+      e.showOnOutputForTest(0, 5);   // workspace 5 has no window
+      // The tree-side half of the fix: activeWorkspace, selection and pills all agree the incoming
+      // workspace's own (empty) root is what output 0 shows now.
+      expect(f.tree().selection(5)).toMatchObject({kind: 'tiled', con: {kind: 'split', children: []}});
+      expect(e.state().pills[5]!.occupied).toBe(false);
+      // The residual this fix does not (and per the ruling, must not) touch: _activateSelection never
+      // runs its own confirming activate() when the incoming workspace is empty, so Mutter's own
+      // replacement pick (fired when window 1, focused, is parked) is the last word on native focus
+      // until Task 13 gives an empty output its own explicit focus (spec §4.1).
+      expect(f.ports.windows.focused()).toBe(2);
+    });
+
+    it('refuses an unknown incoming workspace instead of bricking the tree (F4)', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      f.add(1, {workspace: 0, monitor: 0});
+      expect(() => e.showOnOutputForTest(0, 99)).not.toThrow();
+      expect(f.calls.filter(c => c.startsWith('warn:')).join('\n')).toMatch(/cannot show unknown workspace 99/);
+      // Nothing moved, and the tree is still usable: still workspace 0, and later commits do not throw.
+      expect(f.tree().visible.get(0)).toBe(0);
+      f.add(2, {workspace: 0, monitor: 0});
+      expect(() => e.state()).not.toThrow();
     });
   });
 });

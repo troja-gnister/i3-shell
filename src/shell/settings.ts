@@ -36,12 +36,18 @@ const APP_SWITCHER = 'org.gnome.shell.app-switcher';
 const WM_KEYBINDINGS = 'org.gnome.desktop.wm.keybindings';
 /**
  * GNOME's own workspace switching must never move the active workspace off `live`: every parked window
- * would appear at once and every visible one would vanish. These are cleared whatever they are bound
- * to, not only when they collide with a config accelerator.
+ * would appear at once and every visible one would vanish. `move-to-workspace-*` is included for the
+ * same reason from the other side: it moves the *focused window*, dragging the active workspace along
+ * with it, straight into the attic -- and since the engine ignores Mutter's own `workspace` field by
+ * design, nothing would repair the window afterwards even once the active workspace snaps back. These
+ * are cleared whatever they are bound to, not only when they collide with a config accelerator.
  */
 const WORKSPACE_SWITCH_KEYS = Array.from({length: 12}, (_, i) => `switch-to-workspace-${i + 1}`)
   .concat(['switch-to-workspace-left', 'switch-to-workspace-right',
-           'switch-to-workspace-up', 'switch-to-workspace-down', 'switch-to-workspace-last']);
+           'switch-to-workspace-up', 'switch-to-workspace-down', 'switch-to-workspace-last'])
+  .concat(Array.from({length: 12}, (_, i) => `move-to-workspace-${i + 1}`))
+  .concat(['move-to-workspace-left', 'move-to-workspace-right',
+           'move-to-workspace-up', 'move-to-workspace-down', 'move-to-workspace-last']);
 
 type Saved = string[] | string | boolean | number;
 /** {schemaId: {key: originalValue}} — persisted as JSON in the extension's `overridden-settings` key. */
