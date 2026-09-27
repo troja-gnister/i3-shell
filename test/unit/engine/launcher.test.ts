@@ -21,12 +21,13 @@ describe('engine launcher command', () => {
   });
 
   it('opens on the output the tree considers focused, not the primary', () => {
-    // The launcher reads `tree.focusedOutput` directly now (Task 5); there is no command yet that
-    // moves it away from the primary (a later task), so this pokes the tree's own field to exercise
-    // that read in isolation.
+    // The launcher reads `tree.focusedOutput` directly (Task 5). `workspace N` (Task 7) is the real way
+    // to move it: output 11 already shows one of its own workspaces from birth, so switching to it is
+    // a pure focus move (`swap: false`) that changes no window's workspace.
     const f = twoMonitors();
     f.engine.start();
-    f.tree().focusedOutput = 11;
+    const other = f.tree().workspacesOn(11)[0]!;
+    f.engine.run([{type: 'workspace', target: {kind: 'number', number: other + 1, name: String(other + 1)}}], 0);
     f.engine.run(parseCommands('launcher').commands, 0);
     expect(f.launcherRequest!.area).toEqual(SECOND_AREA);
     expect(f.launcherRequest!.area).not.toEqual(PRIMARY_AREA);

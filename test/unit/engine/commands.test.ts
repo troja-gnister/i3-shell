@@ -312,13 +312,29 @@ describe('engine command dispatch', () => {
     expect(f.calls.join('\n')).toMatch(/could not move window 1 to workspace 2; leaving it where it was/);
   });
 
-  it('reports failed workspace activation and does not wrap at workspace zero', () => {
+  it('does not wrap workspace prev below zero', () => {
+    // Before Task 7, `workspace N` moved only GNOME's raw active index (real switching came from this
+    // task), so this used to be exercised alongside a `ports.workspaces.activate` failure -- a failure
+    // mode `workspace N` no longer has: it drives the tree directly, and `_workspaceIndex` (this guard)
+    // gates an unknown target before any of that runs.
     const f = fakeEngine(); f.engine.start();
-    f.ports.workspaces.activate = () => false;
-    expect(f.engine.run([{type: 'workspace', target: {kind: 'number', number: 2, name: '2'}}], 1))
-      .toBe('workspace: activation failed');
-    expect(f.engine.treeSnapshot().activeWorkspace).toBe(0);
     expect(f.engine.run([{type: 'workspace', target: {kind: 'prev'}}], 2)).toBe('workspace: no such workspace');
+  });
+
+  it('workspace number moves focus to the output holding that workspace', () => {
+    const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+    f.engine.start();
+    f.engine.run([{type: 'workspace', target: {kind: 'number', number: 2, name: '2'}}], 1);
+    expect(f.engine.state().focusedOutput).toBe(1);
+  });
+
+  it('workspace number brings an unshown workspace to the focused output', () => {
+    const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+    f.engine.start();
+    f.engine.run([{type: 'workspace', target: {kind: 'number', number: 5, name: '5'}}], 1);
+    expect(f.engine.state().focusedOutput).toBe(0);
+    expect(f.tree().outputOf(4)).toBe(0);
+    expect(f.tree().visible.get(1)).toBe(1);   // the other output did not move
   });
 
   it('observes earlier mutations in a compound floating command chain', () => {

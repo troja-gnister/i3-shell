@@ -131,6 +131,27 @@ export class Tree {
     return [...this.visible.keys()].sort((a, b) => a - b).join(',');
   }
 
+  /**
+   * i3's `workspace N`. Two cases, and only two.
+   *
+   * Visible somewhere already: move the focused output to it, changing no window's workspace — this is
+   * i3's "go to where that workspace is", and it is why a keypress can move you to another screen.
+   * Not visible: bring it to the focused output, which is what i3 does for a workspace that does not
+   * exist yet. With the fixed set of workspaces this design keeps, "not yet placed" plays that role.
+   */
+  showWorkspace(index: number): {output: MonitorId; swap: boolean} {
+    this.workspace(index);
+    for (const [output, visible] of this.visible) {
+      if (visible !== index) continue;
+      this.focusedOutput = output;
+      return {output, swap: false};
+    }
+    const output = this.focusedOutput;
+    this.workspace(index).output = output;
+    this.visible.set(output, index);
+    return {output, swap: true};
+  }
+
   workspace(index: number): WorkspaceCon {
     assertNonnegativeInteger(index, 'workspace index');
     const workspace = this.workspaces.get(index);

@@ -2,10 +2,10 @@ import {describe, it, expect} from 'vitest';
 import {fakeEngine} from './fakeEngine';
 
 /**
- * A new window always adopts onto the visible workspace now (spec 2.6); there is no `workspace N` yet
- * (Task 7) to move it elsewhere with a real switch, so every test here that needs its window on a
- * *different* workspace gets it there with `move_to_workspace` instead of the old `workspace: 2`
- * fixture shorthand.
+ * A new window always adopts onto the visible workspace (spec 2.6). Every test here needs its window
+ * urgent on a workspace the user is *not* looking at, so it moves the window there with
+ * `move_to_workspace` -- switching there too, with `workspace N`, would clear the very urgency being
+ * tested (i3 clears urgency by focusing a workspace).
  */
 function addUrgentOnWorkspaceThree(f: ReturnType<typeof fakeEngine>): void {
   f.add(1, {urgent: true});
@@ -33,15 +33,11 @@ describe('urgent workspaces', () => {
   });
 
   it('clears urgency when the workspace becomes the one shown', () => {
-    // `workspace N` (Task 7) is what will drive this for real; until then, poke the tree's own
-    // `visible` mapping directly to exercise the pill computation's half of the contract -- that the
-    // active workspace is never urgent -- independent of the not-yet-wired switching command.
     const f = fakeEngine();
     f.engine.start();
     addUrgentOnWorkspaceThree(f);
     expect(f.pills[2].urgent).toBe(true);
-    f.tree().visible.set(f.tree().focusedOutput, 2);
-    f.engine.relayout();
+    f.engine.run([{type: 'workspace', target: {kind: 'number', number: 3, name: '3'}}], 0);
     f.flush();
     expect(f.pills[2].urgent).toBe(false);
   });

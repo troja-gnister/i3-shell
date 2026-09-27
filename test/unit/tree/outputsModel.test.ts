@@ -123,3 +123,37 @@ describe('Tree, per-output', () => {
     expect(t.activeWorkspace).toBe(t.visible.get(3));
   });
 });
+
+describe('showWorkspace', () => {
+  it('moves focus to the output already showing that workspace, and swaps nothing', () => {
+    const t = new Tree(10, outputs, 3);           // 0 on primary 3, 1 on 2
+    expect(t.showWorkspace(1)).toEqual({output: 2, swap: false});
+    expect(t.focusedOutput).toBe(2);
+    expect(t.visible.get(3)).toBe(0);
+  });
+
+  it('brings an unshown workspace to the focused output', () => {
+    const t = new Tree(10, outputs, 3);
+    expect(t.showWorkspace(4)).toEqual({output: 3, swap: true});
+    expect(t.outputOf(4)).toBe(3);
+    expect(t.focusedOutput).toBe(3);
+  });
+
+  it('brings an unshown workspace to whichever output is focused', () => {
+    const t = new Tree(10, outputs, 3);
+    t.focusedOutput = 2;
+    expect(t.showWorkspace(4)).toEqual({output: 2, swap: true});
+    expect(t.outputOf(4)).toBe(2);
+  });
+
+  it('is a no-op for the workspace already visible on the focused output', () => {
+    const t = new Tree(10, outputs, 3);
+    expect(t.showWorkspace(0)).toEqual({output: 3, swap: false});
+  });
+
+  it('never leaves an output showing a workspace it does not own', () => {
+    const t = new Tree(10, outputs, 3);
+    t.showWorkspace(4);
+    for (const [output, index] of t.visible) expect(t.outputOf(index)).toBe(output);
+  });
+});

@@ -208,11 +208,11 @@ describe('engine lifecycle', () => {
     // window's *native* GNOME workspace to match, so it could sit on a hidden tree workspace while
     // GNOME still rendered it live. Asserts the GNOME workspace alongside the tree one for that.
     const f = fakeEngine(); f.engine.start();
-    f.tree().visible.set(f.tree().focusedOutput, 2);
+    f.engine.run([{type: 'workspace', target: {kind: 'number', number: 3, name: '3'}}], 0);
     f.add(1); f.flush();   // adopts onto workspace 2, which is visible right now
     expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: [{window: 1}]});
     expect(f.windows.get(1)!.workspace).toBe(0);   // LIVE: workspace 2 is visible
-    f.tree().visible.set(f.tree().focusedOutput, 0);   // the output now shows workspace 0 instead
+    f.engine.run([{type: 'workspace', target: {kind: 'number', number: 1, name: '1'}}], 0);   // the output now shows workspace 0 instead
     f.change(1, {minimized: true}, 'minimized'); f.flush();
     expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: []});
     f.change(1, {minimized: false}, 'minimized'); f.flush();
@@ -851,6 +851,6 @@ describe('workspace pill labels', () => {
     const f = fakeEngine(config('bar {\n  strip_workspace_numbers yes\n}'));
     f.engine.start();
     f.engine.run(parseCommands('workspace "2:II"').commands, 0);
-    expect(f.calls).toContain('activate:1');
+    expect(f.engine.state().activeWorkspace).toBe(1);
   });
 });

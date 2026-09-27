@@ -338,7 +338,9 @@ export class Engine {
   }
 
   /**
-   * Show workspace `incoming` on `output`. The five steps, in this order.
+   * Show workspace `incoming` on `output`. The five steps, in this order -- the last three of them now
+   * living in `_parkAndShow` below, which Task 7's `workspace` command also drives after `Tree.showWorkspace`
+   * has done what this wrapper's first two steps (`tree.visible.set`, `workspace.output`) do here.
    *
    * Step 5 is the subtle one. Parking the focused window makes Mutter pick a replacement on its own,
    * which arrives as an unexpected focus report. There is no pre-registration that can suppress it:
@@ -368,29 +370,45 @@ export class Engine {
     // the park loop would already have moved every outgoing window into the attic and tree.visible
     // would already point at a workspace that does not exist -- Tree.activeWorkspace and
     // _layoutAndPublish would throw on every commit after that, with no way back short of a restart.
+    // `Tree.showWorkspace` guards the same thing for the `workspace` command's own call to
+    // `_parkAndShow` below, by never returning without having already thrown on an unknown index.
     if (!tree.workspaces.has(incoming)) {
       this._ports.log.warn(`cannot show unknown workspace ${incoming} on output ${output}`);
       return;
     }
     this.commit(() => {
-      const parked = outgoing === undefined ? [] : this._workspaceMembers(tree, outgoing);
-      const arriving = this._workspaceMembers(tree, incoming);
-      for (const id of arriving)
-        if (!this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE))
-          this._ports.log.warn(`could not show window ${id}; leaving it parked`);
-      for (const id of parked)
-        if (!this._ports.windows.moveToWorkspace(id, ATTIC_WORKSPACE))
-          this._ports.log.warn(`could not park window ${id}; leaving it on screen`);
       tree.visible.set(output, incoming);
       tree.workspace(incoming).output = output;
-      // No window to select: make the tree agree the workspace's own root is what is showing, so
-      // activeWorkspace/selection/pills are right regardless of what happens to native focus (spec
-      // §4.1, Task 13's job, not this method's).
-      if (arriving.length === 0) tree.select(tree.workspace(incoming).root);
-      // 0 = no native event timestamp; the windows adapter substitutes the current server time.
-      this._activateSelection(0);
+      this._parkAndShow(output, outgoing, incoming);
       return true;
     });
+  }
+
+  /**
+   * The window moves behind showing `incoming` on `output`, once whatever set `tree.visible` and
+   * `workspace.output` (this wrapper above, or `Tree.showWorkspace` from the `workspace` command) has
+   * already done so. Warns (naming the window) rather than throwing when Mutter refuses a move, in
+   * the same style as `_parkOrShow`. Callers must already be inside a `commit()` closure: this method
+   * does not open one itself, so a caller can bracket it with tree mutations of its own (as `workspace`
+   * does with `Tree.showWorkspace`) and still see one relayout, not two.
+   */
+  private _parkAndShow(output: MonitorId, outgoing: number | undefined, incoming: number): void {
+    const tree = this._tree;
+    if (!tree) return;
+    const parked = outgoing === undefined ? [] : this._workspaceMembers(tree, outgoing);
+    const arriving = this._workspaceMembers(tree, incoming);
+    for (const id of arriving)
+      if (!this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE))
+        this._ports.log.warn(`could not show window ${id}; leaving it parked`);
+    for (const id of parked)
+      if (!this._ports.windows.moveToWorkspace(id, ATTIC_WORKSPACE))
+        this._ports.log.warn(`could not park window ${id}; leaving it on screen`);
+    // No window to select: make the tree agree the workspace's own root is what is showing, so
+    // activeWorkspace/selection/pills are right regardless of what happens to native focus (spec
+    // §4.1, Task 13's job, not this method's).
+    if (arriving.length === 0) tree.select(tree.workspace(incoming).root);
+    // 0 = no native event timestamp; the windows adapter substitutes the current server time.
+    this._activateSelection(0);
   }
 
   /** Test-only entry point for _showOnOutput; Task 7 is its first real caller. */
@@ -1050,10 +1068,8 @@ export class Engine {
    * i3 workspace target → i3 workspace index, or null when it does not exist (§9).
    *
    * `count` and `current` are both read from the tree, not from GNOME: they are different coordinate
-   * systems now (spec 2.6), and agree with `ports.workspaces` today only because `case 'workspace'`
-   * below still calls `ports.workspaces.activate()` to move GNOME's index in lockstep -- correct only
-   * while GNOME still has one workspace per i3 workspace. Task 7 replaces that call with a real
-   * `workspace N` (moving what an output shows) and this stops needing GNOME's numbers at all.
+   * systems now (spec 2.6). `case 'workspace'` below no longer touches `ports.workspaces.activate()` at
+   * all (Task 7) -- it drives `Tree.showWorkspace` directly -- so this never needs GNOME's numbers.
    */
   private _workspaceIndex(target: WorkspaceTarget): number | null {
     const count = this._tree?.workspaces.size ?? this._workspaceCount;
@@ -1117,13 +1133,23 @@ export class Engine {
       case 'workspace': {
         if (command.target.kind === 'back_and_forth')
           return 'workspace back_and_forth: not implemented until Phase 4';
+        const tree = this._tree;
+        if (!tree) return 'workspace: not ready';
         const index = this._workspaceIndex(command.target);
         if (index === null)
           return 'workspace: no such workspace';
-        if (index === this._activeWorkspaceIndex())
-          return 'workspace: already active';
-        return ports.workspaces.activate(index, timestamp)
-          ? `workspace ${index + 1}` : 'workspace: activation failed';
+        // Captured before `Tree.showWorkspace` runs: it is the tree's only record of what the focused
+        // output was showing a moment ago, and both branches below need it -- the message to say
+        // whether anything actually changed, and the swap branch to know what to park.
+        const outgoing = tree.visible.get(tree.focusedOutput);
+        if (outgoing === index) return 'workspace: already active';
+        this.commit(() => {
+          const {output, swap} = tree.showWorkspace(index);
+          if (swap && outgoing !== undefined) this._parkAndShow(output, outgoing, index);
+          else this._activateSelection(0);
+          return true;
+        });
+        return `workspace ${index + 1}`;
       }
       case 'move_to_workspace': {
         if (command.target.kind === 'back_and_forth')
