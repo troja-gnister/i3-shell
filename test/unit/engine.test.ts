@@ -258,7 +258,15 @@ describe('Engine', () => {
       expect(f.calls.filter(c => c.startsWith('warn:')).join('\n')).toMatch(/active workspace left live/);
     });
 
-    it('keeps focus on the incoming workspace’s selection, not on Mutter’s replacement pick', () => {
+    it('ends the swap with the incoming workspace’s selection activated', () => {
+      // What this asserts: the *final* state after the swap is the incoming workspace's own
+      // selection, activated -- exactly what _activateSelection's trailing, always-last report
+      // re-establishes (see the comment on _showOnOutput). It does NOT prove Mutter's replacement
+      // pick (fired here, since window 2 is parked while it holds focus) never transiently runs
+      // _selectWindow on some *other* workspace in between: that is a real, unverified residual a
+      // synchronous fake cannot observe, since such a transient leaves no trace once the trailing
+      // report re-settles the workspace this test can see. Task 17's native harness is what could
+      // show whether Mutter actually produces such a report and, if so, what it does elsewhere.
       const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
       const e = f.engine;
       e.start();

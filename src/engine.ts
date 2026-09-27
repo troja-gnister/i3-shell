@@ -339,10 +339,18 @@ export class Engine {
   /**
    * Show workspace `incoming` on `output`. The five steps, in this order.
    *
-   * Step 5 is the subtle one. Parking the focused window makes Mutter choose a replacement on its own,
-   * which fires notify::focus-window, reaches _acceptFocus and calls _selectWindow on an arbitrary
-   * window -- silently corrupting the selection mid-swap. Bracketing the parking with _expectedFocus is
-   * what tells _acceptFocus to ignore those reports.
+   * Step 5 is the subtle one. Parking the focused window makes Mutter pick a replacement on its own,
+   * which arrives as an unexpected focus report. There is no pre-registration that can suppress it:
+   * `_expectedFocus` holds ids we *asked* to focus, and Mutter's replacement is a still-visible
+   * window, never one of the ids being parked -- so bracketing the parking with it, as an earlier
+   * version of this method did, could never match the report it was meant to catch. What actually
+   * settles the incoming workspace's selection is the trailing _activateSelection below: its own
+   * report arrives last (native reports are FIFO relative to this synchronous method, and this one
+   * is queued after any replacement's) and re-selects the intended window regardless of what an
+   * earlier unexpected report did. The unverified residual is that such an earlier report can
+   * transiently re-select on a *different* workspace than the one this swap is showing -- out of
+   * reach of a synchronous fake; Task 17's native harness is what can show whether Mutter actually
+   * produces one.
    */
   private _showOnOutput(output: MonitorId, incoming: number): void {
     const tree = this._tree;
@@ -352,7 +360,6 @@ export class Engine {
     if (outgoing === incoming) return;
     this.commit(() => {
       const parked = outgoing === undefined ? [] : this._workspaceMembers(tree, outgoing);
-      for (const id of parked) this._expectedFocus.add(id);
       for (const id of this._workspaceMembers(tree, incoming))
         if (!this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE))
           this._ports.log.warn(`could not show window ${id}; leaving it parked`);
