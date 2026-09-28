@@ -2802,6 +2802,9 @@ because `neighbourMonitor` needs work areas and those live in the topology, not 
 
 **Interfaces:**
 - Produces: `tree.enterOutput(output: MonitorId, direction: Direction): LeafCon | null`; `tree.moveIntoOutput(output: MonitorId, direction: Direction | null): WindowId[]`.
+- Also produces, for Task 15: `isDirection` **exported** from `src/commands/parse.ts`. It is a non-exported
+  `const` today, and both this task's crossing logic and Task 15's `move container to output` need it in
+  `src/engine.ts`. Export rather than duplicate — the engine already imports `parseCommands` from that file.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2927,6 +2930,9 @@ In `_runOne`'s `case 'focus':`, after the existing `tree.focus(...)` attempt:
         // Crossing beats wrapping: try strictly inside this output first, with wrapping off.
         const inside = tree.focus(command.target, 'none');
         if (inside) { this._activateSelection(timestamp); return 'focus'; }
+        // `isDirection` is a non-exported const in src/commands/parse.ts. Export it there (the engine
+        // already imports `parseCommands` from that module, so no new dependency) rather than
+        // duplicating the DIRECTIONS membership test here.
         const neighbour = isDirection(command.target)
           ? neighbourMonitor(topology.workAreas, tree.focusedOutput, command.target) : null;
         if (neighbour !== null) {
@@ -3130,6 +3136,7 @@ In `case 'move':`, before the existing `container to workspace` branch:
         this.commit(() => {
           const tree = this._tree;
           if (!tree) return false;
+          // Same `isDirection` export as Task 14 needs; if that task has already exported it, import it.
           const direction = isDirection(command.target) ? command.target : null;
           const carried = tree.moveIntoOutput(output, direction);
           if (carried.length === 0) return false;
