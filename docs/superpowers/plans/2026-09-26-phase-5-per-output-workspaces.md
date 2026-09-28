@@ -3123,24 +3123,32 @@ In `case 'move':`, before the existing `container to workspace` branch:
       case 'move_container_to_output': {
         const output = this._resolveOutput(command.target);
         if (output === null) return 'move container to output: no such output';
-        return this.commit(() => {
+        // `commit()` returns void, not the closure's boolean -- capture the outcome in a local, which is
+        // what `case 'move'` and `case 'move_to_workspace'` already do. An earlier draft of this plan had
+        // `return this.commit(...) ? a : b`, which does not compile (TS1345).
+        let moved = false;
+        this.commit(() => {
           const tree = this._tree;
           if (!tree) return false;
           const direction = isDirection(command.target) ? command.target : null;
-          const moved = tree.moveIntoOutput(output, direction);
-          if (moved.length === 0) return false;
+          const carried = tree.moveIntoOutput(output, direction);
+          if (carried.length === 0) return false;
           // i3 does not follow the window here, matching move container to workspace. moveIntoOutput
           // sets focusedOutput, so put it back.
-          tree.focusedOutput = this._outputBefore;
-          for (const id of moved) this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE);
+          tree.focusedOutput = before;
+          for (const id of carried) this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE);
+          moved = true;
           return true;
-        }) ? 'move container to output' : 'move container to output: nothing moved';
+        });
+        return moved ? 'move container to output' : 'move container to output: nothing moved';
       }
 
       case 'move_workspace_to_output': {
         const output = this._resolveOutput(command.target);
         if (output === null) return 'move workspace to output: no such output';
-        return this.commit(() => {
+        // Same reason as above: `commit()` returns void, so capture the outcome in a local.
+        let moved = false;
+        this.commit(() => {
           const tree = this._tree;
           if (!tree) return false;
           const before = tree.visible.get(output);
@@ -3153,13 +3161,16 @@ In `case 'move':`, before the existing `container to workspace` branch:
             this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE);
           this._activateSelection(timestamp);
           this._warpToFocusedOutput();
+          moved = true;
           return true;
-        }) ? 'move workspace to output' : 'move workspace to output: unchanged';
+        });
+        return moved ? 'move workspace to output' : 'move workspace to output: unchanged';
       }
 ```
 
-`_outputBefore` is the focused output captured before `moveIntoOutput` runs; read it into a local at the
-top of the case rather than adding a field.
+`before` is the focused output captured **inside the closure**, before `moveIntoOutput` runs — a local, not a
+field, and read inside rather than outside so a queued second command cannot park against a stale value (the
+same defect a `workspace` command hit earlier in this phase).
 
 Note the asymmetry and keep it: `move container to output` does **not** move focus (i3's behaviour, and
 `move container to workspace`'s), while `move workspace to output` does, because the workspace you are
