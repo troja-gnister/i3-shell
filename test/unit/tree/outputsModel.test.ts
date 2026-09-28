@@ -297,3 +297,100 @@ describe('moveWorkspaceToOutput', () => {
     expect(t.moveWorkspaceToOutput(3)).toBeNull();
   });
 });
+
+describe('reconfigure across outputs', () => {
+  it('keeps a lost output’s layout and moves the workspace to the primary', () => {
+    const t = new Tree(10, outputs, 3);
+    t.focusedOutput = 2;
+    t.insert(1, 1); t.insert(2, 1);
+    const rootBefore = t.root(1);
+    const childrenBefore = [...rootBefore.children];
+    t.reconfigure(10, [{id: 3, index: 1}], 3);
+    expect(t.root(1)).toBe(rootBefore);                 // the same root object
+    expect(t.root(1).children).toEqual(childrenBefore); // with the same layout
+    expect(t.outputOf(1)).toBe(3);
+    expect(t.focusedOutput).toBe(3);
+  });
+
+  it('restores the original assignment when the output comes back', () => {
+    const t = new Tree(10, outputs, 3);
+    t.reconfigure(10, [{id: 3, index: 1}], 3);
+    expect(t.outputOf(1)).toBe(3);
+    t.reconfigure(10, outputs, 3);
+    expect(t.outputOf(1)).toBe(2);
+    expect(t.visible.get(2)).toBe(1);
+  });
+
+  it('survives every workspace living on the output that vanished', () => {
+    // Review Focus 5: the primary already shows one of its own, so the rest must park with layouts intact.
+    const t = new Tree(3, [{id: 2, index: 0}, {id: 3, index: 1}], 3,
+      new Map([[0, 2], [1, 2], [2, 2]]));
+    t.reconfigure(3, [{id: 3, index: 1}], 3);
+    for (let index = 0; index < 3; index++) expect(t.outputOf(index)).toBe(3);
+    expect(t.visible.size).toBe(1);
+    expect(t.outputOf(t.visible.get(3)!)).toBe(3);
+  });
+
+  it('gives a brand-new output the lowest-numbered workspace not spoken for', () => {
+    const t = new Tree(10, [{id: 3, index: 0}], 3);
+    t.reconfigure(10, [{id: 3, index: 0}, {id: 9, index: 1}], 3);
+    expect(t.visible.get(9)).toBe(1);
+    expect(t.outputOf(1)).toBe(9);
+  });
+
+  it('forgets a workspace once it has come home, and remembers only the displaced', () => {
+    const t = new Tree(10, outputs, 3);
+    t.reconfigure(10, [{id: 3, index: 1}], 3);
+    expect([...t.remembered()]).toEqual([[1, 2]]);   // workspace 1 alone was displaced
+    t.reconfigure(10, outputs, 3);
+    expect([...t.remembered()]).toEqual([]);
+  });
+
+  it('brings every workspace the returning output held home, not just the adopted one', () => {
+    // Two of the television's own workspaces, so the reclaim of one cannot be mistaken for the rest.
+    const t = new Tree(10, outputs, 3);
+    t.moveWorkspaceToOutput(2);                     // workspace 0 joins workspace 1 on output 2
+    expect(t.workspacesOn(2)).toEqual([0, 1]);
+    t.reconfigure(10, [{id: 3, index: 1}], 3);
+    expect(t.workspacesOn(2)).toEqual([]);
+    t.reconfigure(10, outputs, 3);
+    expect(t.workspacesOn(2)).toEqual([0, 1]);
+  });
+
+  it('leaves a workspace displaced in this very call waiting for its own output', () => {
+    // Undock and plug a television in, in one event: the new output takes an untouched workspace, and
+    // the displaced one keeps its home so a re-dock still restores it. Claiming the displaced workspace
+    // instead would erase that memory -- and it is not free to claim either, since the whole point of
+    // the remembering is that it is going somewhere.
+    const t = new Tree(10, outputs, 3);
+    t.insert(7, 1);
+    t.reconfigure(10, [{id: 3, index: 1}, {id: 9, index: 2}], 3);
+    expect(t.visible.get(9)).toBe(2);
+    expect(t.outputOf(1)).toBe(3);
+    expect([...t.remembered()]).toEqual([[1, 2]]);
+    t.check(new Set([7]));
+    t.reconfigure(10, outputs.concat([{id: 9, index: 2}]), 3);
+    expect(t.outputOf(1)).toBe(2);              // the television came back and took its workspace back
+    expect(t.visible.get(2)).toBe(1);
+    expect(t.visible.get(9)).toBe(2);           // and the new panel kept what it had been given
+    t.check(new Set([7]));
+  });
+
+  it('lets memory beat a pin pointing somewhere else on a replug', () => {
+    // Controller ruling: a pin places a workspace that has never been placed; memory says where one
+    // already was. A pin dragging a remembered workspace off its own output on every replug would
+    // undo `move workspace to output` exactly the way re-reading a pin for an existing workspace does.
+    const t = new Tree(10, outputs, 3);
+    t.reconfigure(10, [{id: 3, index: 1}], 3);
+    t.reconfigure(10, outputs, 3, new Map([[1, 3]]));
+    expect(t.outputOf(1)).toBe(2);
+  });
+
+  it('honours a pin for a gained output that nothing is remembered on', () => {
+    const t = new Tree(10, [{id: 3, index: 0}], 3);
+    t.reconfigure(10, [{id: 3, index: 0}, {id: 9, index: 1}], 3, new Map([[5, 9]]));
+    expect(t.outputOf(5)).toBe(9);
+    expect(t.visible.get(9)).toBe(5);
+    expect(t.outputOf(1)).toBe(3);   // the lowest-free rule did not fire as well
+  });
+});

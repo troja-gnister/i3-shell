@@ -1,7 +1,8 @@
 import type {Direction, Layout} from '../commands/model';
 import {descendDirection, nextFocus, type Wrapping} from './focus';
 import {
-  birthAssignment, coverOutputs, effectiveWorkspaceCount, orderOutputs, reassignLost, type OutputRef,
+  adoptOutput, birthAssignment, coverOutputs, effectiveWorkspaceCount, orderOutputs, reassignLost,
+  type OutputRef,
 } from './outputs';
 import {resizeCon, type ResizeRequest} from './resize';
 import {moveCon, setLayout, splitCon, toggleLayout} from './operations';
@@ -41,6 +42,14 @@ export class Tree {
    * order diverges from the real one. Assigned from `orderOutputs(...)` here and again in `reconfigure`.
    */
   private _ordered: readonly MonitorId[];
+  /**
+   * Where a workspace lived before its output went away, so a replug puts it back.
+   *
+   * Meaningful only because MonitorIds derives a stable id from the sorted connector list: an output
+   * that comes back is recognised as the same one rather than as a new one. Written only for a
+   * workspace an unplug actually displaced, and erased the moment that workspace is home again.
+   */
+  private _remembered = new Map<number, MonitorId>();
 
   allocateSplit: AllocateSplit = (layout, root = false) => {
     if (!layouts.has(layout)) throw new Error(`invalid layout: ${String(layout)}`);
@@ -110,6 +119,11 @@ export class Tree {
       this.visible.set(output, own[0]!);
     }
     this.focusedOutput = primary;
+  }
+
+  /** Where each displaced workspace is waiting to go home. Empty while nothing is unplugged. */
+  remembered(): ReadonlyMap<number, MonitorId> {
+    return this._remembered;
   }
 
   /** The output a workspace lives on. */
@@ -363,6 +377,11 @@ export class Tree {
     const lossAssignment = new Map<number, MonitorId>(
       [...this.workspaces].map(([index, workspace]) => [index, workspace.output]),
     );
+    // Remembered before reassigning, and only for a workspace this call actually displaces: recording
+    // every workspace would let an unrelated unplug rewrite a home that never changed, and the next
+    // replug would then drag a workspace the user had since moved back to a stale output.
+    for (const workspace of this.workspaces.values())
+      if (!live.has(workspace.output)) this._remembered.set(workspace.index, workspace.output);
     for (const [index, output] of reassignLost(lossAssignment, live, primary))
       this.workspace(index).output = output;
 
@@ -370,11 +389,13 @@ export class Tree {
     // that already existed (those are `reassignLost`'s concern above, never a pin's). §2.3: a pin says
     // where a workspace is born, not where it stays forever; `move workspace to output` must still be
     // able to move an existing one, so re-reading the pin on every reconfigure would silently undo that.
-    // If a future task adds remembered placements for a returning output (`adoptOutput`), those apply to
-    // workspaces that already existed before this call and so are outside this loop too — memory is
-    // about where a workspace already was, a pin is about where one that has never existed yet should
-    // start, and the two do not compete here. A pin naming an output that is not live (or gone missing
-    // from `outputs` since it was resolved) is ignored, exactly as at birth in the constructor.
+    // Memory (`adoptOutput`) is about where a workspace already was, a pin about where one that has
+    // never existed yet should start, so the two do not compete in this loop. They do meet in
+    // `_claimForGained` below, which places an *existing* workspace on an output this call gained --
+    // the one moment outside birth when a workspace is placed on an output for the first time, and the
+    // one place a pin is read for a workspace that already existed. Memory wins there. A pin naming an
+    // output that is not live (or gone missing from `outputs` since it was resolved) is ignored, exactly
+    // as at birth in the constructor.
     for (let index = this.workspaces.size; index < workspaceCount; index++) {
       const root = this.allocateSplit('splith', true);
       const pin = pinned.get(index);
@@ -433,6 +454,36 @@ export class Tree {
       this.normalizeWorkspace(destination, undefined, []);
     }
 
+    // A gained output takes what it is owed before coverOutputs can hand it something arbitrary.
+    // `this.visible` still holds this call's incoming entries here -- dead outputs are pruned only in
+    // the rebuild below -- so an output of `ordered` missing from it is exactly one this call gained,
+    // whether newly attached or back from an unplug. A workspace some live output is currently showing
+    // is never taken: that would move what the user is looking at, and (by invariant 2, every output
+    // showing one of its own) it is also what keeps this pass from starving an existing output.
+    const spokenFor = new Set<number>();
+    for (const output of ordered) {
+      const shown = this.visible.get(output);
+      if (shown !== undefined) spokenFor.add(shown);
+    }
+    for (const output of ordered) {
+      if (this.visible.has(output)) continue;
+      const claimed = this._claimForGained(output, pinned, spokenFor, live);
+      if (claimed === null) continue;
+      this.workspace(claimed).output = output;
+      this._remembered.delete(claimed);
+      spokenFor.add(claimed);
+    }
+    // Every other workspace the returning output used to hold comes home too, so a replug restores the
+    // whole desk rather than just the one workspace it shows. A remembered index the shrink above
+    // deleted is dropped instead: there is nothing left to bring home, and keeping it would let a much
+    // later growth resurrect that index straight onto a stale home.
+    for (const [index, output] of [...this._remembered]) {
+      if (!this.workspaces.has(index)) { this._remembered.delete(index); continue; }
+      if (!live.has(output)) continue;
+      this.workspace(index).output = output;
+      this._remembered.delete(index);
+    }
+
     // Coverage repair: reassignment, growth and the shrink above only move content and existence
     // around by index, never by ownership, so any of them can still leave a live output owning
     // nothing (see coverOutputs). This runs after the shrink, not just after growth, because shrink
@@ -463,6 +514,45 @@ export class Tree {
 
     this.normalize();
     return moves;
+  }
+
+  /**
+   * Which workspace an output this reconfigure gained should take, or null if there is nothing free and
+   * `coverOutputs` must repair the coverage instead.
+   *
+   * Precedence, per the controller's ruling: memory, then a pin, then the lowest-numbered workspace
+   * nothing is spoken for. Memory beats a pin because a pin says where a workspace is *born* and
+   * memory says where one already *was* -- letting a pin win would undo `move workspace to output` on
+   * every replug, the same way re-reading a pin for an existing workspace would (see the growth loop
+   * above). A pin is honoured here and only here for an existing workspace, because this is the one
+   * moment a workspace is placed on an output for the first time outside birth.
+   */
+  private _claimForGained(
+    output: MonitorId,
+    pinned: ReadonlyMap<number, MonitorId>,
+    spokenFor: ReadonlySet<number>,
+    live: ReadonlySet<MonitorId>,
+  ): number | null {
+    const existing = new Map<number, MonitorId>(
+      [...this.workspaces].map(([index, workspace]) => [index, workspace.output]),
+    );
+    const reclaimed = adoptOutput(this._remembered, output, existing);
+    if (reclaimed !== null) return reclaimed;
+    // A workspace another live output is about to reclaim below is not free either, or this output
+    // would be handed something that is taken away again in the same call.
+    const free = (index: number): boolean => {
+      if (spokenFor.has(index)) return false;
+      const home = this._remembered.get(index);
+      return home === undefined || !live.has(home);
+    };
+    const candidates = [...this.workspaces.keys()].filter(free).sort((a, b) => a - b);
+    const pinnedHere = candidates.filter(index => pinned.get(index) === output);
+    if (pinnedHere.length > 0) return pinnedHere[0]!;
+    // A workspace displaced by an unplug in this very call is taken only as a last resort: it still has
+    // a home to go back to, and claiming it erases that memory. An output lost and another gained in
+    // one event (undock, plug a television in) is exactly that case, and the displaced workspace waits
+    // in the attic for its own output instead -- the same place a plain unplug leaves it.
+    return candidates.find(index => !this._remembered.has(index)) ?? candidates[0] ?? null;
   }
 
   addFloating(window: WindowId, workspace: number): void {

@@ -569,12 +569,15 @@ export class Engine {
       // at startup whatever the config names), so the comparison below must clamp identically or it is
       // permanently unequal and reconfigure runs on every commit. Same function, one definition.
       const wanted = effectiveWorkspaceCount(this._workspaceCount, outputs.length);
+      let reconfigured = false;
       if (!this._tree)
         this._tree = new Tree(this._workspaceCount, outputs, topology.primary, this._pinnedOutputs());
       else if (this._tree.workspaces.size !== wanted ||
-        this._tree.outputSignature() !== outputs.map(o => o.id).sort((a, b) => a - b).join(','))
+        this._tree.outputSignature() !== outputs.map(o => o.id).sort((a, b) => a - b).join(',')) {
+        reconfigured = true;
         this._moveReconfigured(
           this._tree.reconfigure(this._workspaceCount, outputs, topology.primary, this._pinnedOutputs()));
+      }
       if (this._disposed) return;
       const tree = this._tree;
       const live = this._ports.windows.list();
@@ -595,6 +598,15 @@ export class Engine {
         this._acceptFocus(this._ports.windows.focused());
       }
       tree.normalize(new Set(live.filter(w => !excludedFromTree(w)).map(w => w.id)));
+      // After a reconfigure (and once for the tree this commit built, so adoption on enable cannot
+      // leave a window rendered on a workspace nothing shows) every window's native GNOME workspace is
+      // reconciled against the new visibility. Deliberately after the sync loop above, not immediately
+      // after the reconfigure call: windows enter the tree only in that loop, so on the commit that
+      // builds the tree there would be no members to reconcile yet.
+      if (reconfigured || isNew) {
+        this._reconcileParking(tree);
+        if (this._disposed) return;
+      }
       const expected = new Map<WindowId, Rect>();
       this._containerRects = new Map();
       // Only a visible workspace -- one per output -- is laid out. A parked workspace's windows are
@@ -1035,6 +1047,31 @@ export class Engine {
     const native = tree && [...tree.visible.values()].includes(workspace) ? LIVE_WORKSPACE : ATTIC_WORKSPACE;
     if (!this._ports.windows.moveToWorkspace(id, native))
       this._ports.log.warn(`could not move window ${id} to workspace ${workspace + 1}; leaving it where it was`);
+  }
+
+  /**
+   * After any tree reconfigure, every window's GNOME workspace must agree with the new visibility.
+   *
+   * A monitor change can make a workspace visible or parked without moving a single window between
+   * workspaces, so the `Map<WindowId, number>` `reconfigure` returns is empty in exactly the case that
+   * matters most -- a lid closing, a television sleeping -- and `_moveReconfigured` alone would leave
+   * the lost output's windows rendered live on a workspace nothing shows (or, on the replug, stranded
+   * in the attic). Reconciles through `_parkOrShow`, which owns the LIVE/attic decision and the
+   * port-failure warning, rather than repeating either.
+   */
+  private _reconcileParking(tree: Tree): void {
+    const visible = new Set(tree.visible.values());
+    for (const index of tree.workspaces.keys()) {
+      const target = visible.has(index) ? LIVE_WORKSPACE : ATTIC_WORKSPACE;
+      for (const id of this._workspaceMembers(tree, index)) {
+        // Mutter is asked only for a window that is not already there: a reconfigure touches every
+        // workspace, and re-asserting the workspace of every window on every monitor change would be
+        // one port call per window for no change at all.
+        if (this._windows.get(id)?.workspace === target) continue;
+        this._parkOrShow(id, index);
+        if (this._disposed) return;
+      }
+    }
   }
 
   /**

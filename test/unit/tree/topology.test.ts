@@ -263,4 +263,52 @@ describe('Tree topology reconfiguration', () => {
     expect(tree.outputOf(tree.visible.get(1)!)).toBe(1);
     tree.check();
   });
+
+  // Task 16's three additions. The flattening assertions this file used to make were already rewritten
+  // to the reassign behaviour by Task 3 and are left exactly as they stand; these only add the
+  // remembering and the gained-output rule on top.
+  it('brings a lost output\u2019s layout back on the replug, roots and all', () => {
+    const tree = new Tree(2, [{id: 10, index: 0}, {id: 20, index: 1}], 10);
+    const a = tree.insert(1, 1);
+    tree.select(a);
+    tree.split('v');
+    const b = tree.insert(2, 1);
+    const keptRoot = tree.root(1);
+
+    tree.reconfigure(2, [{id: 10, index: 0}], 10);
+    expect(tree.outputOf(1)).toBe(10);
+    expect(tree.reconfigure(2, [{id: 10, index: 0}, {id: 20, index: 1}], 10)).toEqual(new Map());
+
+    // Nothing moved between workspaces in either direction, so the whole layout is the same objects.
+    expect(tree.outputOf(1)).toBe(20);
+    expect(tree.visible.get(20)).toBe(1);
+    expect(tree.root(1)).toBe(keptRoot);
+    expect(tree.find(1)).toBe(a);
+    expect(tree.find(2)).toBe(b);
+    expect([...leaves(keptRoot)].map(node => node.window)).toEqual([1, 2]);
+    tree.check(new Set([1, 2]));
+  });
+
+  it('drops a remembered home for a workspace a later shrink deletes', () => {
+    // Otherwise a growth much later resurrects that index straight onto an output it has no claim to.
+    const tree = new Tree(3, [{id: 10, index: 0}, {id: 20, index: 1}], 10);
+    expect(tree.outputOf(1)).toBe(20);
+    tree.reconfigure(3, [{id: 10, index: 0}], 10);
+    expect([...tree.remembered()]).toEqual([[1, 20]]);
+    tree.reconfigure(1, [{id: 10, index: 0}], 10);   // workspaces 1 and 2 cease to exist
+    expect([...tree.remembered()]).toEqual([]);
+    tree.check();
+  });
+
+  it('gives a newly attached output the lowest workspace nothing is showing, not the highest spare', () => {
+    // Five workspaces all on output 10, which shows workspace 0. coverOutputs's own repair would hand
+    // output 20 the donor's *highest* unshown workspace (4); the gained-output rule hands it the
+    // lowest (1), which is i3's. The two differ here on purpose, so this cannot pass by either.
+    const tree = new Tree(5, [{id: 10, index: 0}], 10);
+    tree.reconfigure(5, [{id: 10, index: 0}, {id: 20, index: 1}], 10);
+    expect(tree.outputOf(1)).toBe(20);
+    expect(tree.visible.get(20)).toBe(1);
+    expect(tree.workspacesOn(10)).toEqual([0, 2, 3, 4]);
+    tree.check();
+  });
 });

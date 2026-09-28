@@ -1,6 +1,6 @@
 import {describe, it, expect} from 'vitest';
 import {readFileSync} from 'node:fs';
-import {fakeEngine, topology, windowInfo, type EngineFixture} from './fakeEngine';
+import {fakeEngine, outputsTopology, topology, windowInfo, type EngineFixture} from './fakeEngine';
 import {parseCommands} from '../../../src/commands/parse';
 import type {NodeSnapshot, TreeSnapshot} from '../../../src/runtime/snapshot';
 import type {NodeId, WindowId} from '../../../src/tree/node';
@@ -432,6 +432,40 @@ describe('engine lifecycle', () => {
     expect(f.applied).toEqual([]);
   });
 
+
+  it('un-parks the newly visible workspace after a monitor change', () => {
+    // A monitor change can make a workspace visible or hidden without moving a single window between
+    // workspaces, so the `Map<WindowId, number>` reconfigure returns is empty and says nothing here:
+    // only a reconciliation pass over every workspace's members can put the native GNOME workspace
+    // right. Losing the output workspace 1 lives on parks it; the replug brings it back.
+    const f = fakeEngine('bindsym Mod4+q kill',
+      {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+    f.engine.start();
+    f.add(5, {monitor: 1}); f.flush();          // adopts onto workspace 1, visible on output 1
+    expect(f.tree().location(5)).toMatchObject({workspace: 1});
+    expect(f.windows.get(5)!.workspace).toBe(0);   // LIVE
+    f.setTopology(outputsTopology([{id: 0, index: 0}], 0));
+    f.engine.onMonitorsChanged(); f.flush();
+    expect(f.windows.get(5)!.workspace).toBe(1);   // ATTIC: workspace 1 is no longer visible anywhere
+    f.setTopology(outputsTopology([{id: 0, index: 0}, {id: 1, index: 1}], 0));
+    f.engine.onMonitorsChanged(); f.flush();
+    expect(f.tree().visible.get(1)).toBe(1);       // the returning output reclaimed workspace 1
+    expect(f.windows.get(5)!.workspace).toBe(0);   // LIVE again, on the returning output
+  });
+
+  it('warns rather than dropping a refused park after a monitor change', () => {
+    // The port-failure contract: every moveToWorkspace return value is checked, at this site too.
+    const f = fakeEngine('bindsym Mod4+q kill',
+      {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+    f.engine.start();
+    f.add(5, {monitor: 1}); f.flush();
+    f.refuseMove(5);
+    f.calls.length = 0;
+    f.setTopology(outputsTopology([{id: 0, index: 0}], 0));
+    f.engine.onMonitorsChanged(); f.flush();
+    expect(f.calls).toContain('moveTo:5:1');
+    expect(f.calls.some(c => c.startsWith('warn:could not move window 5 to workspace 2'))).toBe(true);
+  });
 });
 
 describe('accent colours', () => {
