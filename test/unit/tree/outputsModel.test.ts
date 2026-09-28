@@ -274,3 +274,26 @@ describe('showWorkspace', () => {
     for (const [output, index] of t.visible) expect(t.outputOf(index)).toBe(output);
   });
 });
+
+describe('moveWorkspaceToOutput', () => {
+  it('moves the focused workspace and gives the vacated output one of its own', () => {
+    const t = new Tree(10, outputs, 3);            // 0 on 3, 1 on 2, 2..9 on 3
+    const result = t.moveWorkspaceToOutput(2);
+    expect(result).toEqual({vacated: 3, nowVisible: 2});
+    expect(t.outputOf(0)).toBe(2);
+    expect(t.visible.get(2)).toBe(0);
+    expect(t.visible.get(3)).toBe(2);
+  });
+
+  it('never leaves an output showing nothing', () => {
+    const t = new Tree(2, outputs, 3);             // only workspaces 0 and 1
+    t.moveWorkspaceToOutput(2);                    // workspace 0 leaves output 3, which owns nothing else
+    expect(t.visible.get(3)).toBeDefined();
+    expect(t.outputOf(t.visible.get(3)!)).toBe(3);
+  });
+
+  it('is a no-op when the workspace is already on that output', () => {
+    const t = new Tree(10, outputs, 3);
+    expect(t.moveWorkspaceToOutput(3)).toBeNull();
+  });
+});

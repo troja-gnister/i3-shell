@@ -110,6 +110,18 @@ function parseOne(segment: string): Command | string {
     case 'move': {
       if (isDirection(args[0]))
         return {type: 'move', direction: args[0]};
+      if (args[0] === 'container' && args[1] === 'to' && args[2] === 'output') {
+        const target = outputArg(args.slice(3));
+        return target
+          ? {type: 'move_container_to_output', target}
+          : 'move container to output: expected left|right|up|down|primary|<name>';
+      }
+      if (args[0] === 'workspace' && args[1] === 'to' && args[2] === 'output') {
+        const target = outputArg(args.slice(3));
+        return target
+          ? {type: 'move_workspace_to_output', target}
+          : 'move workspace to output: expected left|right|up|down|primary|<name>';
+      }
       if (args[0] === 'container' && args[1] === 'to' && args[2] === 'workspace') {
         const target = workspaceTarget(args.slice(3));
         return target ? {type: 'move_to_workspace', target} : 'move container to workspace: missing target';

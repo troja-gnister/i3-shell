@@ -10,7 +10,7 @@ import {LIVE_WORKSPACE, ATTIC_WORKSPACE} from './runtime/model';
 import {displayWorkspaceName} from './config/workspaceNames';
 import {excludedFromTree} from './runtime/classify';
 import {matchesCriteria} from './runtime/rules';
-import {parseCommands} from './commands/parse';
+import {isDirection, parseCommands} from './commands/parse';
 import type {Command, WorkspaceTarget} from './commands/model';
 import type {LauncherRequest} from './launcher/model';
 import type {Binding, Colors, Config, Diagnostic} from './config/model';
@@ -1483,6 +1483,59 @@ export class Engine {
           return moved;
         });
         return moved ? `move ${command.direction}` : `move ${command.direction}: no target`;
+      }
+      // The command this phase exists for: before it, no binding could move a window stranded on a
+      // display nobody was looking at. Does not follow the window -- i3's behaviour, and
+      // `move_to_workspace`'s -- so the output the user was looking at is put back after
+      // `moveIntoOutput` changes it as a side effect.
+      case 'move_container_to_output': {
+        const output = this._resolveOutput(command.target);
+        if (output === null) return 'move container to output: no such output';
+        // `commit()` returns void, not the closure's boolean -- capture the outcome in a local, the
+        // same way `move` and `move_to_workspace` above already do.
+        let moved = false;
+        this.commit(() => {
+          const tree = this._tree;
+          if (!tree) return false;
+          // Captured inside the closure, not outside: a queued second command must not park against a
+          // stale focused output (the same defect a `workspace` command hit earlier in this phase).
+          const before = tree.focusedOutput;
+          const direction = typeof command.target === 'string' && isDirection(command.target) ? command.target : null;
+          const carried = tree.moveIntoOutput(output, direction);
+          if (carried.length === 0) return false;
+          // moveIntoOutput sets focusedOutput as a side effect of lifting the selection; put it back,
+          // since this command does not move focus.
+          tree.focusedOutput = before;
+          for (const id of carried) this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE);
+          moved = true;
+          return true;
+        });
+        return moved ? 'move container to output' : 'move container to output: nothing moved';
+      }
+      // Unlike the container move above, the workspace the user was looking at goes with it, so focus
+      // follows -- `moveWorkspaceToOutput` sets `focusedOutput` itself.
+      case 'move_workspace_to_output': {
+        const output = this._resolveOutput(command.target);
+        if (output === null) return 'move workspace to output: no such output';
+        // Same reason as above: commit() returns void, so the outcome is captured in a local.
+        let moved = false;
+        this.commit(() => {
+          const tree = this._tree;
+          if (!tree) return false;
+          const before = tree.visible.get(output);
+          const result = tree.moveWorkspaceToOutput(output);
+          if (!result) return false;
+          // Whatever the target output was showing is now on no output's screen.
+          if (before !== undefined) for (const id of this._workspaceMembers(tree, before))
+            this._ports.windows.moveToWorkspace(id, ATTIC_WORKSPACE);
+          for (const id of this._workspaceMembers(tree, tree.activeWorkspace))
+            this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE);
+          this._activateSelection(timestamp);
+          this._warpToFocusedOutput();
+          moved = true;
+          return true;
+        });
+        return moved ? 'move workspace to output' : 'move workspace to output: unchanged';
       }
       case 'split': {
         let changed = false;

@@ -2,6 +2,7 @@ import {readFileSync} from 'node:fs';
 import {describe, expect, it} from 'vitest';
 import type {Binding, Config} from '../../../src/config/model';
 import type {NodeSnapshot} from '../../../src/runtime/snapshot';
+import {LIVE_WORKSPACE} from '../../../src/runtime/model';
 import {fakeEngine} from './fakeEngine';
 
 const referenceText = readFileSync(new URL('../fixtures/reference.i3config', import.meta.url), 'utf8');
@@ -598,6 +599,47 @@ describe('engine command dispatch', () => {
       // Nothing on output 1 to activate, but the crossing itself still happened and the pointer follows.
       expect(f.calls.filter(call => call.startsWith('focus:'))).toEqual([]);
       expect(f.pointer.warps().length).toBe(1);
+    });
+  });
+
+  // Task 15: `move container to output` is the command this whole phase exists for -- before it, a
+  // window stranded on a display nobody was looking at could not be moved by any binding at all.
+  describe('move container/workspace to output', () => {
+    it('move container to output rescues a window stranded on another screen', () => {
+      // The defect this phase exists for: a window on the television with no command able to move it.
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(8, {monitor: 1});
+      f.engine.run([{type: 'focus_output', target: 'right'}], 1);
+      expect(f.engine.run([{type: 'move_container_to_output', target: 'left'}], 2)).toBe('move container to output');
+      expect(f.tree().location(8)).toEqual({workspace: 0, output: 0, floating: false});
+    });
+
+    it('move container to output does not follow the window', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1)).toBe('move container to output');
+      expect(f.engine.state().focusedOutput).toBe(0);
+    });
+
+    it('move workspace to output takes the windows with it and parks nothing', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      expect(f.engine.run([{type: 'move_workspace_to_output', target: 'right'}], 1)).toBe('move workspace to output');
+      expect(f.tree().outputOf(0)).toBe(1);
+      expect(f.windows.get(1)!.workspace).toBe(LIVE_WORKSPACE); // still LIVE: it moved output, not visibility
+    });
+
+    // The asymmetry's other direction: unlike the container move above, the workspace you were
+    // looking at went with it, so focus follows.
+    it('move workspace to output follows the workspace', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      expect(f.engine.run([{type: 'move_workspace_to_output', target: 'right'}], 1)).toBe('move workspace to output');
+      expect(f.engine.state().focusedOutput).toBe(1);
     });
   });
 });

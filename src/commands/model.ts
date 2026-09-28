@@ -17,6 +17,8 @@ export type Command =
   | {type: 'focus_output'; target: OutputArg}
   | {type: 'move'; direction: Direction}
   | {type: 'move_to_workspace'; target: WorkspaceTarget}
+  | {type: 'move_container_to_output'; target: OutputArg}
+  | {type: 'move_workspace_to_output'; target: OutputArg}
   | {type: 'move_position'; position: 'center' | {x: number; y: number}}
   | {type: 'split'; orientation: 'h' | 'v' | 'toggle'}
   | {type: 'layout'; layout: Layout}
