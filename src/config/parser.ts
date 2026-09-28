@@ -200,10 +200,12 @@ export function parse(lines: LogicalLine[]): ParseResult {
     }
 
     if (head === 'focus_follows_mouse') {
-      // Warned, not erred: this is a boolean with a sensible default (i3's own default, yes), so a
-      // typo here should not reject the whole config the way a structural error does.
+      // Erred, matching focus_wrapping and workspace_auto_back_and_forth just above: this directive is
+      // implemented now, so tier 2's "not implemented -> warning" no longer applies to it, and having a
+      // safe default does not by itself argue for a warning here either -- workspace_auto_back_and_forth
+      // has an equally safe default (no) and still errs on the same malformed single-token shape.
       if (rest !== 'yes' && rest !== 'no') {
-        warn(`focus_follows_mouse: expected yes or no, got '${rest}'`);
+        err(`focus_follows_mouse: expected yes or no, got '${rest}'`);
         continue;
       }
       directives.push({kind: 'focus_follows_mouse', line: l.line, value: rest});

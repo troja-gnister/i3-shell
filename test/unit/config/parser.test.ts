@@ -216,9 +216,10 @@ describe('focus_follows_mouse', () => {
     expect(config!.focusFollowsMouse).toBe(true);
   });
 
-  it('warns on a value it does not understand, rather than erroring out the whole config', () => {
+  it('rejects a value that is not yes or no', () => {
     const r = P('focus_follows_mouse perhaps\n');
-    expect(r.diagnostics.map(d => d.severity)).toEqual(['warning']);
-    expect(r.diagnostics[0]!.message).toMatch(/focus_follows_mouse/);
+    expect(r.diagnostics).toEqual([
+      {line: 1, severity: 'error', message: "focus_follows_mouse: expected yes or no, got 'perhaps'"},
+    ]);
   });
 });
