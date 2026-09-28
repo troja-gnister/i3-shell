@@ -753,23 +753,39 @@ export class Tree {
   }
 
   /**
-   * Moves the child `moveToWorkspace` just attached to the front of the target root's children for a
-   * forward direction, or the back for a backward one — the entering edge, in place of wherever
-   * `insertionPoint` happened to land it. Reuses `detach`/`attach` (the same pair `moveCon` uses to
-   * relocate a child across a non-adjacent split) rather than splicing `percents` by hand a second
-   * time: detaching renormalizes what remains, and attaching at the edge index redistributes evenly
-   * over the same count, exactly as if the child had been inserted there to begin with.
+   * Moves the child `moveToWorkspace` just attached (`workspace.focusedCon`, which `moveToWorkspace`
+   * has already set) directly to the front of the target root's children for a forward direction, or
+   * the back for a backward one — the entering edge.
+   *
+   * Lifts the moved child *out* of whatever pre-existing nested split `insertionPoint` happened to
+   * attach it inside, rather than relocating that split (and every unrelated child it already held) to
+   * the edge. There is no ancestor walk here on purpose: climbing to "the nearest ancestor that is a
+   * direct child of root" would grab a split that was already there before this move and drag its own
+   * other children along with it, and would still leave the moved window nested inside a multi-child
+   * split rather than standing alone at the edge, which is exactly what this method promises.
+   *
+   * Reuses `detach`/`attach` (the same pair `moveCon` uses to relocate a child across a non-adjacent
+   * split) rather than splicing `percents` by hand a second time: detaching renormalizes what remains,
+   * and attaching at the edge index redistributes evenly over the same count, exactly as if the child
+   * had been inserted there to begin with. The follow-up `normalizeWorkspace`, seeded with the old
+   * parent's own ancestor chain, is what lets a split left holding too few -- or a flattenable one --
+   * children collapse, the same as any other mutation in this file.
    */
   private _reseatAtEdge(workspaceIndex: number, direction: Direction): void {
-    const root = this.workspace(workspaceIndex).root;
-    let child: Con | null = this.workspace(workspaceIndex).focusedCon;
-    while (child && child.parent !== root) child = child.parent;
-    if (!child || child.parent !== root) return;
-    const from = root.children.indexOf(child);
+    const workspace = this.workspace(workspaceIndex);
+    const root = workspace.root;
+    const moved = workspace.focusedCon;
+    if (!moved || !moved.parent) return;
     const to = isForward(direction) ? 0 : root.children.length - 1;
-    if (from === to) return;
-    detach(child);
-    attach(root, child, isForward(direction) ? 0 : root.children.length);
+    // Parentage first, deliberately: once the child is lifted out of a nested split it is nowhere in
+    // `root.children`, so `indexOf` would return -1 -- checking `moved.parent === root` first, with
+    // `&&` short-circuiting, keeps that -1 from ever being compared against `to`.
+    if (moved.parent === root && root.children.indexOf(moved) === to) return;
+    const oldParent = moved.parent;
+    detach(moved);
+    attach(root, moved, isForward(direction) ? 0 : root.children.length);
+    this.select(moved);
+    this.normalizeWorkspace(workspace, undefined, ancestorChain(oldParent));
   }
 }
 

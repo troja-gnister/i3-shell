@@ -564,6 +564,10 @@ describe('engine command dispatch', () => {
       expect(f.engine.run([{type: 'move', direction: 'right'}], 1)).toBe('move right');
       expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: false});
       expect(f.engine.state().focusedOutput).toBe(1);
+      // Fix round 1, folded minor 2: `moveIntoOutput` changed `focusedOutput` exactly as
+      // `enterOutput`/`focus_output` do, so the pointer follows here too -- pinned, not left to
+      // inspection.
+      expect(f.pointer.warps().length).toBe(1);
     });
 
     it('move right is a no-op at the edge when there is no neighbour -- move never wraps', () => {
@@ -576,6 +580,24 @@ describe('engine command dispatch', () => {
 
       expect(f.engine.run([{type: 'move', direction: 'right'}], 1)).toBe('move right: no target');
       expect(f.engine.state().focusedOutput).toBe(0);
+    });
+
+    // Fix round 1, folded minor 1: the engine path is where the user's actual case lives -- this whole
+    // phase exists because an empty display was otherwise unreachable by direction. Only the tree-level
+    // `enterOutput` test covered this before.
+    it('focus right crosses into an empty neighbouring output', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      f.add(2, {monitor: 0});
+      f.focus(2);
+      f.calls.length = 0;
+
+      expect(f.engine.run([{type: 'focus', target: 'right'}], 1)).toBe('focus right');
+      expect(f.engine.state().focusedOutput).toBe(1);
+      // Nothing on output 1 to activate, but the crossing itself still happened and the pointer follows.
+      expect(f.calls.filter(call => call.startsWith('focus:'))).toEqual([]);
+      expect(f.pointer.warps().length).toBe(1);
     });
   });
 });

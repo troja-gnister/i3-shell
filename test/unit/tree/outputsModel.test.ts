@@ -211,6 +211,34 @@ describe('moveIntoOutput', () => {
     t.insert(1, 0);
     expect(t.moveIntoOutput(3, 'right')).toEqual([]);
   });
+
+  // Fix round 1, I1: `insertionPoint` can attach the moved subtree inside a pre-existing nested split
+  // rather than as a direct child of the target root -- an entirely ordinary state after one `splitv`.
+  // The reseat must lift the moved window out of that split, not relocate the split (and the unrelated
+  // windows it already held) to the edge instead.
+  it('lifts the moved window out of a nested split at the target, without disturbing the split itself', () => {
+    const t = new Tree(10, outputs, 3);
+    t.focusedOutput = 2;
+    t.insert(10, 1);            // leafA: a direct child of the target root, untouched throughout.
+    const b = t.insert(11, 1);  // about to be wrapped in a nested splitv.
+    t.split('v');
+    const c = t.insert(12, 1);  // inserted next to b, inside the new split -- not at the root.
+    const nested = b.parent!;
+    t.select(b);                // leafB focused, so the incoming window's insertion point is inside the split.
+    t.focusedOutput = 3;
+    t.insert(2, 0);
+
+    const moved = t.moveIntoOutput(2, 'right');
+
+    expect(moved).toEqual([2]);
+    const root = t.root(1);
+    // The moved window stands alone at the entering edge, as a direct child of root...
+    expect(root.children[0]).toBe(t.find(2));
+    // ...and the nested split it passed through keeps exactly its original two children, in their
+    // original relative order -- nothing about it changed, only the moved window was ever there.
+    expect(nested.children).toEqual([b, c]);
+    expect(nested.percents.length).toBe(2);
+  });
 });
 
 describe('showWorkspace', () => {
