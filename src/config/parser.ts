@@ -14,6 +14,7 @@ export type Directive =
   | {kind: 'focus_wrapping'; line: number; value: string}
   | {kind: 'workspace_auto_back_and_forth'; line: number; value: string}
   | {kind: 'focus_follows_mouse'; line: number; value: string}
+  | {kind: 'mouse_warping'; line: number; value: string}
   | {kind: 'strip_workspace_numbers'; line: number; value: string}
   | {kind: 'workspace_output'; line: number; index: number; names: string[]}
   | {kind: 'client'; line: number; which: ClientColorKey; colors: string[]}
@@ -32,7 +33,7 @@ const IGNORED = new Set(['font', 'client.background', 'client.placeholder']);
 const UNSUPPORTED = new Set([
   'bindcode', 'assign', 'workspace_layout', 'exec', 'exec_always',
   'gaps', 'hide_edge_borders', 'title_format', 'floating_minimum_size', 'floating_maximum_size',
-  'force_focus_wrapping', 'popup_during_fullscreen', 'mouse_warping', 'focus_on_window_activation',
+  'force_focus_wrapping', 'popup_during_fullscreen', 'focus_on_window_activation',
   'show_marks', 'smart_borders', 'smart_gaps', 'no_focus', 'ipc_socket',
   'restart_state', 'tiling_drag', 'title_align', 'include', 'set_from_resource',
 ]);
@@ -209,6 +210,19 @@ export function parse(lines: LogicalLine[]): ParseResult {
         continue;
       }
       directives.push({kind: 'focus_follows_mouse', line: l.line, value: rest});
+      continue;
+    }
+
+    if (head === 'mouse_warping') {
+      // `err`, not `warn`, for the same reason Task 11 settled for `focus_follows_mouse`: every other
+      // implemented directive with an enumerated value rejects a malformed one, and a parser where one
+      // typo rejects the file while the next silently defaults is unpredictable. The main spec's tier-2
+      // warning is about a directive being *unimplemented*, which this task changes.
+      if (rest !== 'output' && rest !== 'none') {
+        err(`mouse_warping: expected output or none, got '${rest}'`);
+        continue;
+      }
+      directives.push({kind: 'mouse_warping', line: l.line, value: rest});
       continue;
     }
 

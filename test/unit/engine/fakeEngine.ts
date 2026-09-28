@@ -63,6 +63,7 @@ export interface FakeEngineOptions {
 
 export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEngineOptions = {}) {
   const calls: string[] = [];
+  const pointerWarps: Rect[] = [];
   const windows = new Map<WindowId, WindowInfo>();
   const applied: Array<Map<WindowId, Rect>> = [];
   const queue = new Map<number, () => void>();
@@ -155,6 +156,7 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
       close: () => { calls.push('launcher.close'); },
       setColors: colors => { f.launcherColors = colors; calls.push('launcher.colors'); },
     },
+    pointer: {warpTo: rect => { pointerWarps.push({...rect}); calls.push('pointer.warp'); }},
     now: () => 123456789,
     exec: command => { calls.push(`exec:${command}`); },
     notify: (title, body) => { calls.push(`notify:${title}|${body}`); },
@@ -185,6 +187,8 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
     plan: null as DecorationPlan | null,
     launcherRequest: null as LauncherRequest | null,
     launcherColors: null as Colors | null,
+    /** Every `pointer.warpTo` call the engine has made, in call order -- Task 13's `mouse_warping` tests read this. */
+    pointer: {warps: (): Rect[] => pointerWarps.map(r => ({...r}))},
     get topology() { return currentTopology; },
     add(id: WindowId, patch: Partial<WindowInfo> = {}) { windows.set(id, windowInfo(id, patch)); engine.onWindowEvent({type: 'added', id}); },
     change(id: WindowId, patch: Partial<WindowInfo>, eventType: Exclude<WindowEvent['type'], 'added' | 'removed' | 'focused'>) {

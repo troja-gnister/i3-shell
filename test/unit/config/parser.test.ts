@@ -223,3 +223,30 @@ describe('focus_follows_mouse', () => {
     ]);
   });
 });
+
+describe('mouse_warping', () => {
+  it('defaults to output, as i3 does', () => {
+    expect(load('').config!.mouseWarping).toBe('output');
+  });
+
+  it('parses an explicit none', () => {
+    const {config, diagnostics} = load('mouse_warping none\n');
+    expect(diagnostics).toEqual([]);
+    expect(config!.mouseWarping).toBe('none');
+  });
+
+  it('parses an explicit output', () => {
+    const {config, diagnostics} = load('mouse_warping output\n');
+    expect(diagnostics).toEqual([]);
+    expect(config!.mouseWarping).toBe('output');
+  });
+
+  it('rejects a value that is not output or none', () => {
+    // `err`, not `warn`: every implemented directive with an enumerated value rejects a malformed one
+    // (Task 11 settled this identically for focus_follows_mouse), so one typo does not silently default.
+    const r = P('mouse_warping perhaps\n');
+    expect(r.diagnostics).toEqual([
+      {line: 1, severity: 'error', message: "mouse_warping: expected output or none, got 'perhaps'"},
+    ]);
+  });
+});

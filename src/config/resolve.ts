@@ -74,6 +74,7 @@ export function resolve(parsed: ParseResult): ResolveResult {
     focusWrapping: 'yes',
     workspaceAutoBackAndForth: false,
     focusFollowsMouse: true,
+    mouseWarping: 'output',
     stripWorkspaceNumbers: false,
     workspaceCount: 0,
     workspaceOutputs,
@@ -142,6 +143,9 @@ export function resolve(parsed: ParseResult): ResolveResult {
         break;
       case 'focus_follows_mouse':
         config.focusFollowsMouse = d.value === 'yes';
+        break;
+      case 'mouse_warping':
+        config.mouseWarping = d.value as Config['mouseWarping'];
         break;
       case 'strip_workspace_numbers':
         config.stripWorkspaceNumbers = d.value === 'yes';

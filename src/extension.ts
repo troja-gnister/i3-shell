@@ -22,6 +22,7 @@ import {Indicator} from './shell/indicator';
 import {KeyBinder} from './shell/keys';
 import {Launcher} from './shell/launcher';
 import type {RecencyStore} from './shell/launcher';
+import {Pointer} from './shell/pointer';
 import {SettingsRecency} from './shell/recency';
 import {log} from './shell/log';
 import {notify} from './shell/notify';
@@ -199,6 +200,11 @@ export default class I3ShellExtension extends Extension {
     const keys = new KeyBinder(tracker, (binding, timestamp) => this._engine?.onBinding(binding, timestamp));
     this._keys = keys;
 
+    // `mouse_warping output`'s other half: a real pointer crossing an output boundary reaches the
+    // engine as rule 4's evidence that an empty output is where the user now is. The engine, not this
+    // file, owns Mutter-index -> MonitorId (onPointerMonitorIndex), so only the raw index crosses here.
+    const pointer = new Pointer(tracker, closing.unlessClosing(index => { this._engine?.onPointerMonitorIndex(index); }));
+
     const engine = new Engine({
       keys,
       workspaces,
@@ -217,6 +223,7 @@ export default class I3ShellExtension extends Extension {
       accent,
       decorations,
       launcher,
+      pointer,
       exec: spawnShell,
       notify,
       log,

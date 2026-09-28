@@ -79,6 +79,13 @@ export interface Config {
    * has i3's semantics: the window under the pointer takes focus, empty desktop changes nothing.
    */
   focusFollowsMouse: boolean;
+  /**
+   * i3's default is `output`: when focus moves to another output the pointer follows.
+   *
+   * Not cosmetic. With focus-mode sloppy and no warp, the stationary pointer's window would take focus
+   * straight back and every keyboard output command would fight the mouse. The two are a pair.
+   */
+  mouseWarping: 'output' | 'none';
   /** bar { strip_workspace_numbers }: render pills without the leading number. */
   stripWorkspaceNumbers: boolean;
   /** Workspace number → full configured name, e.g. 1 → "1:I". */

@@ -457,4 +457,44 @@ describe('Engine', () => {
       expect(f.tree().outputOf(2)).toBe(1);
     });
   });
+
+  // Task 12, rule 4: an output whose visible workspace is empty has no window to take focus, so sloppy
+  // focus (rule 1) can never report it. The pointer crossing onto it is the only remaining evidence the
+  // user is there -- the whole of the "$mod+d opens on the wrong screen" defect for an unoccupied output.
+  describe('onPointerOutput (rule 4)', () => {
+    it('takes the focused output from the pointer when that output’s workspace is empty', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      f.add(1, {workspace: 0, monitor: 0});
+      e.onPointerOutput(1);
+      expect(e.state().focusedOutput).toBe(1);
+      expect(e.launcherAreaForTest()).toEqual(f.topology!.workAreas.get(1));
+    });
+
+    it('leaves the focused output alone when the pointer’s output has a window to focus', () => {
+      // Sloppy focus (rule 1) owns this case; two mechanisms racing for it would flap.
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      f.add(1, {workspace: 0, monitor: 0});
+      f.add(2, {workspace: 0, monitor: 1});
+      e.onPointerOutput(1);
+      expect(e.state().focusedOutput).toBe(0);
+    });
+
+    it('keeps the focused output when the pointer’s output empties under it', () => {
+      // Review Focus 4: the launcher must not jump screens because a window closed. Rule 4 fires while
+      // output 1 is still empty; the window then arrives and leaves again, and neither transition may
+      // touch focusedOutput a second time -- only a pointer crossing does that.
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      e.onPointerOutput(1);
+      expect(e.state().focusedOutput).toBe(1);
+      f.add(2, {workspace: 0, monitor: 1});
+      f.remove(2);
+      expect(e.state().focusedOutput).toBe(1);
+    });
+  });
 });
