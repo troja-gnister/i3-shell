@@ -268,21 +268,27 @@ describe('Tree topology reconfiguration', () => {
   // to the reassign behaviour by Task 3 and are left exactly as they stand; these only add the
   // remembering and the gained-output rule on top.
   it('brings a lost output\u2019s layout back on the replug, roots and all', () => {
-    const tree = new Tree(2, [{id: 10, index: 0}, {id: 20, index: 1}], 10);
-    const a = tree.insert(1, 1);
+    // Round 1, M1: the first fixture put output 20 on workspace 1, which is also what the lowest-free
+    // rule gives a gained output, so the test passed with the remembering switched off. Pinning
+    // workspace 1 to the primary leaves coverOutputs to give output 20 workspace 2 instead, so the
+    // layout comes back only if the memory brought it.
+    const tree = new Tree(3, [{id: 10, index: 0}, {id: 20, index: 1}], 10, new Map([[1, 10]]));
+    expect(tree.outputOf(2)).toBe(20);
+    const a = tree.insert(1, 2);
     tree.select(a);
     tree.split('v');
-    const b = tree.insert(2, 1);
-    const keptRoot = tree.root(1);
+    const b = tree.insert(2, 2);
+    const keptRoot = tree.root(2);
 
-    tree.reconfigure(2, [{id: 10, index: 0}], 10);
-    expect(tree.outputOf(1)).toBe(10);
-    expect(tree.reconfigure(2, [{id: 10, index: 0}, {id: 20, index: 1}], 10)).toEqual(new Map());
+    tree.reconfigure(3, [{id: 10, index: 0}], 10);
+    expect(tree.outputOf(2)).toBe(10);
+    expect(tree.reconfigure(3, [{id: 10, index: 0}, {id: 20, index: 1}], 10)).toEqual(new Map());
 
     // Nothing moved between workspaces in either direction, so the whole layout is the same objects.
-    expect(tree.outputOf(1)).toBe(20);
-    expect(tree.visible.get(20)).toBe(1);
-    expect(tree.root(1)).toBe(keptRoot);
+    expect(tree.outputOf(2)).toBe(20);
+    expect(tree.visible.get(20)).toBe(2);
+    expect(tree.outputOf(1)).toBe(10);   // the lowest-free rule did not fire in its place
+    expect(tree.root(2)).toBe(keptRoot);
     expect(tree.find(1)).toBe(a);
     expect(tree.find(2)).toBe(b);
     expect([...leaves(keptRoot)].map(node => node.window)).toEqual([1, 2]);

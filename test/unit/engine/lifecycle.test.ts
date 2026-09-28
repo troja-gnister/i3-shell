@@ -438,18 +438,33 @@ describe('engine lifecycle', () => {
     // workspaces, so the `Map<WindowId, number>` reconfigure returns is empty and says nothing here:
     // only a reconciliation pass over every workspace's members can put the native GNOME workspace
     // right. Losing the output workspace 1 lives on parks it; the replug brings it back.
-    const f = fakeEngine('bindsym Mod4+q kill',
-      {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+    //
+    // Round 1, M1: the first fixture's displaced workspace was workspace 1, which is also what the
+    // lowest-free rule hands a gained output, so the whole test passed with the remembering switched
+    // off. Here `workspace 3 output HDMI-1` pins workspace 2 onto the primary, which leaves coverOutputs
+    // to give the television workspace 9 at birth -- so lowest-free (2) and remembered (9) are different
+    // answers, and only the memory puts this window back on screen.
+    const f = fakeEngine('bindsym Mod4+0 workspace number 10\nworkspace 3 output HDMI-1\n', {
+      monitors: [
+        {id: 0, index: 0, connectors: ['HDMI-1']},
+        {id: 1, index: 1, connectors: ['DP-1']},
+        {id: 2, index: 2, connectors: ['TV-1']},
+      ],
+      primary: 0, workspaceCount: 10,
+    });
     f.engine.start();
-    f.add(5, {monitor: 1}); f.flush();          // adopts onto workspace 1, visible on output 1
-    expect(f.tree().location(5)).toMatchObject({workspace: 1});
+    expect(f.tree().visible.get(2)).toBe(9);
+    f.add(5, {monitor: 2}); f.flush();          // adopts onto workspace 9, visible on the television
+    expect(f.tree().location(5)).toMatchObject({workspace: 9});
     expect(f.windows.get(5)!.workspace).toBe(0);   // LIVE
-    f.setTopology(outputsTopology([{id: 0, index: 0}], 0));
+    f.setTopology(outputsTopology([{id: 0, index: 0, connectors: ['HDMI-1']},
+      {id: 1, index: 1, connectors: ['DP-1']}], 0));
     f.engine.onMonitorsChanged(); f.flush();
-    expect(f.windows.get(5)!.workspace).toBe(1);   // ATTIC: workspace 1 is no longer visible anywhere
-    f.setTopology(outputsTopology([{id: 0, index: 0}, {id: 1, index: 1}], 0));
+    expect(f.windows.get(5)!.workspace).toBe(1);   // ATTIC: workspace 9 is no longer visible anywhere
+    f.setTopology(outputsTopology([{id: 0, index: 0, connectors: ['HDMI-1']},
+      {id: 1, index: 1, connectors: ['DP-1']}, {id: 2, index: 2, connectors: ['TV-1']}], 0));
     f.engine.onMonitorsChanged(); f.flush();
-    expect(f.tree().visible.get(1)).toBe(1);       // the returning output reclaimed workspace 1
+    expect(f.tree().visible.get(2)).toBe(9);       // the returning output reclaimed workspace 9
     expect(f.windows.get(5)!.workspace).toBe(0);   // LIVE again, on the returning output
   });
 

@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {Tree} from '../../../src/tree/tree';
+import type {MonitorId} from '../../../src/tree/node';
 
 /** The reporting desk: primary id 3 at Mutter index 1, television id 2 at index 0. */
 const outputs = [{id: 2, index: 0}, {id: 3, index: 1}];
@@ -313,12 +314,19 @@ describe('reconfigure across outputs', () => {
   });
 
   it('restores the original assignment when the output comes back', () => {
-    const t = new Tree(10, outputs, 3);
+    // Round 1, M1: the brief's fixture put the television on workspace 1, which is also what the
+    // lowest-free rule hands a gained output -- so the test passed with the remembering switched off
+    // entirely. Pinning workspace 1 to the primary instead leaves coverOutputs to give the television
+    // workspace 9 at birth, so memory (9) and lowest-free (1) are different answers and the assertion
+    // can only be met by the memory.
+    const t = new Tree(10, outputs, 3, new Map([[1, 3]]));
+    expect(t.outputOf(9)).toBe(2);
     t.reconfigure(10, [{id: 3, index: 1}], 3);
-    expect(t.outputOf(1)).toBe(3);
+    expect(t.outputOf(9)).toBe(3);
     t.reconfigure(10, outputs, 3);
-    expect(t.outputOf(1)).toBe(2);
-    expect(t.visible.get(2)).toBe(1);
+    expect(t.outputOf(9)).toBe(2);
+    expect(t.visible.get(2)).toBe(9);
+    expect(t.outputOf(1)).toBe(3);   // and the lowest-free rule did not fire in its place
   });
 
   it('survives every workspace living on the output that vanished', () => {
@@ -376,14 +384,83 @@ describe('reconfigure across outputs', () => {
     t.check(new Set([7]));
   });
 
-  it('lets memory beat a pin pointing somewhere else on a replug', () => {
-    // Controller ruling: a pin places a workspace that has never been placed; memory says where one
-    // already was. A pin dragging a remembered workspace off its own output on every replug would
-    // undo `move workspace to output` exactly the way re-reading a pin for an existing workspace does.
+  it('memory beats a pin that names the gained output itself', () => {
+    // Round 1, I1: the shipped version of this test pinned workspace 1 to output 3, which the
+    // reconfigure never gains -- and `_claimForGained` is only ever called for a gained output, so the
+    // pin was never read and inverting the precedence left the whole suite green. The pin has to name
+    // the output coming back for the two tiers to compete at all.
+    const t = new Tree(10, outputs, 3);
+    t.reconfigure(10, [{id: 3, index: 1}], 3);            // television 2 unplugged: ws 1 remembered on 2
+    expect([...t.remembered()]).toEqual([[1, 2]]);
+    t.reconfigure(10, outputs, 3, new Map([[5, 2]]));      // replug, with workspace 5 pinned AT output 2
+    expect(t.visible.get(2)).toBe(1);                      // memory wins
+    expect(t.outputOf(5)).toBe(3);                         // the pin did not take effect
+  });
+
+  it('lets a deliberate move beat a memory when the home output returns', () => {
+    // Round 1, I3. A memory records where the compositor's own change left a workspace; a command is
+    // newer and better evidence about where it belongs. Without this, `move workspace to output` made
+    // while the home output is asleep is silently undone the moment it wakes -- the very thing the
+    // growth loop's comment gives as the reason a pin is never re-read for an existing workspace.
+    const t = new Tree(3, [{id: 10, index: 0}, {id: 20, index: 1}, {id: 30, index: 2}], 10);
+    t.insert(7, 1);
+    t.reconfigure(3, [{id: 10, index: 0}, {id: 30, index: 2}], 10);   // the television sleeps
+    expect([...t.remembered()]).toEqual([[1, 20]]);
+
+    t.focusedOutput = 10;
+    t.showWorkspace(1);                          // Mod+2: look at it where it is, on the laptop
+    expect([...t.remembered()]).toEqual([[1, 20]]);   // merely looking re-homes nothing, so memory stands
+    t.moveWorkspaceToOutput(30);                 // now park it on the third output on purpose
+    expect(t.outputOf(1)).toBe(30);
+    expect([...t.remembered()]).toEqual([]);
+
+    t.reconfigure(3, [{id: 10, index: 0}, {id: 20, index: 1}, {id: 30, index: 2}], 10);
+    expect(t.outputOf(1)).toBe(30);              // the television's return does not undo the move
+    t.check(new Set([7]));
+  });
+
+  it('remembers the first home across a chained unplug, not the refuge', () => {
+    // Round 1, I4. The television sleeps, so workspace 1 takes refuge on the laptop; the laptop is then
+    // undocked in the same event that wakes the television. Recording that second displacement would
+    // replace workspace 1's true home (20) with the refuge (10), and the re-dock would drag it off the
+    // television it had just got back. First displacement wins; every later hop is a refuge.
+    const t = new Tree(3, [{id: 10, index: 0}, {id: 20, index: 1}], 10);
+    t.reconfigure(3, [{id: 10, index: 0}], 10);
+    expect([...t.remembered()]).toEqual([[1, 20]]);
+
+    t.reconfigure(3, [{id: 20, index: 1}], 20);
+    expect(t.outputOf(1)).toBe(20);                         // home, by its own memory
+    expect([...t.remembered()]).toEqual([[0, 10], [2, 10]]); // and 20 is nowhere in the map
+
+    t.reconfigure(3, [{id: 10, index: 0}, {id: 20, index: 1}], 10);
+    expect(t.outputOf(1)).toBe(20);   // stays on the television
+    expect(t.outputOf(0)).toBe(10);   // while the laptop's own two come home
+    expect(t.outputOf(2)).toBe(10);
+  });
+
+  it('drops the memory of a workspace a gained output claims out of exile', () => {
+    // Round 1, M2: the only path that exercises the claim pass's own `_remembered.delete`. Nothing else
+    // is free, so the gained output takes the exile itself (`?? candidates[0]`); if the memory survived
+    // that, the original output's return would yank the workspace off the output now showing it.
+    const t = new Tree(2, [{id: 10, index: 0}, {id: 20, index: 1}], 10);
+    t.reconfigure(2, [{id: 10, index: 0}], 10);
+    expect([...t.remembered()]).toEqual([[1, 20]]);
+    t.reconfigure(2, [{id: 10, index: 0}, {id: 30, index: 2}], 10);
+    expect(t.outputOf(1)).toBe(30);
+    expect([...t.remembered()]).toEqual([]);
+    t.reconfigure(3, [{id: 10, index: 0}, {id: 20, index: 1}, {id: 30, index: 2}], 10);
+    expect(t.outputOf(1)).toBe(30);
+    t.check();
+  });
+
+  it('hands out a copy of the remembered map rather than the live one', () => {
+    // Round 1, M5: `ReadonlyMap` is a compile-time fiction over the real object -- a caller keeps a view
+    // that mutates under it, and one cast writes straight through into the tree's own state.
     const t = new Tree(10, outputs, 3);
     t.reconfigure(10, [{id: 3, index: 1}], 3);
-    t.reconfigure(10, outputs, 3, new Map([[1, 3]]));
-    expect(t.outputOf(1)).toBe(2);
+    const view = t.remembered();
+    (view as Map<number, MonitorId>).clear();
+    expect([...t.remembered()]).toEqual([[1, 2]]);
   });
 
   it('honours a pin for a gained output that nothing is remembered on', () => {

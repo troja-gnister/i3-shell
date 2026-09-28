@@ -121,9 +121,14 @@ export class Tree {
     this.focusedOutput = primary;
   }
 
-  /** Where each displaced workspace is waiting to go home. Empty while nothing is unplugged. */
+  /**
+   * Where each displaced workspace is waiting to go home. Empty while nothing is unplugged.
+   *
+   * A copy: `ReadonlyMap` is a compile-time fiction over the real object, and handing out the live map
+   * would let a caller keep a view that mutates under it -- or write through it with one cast.
+   */
   remembered(): ReadonlyMap<number, MonitorId> {
-    return this._remembered;
+    return new Map(this._remembered);
   }
 
   /** The output a workspace lives on. */
@@ -171,6 +176,11 @@ export class Tree {
       return {output, swap: false};
     }
     const output = this.focusedOutput;
+    // Round 1, I3: this branch re-homes the workspace, and a deliberate re-home is newer and better
+    // evidence than a memory of where an unplug found it -- so the memory goes. Guarded on the output
+    // actually changing: `workspace N` onto a hidden workspace of the output it already lives on moves
+    // nothing, and merely looking at a workspace in exile must not cancel its homecoming.
+    if (this.workspace(index).output !== output) this._remembered.delete(index);
     this.workspace(index).output = output;
     this.visible.set(output, index);
     return {output, swap: true};
@@ -194,6 +204,9 @@ export class Tree {
     const index = this.activeWorkspace;
     const vacated = this.workspace(index).output;
     if (vacated === output) return null;
+    // Round 1, I3: an explicit move outranks the memory (see `showWorkspace`). Without this, a move
+    // made while the workspace's home output is asleep is silently undone the moment it wakes.
+    this._remembered.delete(index);
     this.workspace(index).output = output;
     this.visible.set(output, index);
     this.focusedOutput = output;
@@ -380,8 +393,15 @@ export class Tree {
     // Remembered before reassigning, and only for a workspace this call actually displaces: recording
     // every workspace would let an unrelated unplug rewrite a home that never changed, and the next
     // replug would then drag a workspace the user had since moved back to a stale output.
+    //
+    // Round 1, I4: never overwrite an entry either. A workspace already in exile is sitting on a refuge,
+    // not a home, so a chained unplug (the television sleeps, then the laptop it took refuge on is
+    // undocked) would replace its true home with that refuge and the re-dock would drag it off the
+    // television. The first displacement holds the truth; the entry is cleared when the workspace really
+    // comes home, or when the user re-homes it deliberately.
     for (const workspace of this.workspaces.values())
-      if (!live.has(workspace.output)) this._remembered.set(workspace.index, workspace.output);
+      if (!live.has(workspace.output) && !this._remembered.has(workspace.index))
+        this._remembered.set(workspace.index, workspace.output);
     for (const [index, output] of reassignLost(lossAssignment, live, primary))
       this.workspace(index).output = output;
 

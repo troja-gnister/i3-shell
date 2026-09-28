@@ -598,12 +598,17 @@ export class Engine {
         this._acceptFocus(this._ports.windows.focused());
       }
       tree.normalize(new Set(live.filter(w => !excludedFromTree(w)).map(w => w.id)));
-      // After a reconfigure (and once for the tree this commit built, so adoption on enable cannot
-      // leave a window rendered on a workspace nothing shows) every window's native GNOME workspace is
-      // reconciled against the new visibility. Deliberately after the sync loop above, not immediately
-      // after the reconfigure call: windows enter the tree only in that loop, so on the commit that
-      // builds the tree there would be no members to reconcile yet.
-      if (reconfigured || isNew) {
+      // After a reconfigure, every window's native GNOME workspace is reconciled against the new
+      // visibility. Deliberately after the sync loop above, not immediately after the reconfigure call:
+      // windows enter the tree only in that loop, so at the earlier point a tree this commit just built
+      // would have no members to reconcile at all.
+      //
+      // Round 1, I2: a freshly built tree needs no pass of its own. `_syncWindow` calls `_parkOrShow`
+      // for every window entering the tree, and on the commit that builds it no window has a location
+      // yet, so every member goes through that call; nothing between the sync loop and here changes
+      // visibility (`_selectWindow` moves only the tree selection, `normalize` only prunes containers).
+      // The `isNew` half of this gate could therefore only re-issue a port call already made.
+      if (reconfigured) {
         this._reconcileParking(tree);
         if (this._disposed) return;
       }
