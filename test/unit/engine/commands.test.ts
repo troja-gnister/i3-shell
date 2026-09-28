@@ -676,6 +676,20 @@ describe('engine command dispatch', () => {
       expect(f.calls).toContain('warn:could not show window 1; leaving it parked');
     });
 
+    // Fix round 2: the ATTIC-bound loop -- parking the windows of the workspace displaced off the
+    // target output -- fires on the ordinary case where that output already has windows on it, not an
+    // edge case. Distinguished from the LIVE-bound warn above by refusing a window that only the
+    // displaced (target-output) workspace owns, never the one arriving.
+    it('move workspace to output warns rather than desyncing when parking the displaced workspace is refused', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      f.add(2, {monitor: 1});
+      f.refuseMove(2);
+      expect(f.engine.run([{type: 'move_workspace_to_output', target: 'right'}], 1)).toBe('move workspace to output');
+      expect(f.calls).toContain('warn:could not park window 2; leaving it on screen');
+    });
+
     it('move workspace to output takes the windows with it and parks nothing', () => {
       const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
       f.engine.start();
