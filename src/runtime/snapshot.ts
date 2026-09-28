@@ -8,15 +8,21 @@ export type NodeSnapshot =
   | {kind: 'split'; id: NodeId; layout: Layout; lastSplitLayout: SplitLayout; rect: Rect | null;
      children: NodeSnapshot[]; percents: number[]; focusedChild: NodeId | null; rowHeight: number};
 export interface TreeSnapshot {
-  version: 1;
+  version: 2;
   revision: number;
   ready: boolean;
   activeWorkspace: number;
+  /** Null before the first topology; every other field is meaningless then too. */
+  focusedOutput: MonitorId | null;
+  /** What each output currently shows, in the tree's output order. */
+  visible: Array<{output: MonitorId; workspace: number}>;
   workspaces: Array<{
     index: number;
+    output: MonitorId;
+    workArea: Rect | null;
     selected: {kind: 'tiled'; nodeId: NodeId} | {kind: 'floating'; window: WindowId} | null;
     floating: WindowId[];
-    monitors: Array<{id: MonitorId; workArea: Rect | null; root: NodeSnapshot}>;
+    root: NodeSnapshot;
   }>;
 }
 export interface WindowSnapshot extends WindowInfo {
@@ -42,13 +48,22 @@ export function serializeTree(
       children: con.children.map(node), percents: [...con.percents], focusedChild: con.focusedChild?.id ?? null,
       rowHeight: con.layout === 'tabbed' ? rowHeight : con.layout === 'stacked' ? rowHeight * con.children.length : 0};
   };
-  return {version: 1, revision, ready: true, activeWorkspace: tree.activeWorkspace,
+  return {
+    version: 2, revision, ready: true, activeWorkspace: tree.activeWorkspace,
+    focusedOutput: tree.focusedOutput,
+    visible: [...tree.visible].map(([output, workspace]) => ({output, workspace})),
     workspaces: [...tree.workspaces.values()].map(ws => {
       const selection = tree.selection(ws.index);
       const area = topology.workAreas.get(ws.output);
-      return {index: ws.index, selected: selection?.kind === 'tiled'
-        ? {kind: 'tiled', nodeId: selection.con.id} : selection ? {...selection} : null,
-      floating: [...ws.floating],
-      monitors: [{id: ws.output, workArea: area ? {...area} : null, root: node(ws.root)}]};
-    })};
+      return {
+        index: ws.index,
+        output: ws.output,
+        workArea: area ? {...area} : null,
+        selected: selection?.kind === 'tiled'
+          ? {kind: 'tiled', nodeId: selection.con.id} : selection ? {...selection} : null,
+        floating: [...ws.floating],
+        root: node(ws.root),
+      };
+    }),
+  };
 }

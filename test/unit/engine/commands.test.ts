@@ -59,7 +59,7 @@ describe('engine command dispatch', () => {
     f.flush();
     f.engine.run([{type: 'focus', target: 'parent'}], 2);
     const selectedId = f.engine.treeSnapshot().workspaces[0].selected;
-    const sourceBefore = f.engine.treeSnapshot().workspaces[0].monitors[0].root;
+    const sourceBefore = f.engine.treeSnapshot().workspaces[0].root;
     const selectedNodeId = selectedId?.kind === 'tiled' ? selectedId.nodeId : -1;
     const selectedNode = sourceBefore.kind === 'split'
       ? sourceBefore.children.find(child => child.id === selectedNodeId)
@@ -74,9 +74,9 @@ describe('engine command dispatch', () => {
     expect(f.calls.filter(call => call.startsWith('focus:'))).toEqual(['focus:1']);
     expect(f.engine.treeSnapshot().activeWorkspace).toBe(0);
     const snapshot = f.engine.treeSnapshot();
-    expect(windows(snapshot.workspaces[0].monitors[0].root)).toEqual([1]);
+    expect(windows(snapshot.workspaces[0].root)).toEqual([1]);
     expect(snapshot.workspaces[0].selected).toMatchObject({kind: 'tiled'});
-    const destination = snapshot.workspaces[1].monitors[0].root;
+    const destination = snapshot.workspaces[1].root;
     expect(windows(destination)).toEqual([2, 3]);
     expect(destination.kind === 'split' && destination.children[0]).toMatchObject({
       kind: 'split', layout: 'splitv', children: [{window: 2}, {window: 3}],
@@ -84,7 +84,7 @@ describe('engine command dispatch', () => {
 
     f.change(2, {workspace: 1}, 'workspace');
     f.change(3, {workspace: 1}, 'workspace');
-    expect(windows(f.engine.treeSnapshot().workspaces[1].monitors[0].root)).toEqual([2, 3]);
+    expect(windows(f.engine.treeSnapshot().workspaces[1].root)).toEqual([2, 3]);
   });
 
   it('validates a root move target before transferring root contents as one subtree', () => {
@@ -101,13 +101,13 @@ describe('engine command dispatch', () => {
     expect(f.calls.filter(call => call.startsWith('moveTo:'))).toEqual(['moveTo:1:1', 'moveTo:2:1']);
     const snapshot = f.engine.treeSnapshot();
     expect(snapshot.activeWorkspace).toBe(0);
-    expect(snapshot.workspaces[0].monitors[0].root).toMatchObject({children: []});
-    expect(snapshot.workspaces[1].monitors[0].root).toMatchObject({
+    expect(snapshot.workspaces[0].root).toMatchObject({children: []});
+    expect(snapshot.workspaces[1].root).toMatchObject({
       children: [{kind: 'split', layout: 'splith', children: [{window: 1}, {window: 2}]}],
     });
     f.change(1, {workspace: 1}, 'workspace');
     f.change(2, {workspace: 1}, 'workspace');
-    expect(windows(f.engine.treeSnapshot().workspaces[1].monitors[0].root)).toEqual([1, 2]);
+    expect(windows(f.engine.treeSnapshot().workspaces[1].root)).toEqual([1, 2]);
   });
 
   it('dispatches split, focus, move and ten-ppt resize through reference bindings', () => {
@@ -115,18 +115,18 @@ describe('engine command dispatch', () => {
     split.engine.start(); split.add(1); split.add(2); split.flush();
     split.engine.onBinding(binding(split.engine.config, 'default', '<Super>v'), 1);
     split.add(3); split.flush();
-    let root = split.engine.treeSnapshot().workspaces[0].monitors[0].root;
+    let root = split.engine.treeSnapshot().workspaces[0].root;
     expect(root).toMatchObject({children: [{window: 1}, {layout: 'splitv', children: [{window: 2}, {window: 3}]}]});
 
     split.engine.onBinding(binding(split.engine.config, 'default', '<Super>l'), 2);
     expect(split.calls).toContain('focus:2');
     split.engine.onBinding(binding(split.engine.config, 'default', '<Super><Shift>k'), 3);
-    root = split.engine.treeSnapshot().workspaces[0].monitors[0].root;
+    root = split.engine.treeSnapshot().workspaces[0].root;
     expect(root).toMatchObject({children: [{window: 1}, {layout: 'splitv', children: [{window: 3}, {window: 2}]}]});
 
     split.engine.onBinding(binding(split.engine.config, 'default', '<Super>r'), 4);
     split.engine.onBinding(binding(split.engine.config, 'resize', 'semicolon'), 5);
-    root = split.engine.treeSnapshot().workspaces[0].monitors[0].root;
+    root = split.engine.treeSnapshot().workspaces[0].root;
     expect(root.kind === 'split' ? root.percents : []).toEqual([0.4, 0.6]);
   });
 
@@ -151,7 +151,7 @@ describe('engine command dispatch', () => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.add(2); f.flush();
     f.calls.length = 0;
     f.engine.run([{type: 'layout', layout: 'tabbed'}], 1);
-    expect(f.engine.treeSnapshot().workspaces[0].monitors[0].root).toMatchObject({
+    expect(f.engine.treeSnapshot().workspaces[0].root).toMatchObject({
       children: [{layout: 'tabbed', children: [{window: 1}, {window: 2}]}],
     });
     expect(f.calls.filter(call => call.startsWith('raise:'))).toEqual(['raise:1', 'raise:2']);
@@ -161,7 +161,7 @@ describe('engine command dispatch', () => {
     expect(f.calls.filter(call => call.startsWith('raise:')).at(-2)).toBe('raise:2');
     expect(f.calls.filter(call => call.startsWith('raise:')).at(-1)).toBe('raise:1');
     f.engine.run([{type: 'layout_toggle', cycle: 'split'}], 3);
-    expect(f.engine.treeSnapshot().workspaces[0].monitors[0].root).toMatchObject({
+    expect(f.engine.treeSnapshot().workspaces[0].root).toMatchObject({
       children: [{layout: 'splith'}],
     });
   });
@@ -246,7 +246,7 @@ describe('engine command dispatch', () => {
     f.engine.run([{type: 'resize', action: 'grow', dimension: 'height', px: 10, ppt: 20}], 2);
     f.engine.run([{type: 'split', orientation: 'h'}], 3);
     const before = f.engine.treeSnapshot().workspaces;
-    expect(before[0].monitors[0].root).toMatchObject({
+    expect(before[0].root).toMatchObject({
       children: [
         {window: 1},
         {layout: 'splitv', percents: [0.3, 0.7], children: [{window: 2}, {layout: 'splith', children: [{window: 3}]}]},
@@ -265,7 +265,7 @@ describe('engine command dispatch', () => {
     expect(f.engine.run([{type: 'restart'}], 6)).toBe('restarted');
     const rebuilt = f.engine.treeSnapshot().workspaces;
     expect(rebuilt).not.toEqual(before);
-    expect(windows(rebuilt[0].monitors[0].root)).toEqual([1, 2, 3]);
+    expect(windows(rebuilt[0].root)).toEqual([1, 2, 3]);
   });
 
   it('resolves numeric strings and workspace names before moving the selection', () => {

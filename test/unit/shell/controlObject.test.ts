@@ -25,7 +25,7 @@ describe('ControlObject', () => {
     const tree = JSON.parse(control.GetTree());
     const windows = JSON.parse(control.GetWindows());
 
-    expect(tree.workspaces[0].monitors[0].root.children[0]).toMatchObject({
+    expect(tree.workspaces[0].root.children[0]).toMatchObject({
       window: 1,
       title: 'Terminal',
       wmClass: 'org.example.Terminal',

@@ -216,8 +216,8 @@ export class Engine {
 
   treeSnapshot(): TreeSnapshot {
     if (!this._ready || !this._tree || !this._topology)
-      return {version: 1, revision: this._revision, ready: false,
-        activeWorkspace: this._ports.workspaces.activeIndex, workspaces: []};
+      return {version: 2, revision: this._revision, ready: false,
+        activeWorkspace: this._ports.workspaces.activeIndex, focusedOutput: null, visible: [], workspaces: []};
     return serializeTree(this._tree, this._topology, this._containerRects, this._windows, this._revision, this._rowHeight);
   }
 

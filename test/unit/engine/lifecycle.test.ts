@@ -107,12 +107,12 @@ describe('engine lifecycle', () => {
     // there is nothing to apply, per the note at engine.ts's layout loop -- and the parked leaf's rect
     // is therefore null rather than the one it had while still on the visible workspace.
     expect(f.applied).toHaveLength(0);
-    expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{kind: 'leaf', window: 1, rect: null}]});
+    expect(f.engine.treeSnapshot().workspaces[1].root).toMatchObject({children: [{kind: 'leaf', window: 1, rect: null}]});
     // A native 'workspace' echo for a window the tree already tracks is a no-op now: Mutter's workspace
     // field says nothing about which i3 workspace a window belongs to (spec 2.6), so it can no longer
     // relocate a tracked window the way it once could.
     f.change(1, {workspace: 3}, 'workspace'); f.flush();
-    expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{kind: 'leaf', window: 1, rect: null}]});
+    expect(f.engine.treeSnapshot().workspaces[1].root).toMatchObject({children: [{kind: 'leaf', window: 1, rect: null}]});
   });
   it('retains nodes on reload and rejects restart without changing selection', () => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.add(2); f.flush();
@@ -144,12 +144,12 @@ describe('engine lifecycle', () => {
     // it away with a real switch), so getting it onto workspace 9 goes through `move_to_workspace`.
     f.add(1); f.flush();
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 10, name: '10'}}], 0); f.flush();
-    const old = f.engine.treeSnapshot().workspaces[9].monitors[0].root;
+    const old = f.engine.treeSnapshot().workspaces[9].root;
     const loaded = f.load('bindsym Mod4+q kill');
     f.setNextLoad({...loaded, config: {...loaded.config!, workspaceCount: 2}}); f.calls.length = 0;
     f.engine.run([{type: 'reload'}], 0); f.flush();
     expect(f.calls.indexOf('moveTo:1:1')).toBeLessThan(f.calls.indexOf('settings.apply'));
-    expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{children: old.kind === 'split' ? old.children : []}]});
+    expect(f.engine.treeSnapshot().workspaces[1].root).toMatchObject({children: [{children: old.kind === 'split' ? old.children : []}]});
     f.setNextLoad({...loaded, config: {...loaded.config!, workspaceCount: 12}});
     f.applied.length = 0; f.engine.run([{type: 'reload'}], 0); f.flush();
     // Work areas are per output now (Task 4), not per workspace, so growing the count no longer strands
@@ -173,9 +173,9 @@ describe('engine lifecycle', () => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
     f.ports.windows.moveToWorkspace = id => { f.change(id, {workspace: 4, fullscreen: true}, 'workspace'); return true; };
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 0); f.flush();
-    expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{window: 1}]});
+    expect(f.engine.treeSnapshot().workspaces[1].root).toMatchObject({children: [{window: 1}]});
     f.change(1, {fullscreen: false}, 'fullscreen'); f.flush();
-    expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{window: 1}]});
+    expect(f.engine.treeSnapshot().workspaces[1].root).toMatchObject({children: [{window: 1}]});
   });
   it('re-adopts a minimized window onto the workspace it came from, not Mutter’s mismatched report', () => {
     // Minimizing evicts a window from the tree outright. `_minimized` remembers the i3 workspace it
@@ -193,10 +193,10 @@ describe('engine lifecycle', () => {
       return true;
     };
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 0); f.flush();
-    expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: []});
+    expect(f.engine.treeSnapshot().workspaces[1].root).toMatchObject({children: []});
     f.change(1, {minimized: false}, 'minimized'); f.flush();
-    expect(f.engine.treeSnapshot().workspaces[1].monitors[0].root).toMatchObject({children: [{window: 1}]});
-    expect(f.engine.treeSnapshot().workspaces[0].monitors[0].root).toMatchObject({children: []});
+    expect(f.engine.treeSnapshot().workspaces[1].root).toMatchObject({children: [{window: 1}]});
+    expect(f.engine.treeSnapshot().workspaces[0].root).toMatchObject({children: []});
   });
   it('re-adopts a minimized window onto the workspace it came from, not the one now visible', () => {
     // Addition beyond the brief (Task 6, item beyond the swap): before Phase 5, WindowInfo.workspace
@@ -210,11 +210,11 @@ describe('engine lifecycle', () => {
     const f = fakeEngine(); f.engine.start();
     f.engine.run([{type: 'workspace', target: {kind: 'number', number: 3, name: '3'}}], 0);
     f.add(1); f.flush();   // adopts onto workspace 2, which is visible right now
-    expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: [{window: 1}]});
+    expect(f.engine.treeSnapshot().workspaces[2].root).toMatchObject({children: [{window: 1}]});
     expect(f.windows.get(1)!.workspace).toBe(0);   // LIVE: workspace 2 is visible
     f.engine.run([{type: 'workspace', target: {kind: 'number', number: 1, name: '1'}}], 0);   // the output now shows workspace 0 instead
     f.change(1, {minimized: true}, 'minimized'); f.flush();
-    expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: []});
+    expect(f.engine.treeSnapshot().workspaces[2].root).toMatchObject({children: []});
     // The real switch above (unlike the tree poke this used to be) already parks workspace 2's
     // windows on its own way out, so by now window 1's native workspace is already 1 (ATTIC) --
     // asserting that value on restore, as this test used to, would pass whether or not restore's own
@@ -222,9 +222,9 @@ describe('engine lifecycle', () => {
     // asserting the port call restore itself makes is what actually exercises that sync.
     f.calls.length = 0;
     f.change(1, {minimized: false}, 'minimized'); f.flush();
-    expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: [{window: 1}]});
+    expect(f.engine.treeSnapshot().workspaces[2].root).toMatchObject({children: [{window: 1}]});
     expect(f.calls).toContain('moveTo:1:1');   // ATTIC: workspace 2 is hidden now
-    expect(f.engine.treeSnapshot().workspaces[0].monitors[0].root).toMatchObject({children: []});
+    expect(f.engine.treeSnapshot().workspaces[0].root).toMatchObject({children: []});
   });
   it('rebuilds restart from live classification with stable ids and announces cache', () => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.flush();
@@ -402,7 +402,7 @@ describe('engine lifecycle', () => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.add(2); f.flush();
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 10, name: '10'}}], 0); f.flush();
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 10, name: '10'}}], 1); f.flush();
-    expect(f.engine.treeSnapshot().workspaces[9].monitors[0].root).toMatchObject({
+    expect(f.engine.treeSnapshot().workspaces[9].root).toMatchObject({
       children: [{window: 2}, {window: 1}],
     });
     const loaded = f.load('bindsym Mod4+x kill');
@@ -516,7 +516,7 @@ describe('decorations', () => {
     f.engine.focusWindow(3);
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 3, name: '3'}}], 0); f.flush();
     // Workspace 2 belongs to output 10 (the surplus goes to the primary) but neither output shows it.
-    expect(f.engine.treeSnapshot().workspaces[2].monitors[0].root).toMatchObject({children: [{window: 3}]});
+    expect(f.engine.treeSnapshot().workspaces[2].root).toMatchObject({children: [{window: 3}]});
     expect(f.plan!.borders.map(b => b.window).sort()).toEqual([1, 2]);
   });
 });
@@ -702,7 +702,7 @@ function leafOf(snapshot: TreeSnapshot, window: WindowId): NodeId {
     for (const child of node.children) { const found = walk(child); if (found !== null) return found; }
     return null;
   };
-  const found = walk(snapshot.workspaces[0].monitors[0].root);
+  const found = walk(snapshot.workspaces[0].root);
   if (found === null) throw new Error(`window ${window} has no leaf`);
   return found;
 }

@@ -148,19 +148,43 @@ def percent_mismatch(expected, snapshot):
 # snapshot access
 # --------------------------------------------------------------------------
 
-def workspace_snapshot(index=None):
+def _snapshot():
+    """GetTree, version-checked. Version 2 inverted the tree: a workspace names
+    one output and owns one root directly, rather than a list of per-monitor
+    entries -- so every reader here goes through this one place that would
+    fail loudly on a regression back to the old shape."""
     data = tree()
     assert data.get('ready'), data
+    assert data['version'] == 2, data
+    return data
+
+
+def workspace_snapshot(index=None):
+    data = _snapshot()
     index = data['activeWorkspace'] if index is None else index
     return next(ws for ws in data['workspaces'] if ws['index'] == index)
 
 
 def monitor_snapshot(workspace=None, monitor=None):
-    ws = workspace_snapshot(workspace)
+    """The workspace a given output currently shows, or -- with no monitor
+    given -- the requested workspace itself, refusing to guess while more
+    than one output is live.
+
+    Under version 2 a workspace *is* a single output's entry (`output` and
+    `root` sit on it directly), so "the entry for monitor M" is no longer a
+    lookup inside one workspace's monitor list: it is a search over the
+    top-level `visible` list for the output, then over `workspaces` for the
+    index that entry names -- a different collection than the nested one the
+    old shape offered.
+    """
+    data = _snapshot()
     if monitor is None:
-        assert len(ws['monitors']) == 1, ws['monitors']
-        return ws['monitors'][0]
-    return next(entry for entry in ws['monitors'] if entry['id'] == monitor)
+        assert len(data['visible']) == 1, data['visible']
+        index = data['activeWorkspace'] if workspace is None else workspace
+    else:
+        assert workspace is None, 'monitor_snapshot: pass workspace or monitor, not both'
+        index = next(v['workspace'] for v in data['visible'] if v['output'] == monitor)
+    return next(ws for ws in data['workspaces'] if ws['index'] == index)
 
 
 def walk(snapshot):
@@ -1265,8 +1289,13 @@ def describe_display():
             'logical': [[spec[0] for spec in entry[5]] for entry in logical]}
 
 
-def monitor_ids(workspace=0):
-    return [entry['id'] for entry in workspace_snapshot(workspace)['monitors']]
+def monitor_ids():
+    """The live outputs, primary first -- the top-level `visible` list, one
+    entry per output, in the tree's output order. (Version 1 read this off a
+    single workspace's `monitors` list, back when one workspace could span
+    every output; version 2 gives each workspace exactly one output, so that
+    list is gone and this is a top-level query instead.)"""
+    return [entry['output'] for entry in _snapshot()['visible']]
 
 
 def logical_monitor_rects():
