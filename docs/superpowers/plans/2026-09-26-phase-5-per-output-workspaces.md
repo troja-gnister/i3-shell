@@ -2516,7 +2516,11 @@ Drop `'mouse_warping'` from `UNSUPPORTED` and add:
 ```ts
     case 'mouse_warping': {
       if (words[1] !== 'output' && words[1] !== 'none') {
-        warn(line, `mouse_warping: expected output or none, got '${words[1] ?? ''}'`);
+        // `err`, not `warn`, for the same reason Task 11 settled for `focus_follows_mouse`: every other
+        // implemented directive with an enumerated value rejects a malformed one, and a parser where one
+        // typo rejects the file while the next silently defaults is unpredictable. The main spec's tier-2
+        // warning is about a directive being *unimplemented*, which this task changes.
+        err(line, `mouse_warping: expected output or none, got '${words[1] ?? ''}'`);
         return;
       }
       config.mouseWarping = words[1];
