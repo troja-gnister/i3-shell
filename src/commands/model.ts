@@ -1,3 +1,5 @@
+import type {OutputArg} from '../tree/outputs';
+
 export type Direction = 'left' | 'right' | 'up' | 'down';
 export type Layout = 'splith' | 'splitv' | 'tabbed' | 'stacked';
 
@@ -12,6 +14,7 @@ export type Command =
   | {type: 'exec'; command: string; noStartupId: boolean}
   | {type: 'kill'}
   | {type: 'focus'; target: Direction | 'parent' | 'child' | 'mode_toggle'}
+  | {type: 'focus_output'; target: OutputArg}
   | {type: 'move'; direction: Direction}
   | {type: 'move_to_workspace'; target: WorkspaceTarget}
   | {type: 'move_position'; position: 'center' | {x: number; y: number}}

@@ -1,6 +1,6 @@
 import {Tree} from './tree/tree';
 import {descendFocused, leaves, walk, type Con, type MonitorId, type NodeId, type Rect, type SplitCon, type WindowId} from './tree/node';
-import {effectiveWorkspaceCount} from './tree/outputs';
+import {effectiveWorkspaceCount, resolveOutputArg, type OutputArg} from './tree/outputs';
 import {layoutWithRects, stackingOrder} from './tree/layout';
 import {RectReconciler} from './runtime/reconcile';
 import {serializeTree, type TreeSnapshot, type WindowSnapshot} from './runtime/snapshot';
@@ -736,9 +736,9 @@ export class Engine {
    * the workspace falls back to the default assignment — a config written for a different desk must
    * still load.
    *
-   * `byName`'s keys are lowercased on insert: `resolveOutputArg` in tree/outputs.ts (not yet called from
-   * anywhere in `src/`, but the function this maps' shape is for) only lowercases the query side of the
-   * map it is handed, so any map built for that lookup must normalise on the way in.
+   * `byName`'s keys are lowercased on insert: `resolveOutputArg` in tree/outputs.ts (Task 13's
+   * `_resolveOutput` is its production caller) only lowercases the query side of the map it is handed,
+   * so any map built for that lookup must normalise on the way in. This map is built the same way.
    */
   private _pinnedOutputs(): ReadonlyMap<number, MonitorId> {
     const topology = this._topology;
@@ -759,6 +759,24 @@ export class Engine {
       pinned.set(workspace, resolved);
     }
     return pinned;
+  }
+
+  /**
+   * `focus output`'s argument (a direction, `primary`, or a connector name), resolved against the
+   * current topology and the focused output. Null when there is no such output -- a direction with no
+   * neighbour, or a name matching no attached connector.
+   *
+   * `byName` is built exactly like `_pinnedOutputs`'s own map (lowercased on insert, since
+   * `resolveOutputArg` only lowercases the query side of the map it is handed).
+   */
+  private _resolveOutput(arg: OutputArg): MonitorId | null {
+    const tree = this._tree;
+    const topology = this._topology;
+    if (!tree || !topology) return null;
+    const byName = new Map<string, MonitorId>();
+    for (const monitor of topology.monitors)
+      for (const connector of monitor.connectors) byName.set(connector.toLowerCase(), monitor.id);
+    return resolveOutputArg(arg, topology.workAreas, tree.focusedOutput, topology.primary, byName);
   }
 
   private _floating(info: WindowInfo): boolean {
@@ -1397,6 +1415,26 @@ export class Engine {
           return changed;
         });
         return changed ? `focus ${command.target}` : `focus ${command.target}: no target`;
+      }
+      case 'focus_output': {
+        const output = this._resolveOutput(command.target);
+        // No neighbour beyond that edge is an ordinary edge, not an error: outputs are physical and
+        // wrapping between them is never what a user means.
+        if (output === null) return 'focus output: no such output';
+        let changed = false;
+        this.commit(() => {
+          const tree = this._tree;
+          if (!tree || tree.focusedOutput === output) return false;
+          tree.focusedOutput = output;
+          changed = true;
+          this._activateSelection(timestamp);
+          // The pointer follows only here, never from a generic "focusedOutput changed" hook: rule 4
+          // (onPointerOutput) already puts the pointer where it is going to warp to, and warping again
+          // there would be a no-op at best and a fight with the user's own hand at worst.
+          this._warpToFocusedOutput();
+          return true;
+        });
+        return changed ? 'focus output' : 'focus output: unchanged';
       }
       case 'move': {
         let moved = false;

@@ -1,5 +1,6 @@
 import {tokenize, unquote} from '../util/text';
 import type {Command, CommandParseResult, Direction, Layout, WorkspaceTarget} from './model';
+import type {OutputArg} from '../tree/outputs';
 
 /** Splits a command chain on ';' and ',' that are outside double quotes (i3 semantics). */
 export function splitChain(text: string): string[] {
@@ -30,6 +31,17 @@ function normalizeLayout(s: string): Layout | null {
   if (s === 'stacking' || s === 'stacked')
     return 'stacked';
   return null;
+}
+
+/**
+ * i3's output argument: a direction, `primary`, or a connector name. Shared by `focus output`, `move
+ * container to output` (Task 14) and `move workspace to output` (Task 15) — one grammar, read once.
+ */
+function outputArg(args: readonly string[]): OutputArg | null {
+  const first = args[0];
+  if (first === undefined) return null;
+  if (isDirection(first) || first === 'primary') return first;
+  return {name: first};
 }
 
 /**
@@ -83,6 +95,10 @@ function parseOne(segment: string): Command | string {
     case 'kill':
       return {type: 'kill'};
     case 'focus': {
+      if (args[0] === 'output') {
+        const target = outputArg(args.slice(1));
+        return target ? {type: 'focus_output', target} : 'focus output: expected left|right|up|down|primary|<name>';
+      }
       const a = args[0];
       if (isDirection(a) || a === 'parent' || a === 'child' || a === 'mode_toggle')
         return {type: 'focus', target: a};

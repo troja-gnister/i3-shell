@@ -447,4 +447,73 @@ describe('engine command dispatch', () => {
     expect(f.calls.filter(call => call.startsWith('fullscreen:'))).toEqual([]);
     expect(f.applied).toEqual([]);
   });
+
+  // Task 13: `focus output <left|right|up|down|primary|name>` -- the first production caller of both
+  // `resolveOutputArg` (tree/outputs.ts) and `_warpToFocusedOutput` (Task 12).
+  describe('focus output', () => {
+    it('moves the focused output and the selection with it', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(2, {monitor: 1});
+      f.calls.length = 0;
+      expect(f.engine.run([{type: 'focus_output', target: 'right'}], 1)).toBe('focus output');
+      expect(f.engine.state().focusedOutput).toBe(1);
+      expect(f.calls).toContain('focus:2');
+    });
+
+    it('focuses an output whose visible workspace is empty', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      expect(f.engine.run([{type: 'focus_output', target: 'right'}], 1)).toBe('focus output');
+      expect(f.engine.state().focusedOutput).toBe(1);
+    });
+
+    it('is a no-op off the end and never wraps', () => {
+      // Outputs are physical; wrapping between them is never what a user means, and an edge is an
+      // ordinary thing to hit -- no warning either.
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      expect(f.engine.run([{type: 'focus_output', target: 'left'}], 1)).toBe('focus output: no such output');
+      expect(f.engine.state().focusedOutput).toBe(0);
+      expect(f.calls.filter(call => call.startsWith('warn:'))).toEqual([]);
+    });
+
+    it('warps the pointer when a command changes output, and not when mouse_warping is none', () => {
+      const warped = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      warped.engine.start();
+      warped.engine.run([{type: 'focus_output', target: 'right'}], 1);
+      expect(warped.pointer.warps().length).toBe(1);
+
+      const still = fakeEngine('mouse_warping none\n', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      still.engine.start();
+      still.engine.run([{type: 'focus_output', target: 'right'}], 1);
+      expect(still.pointer.warps()).toEqual([]);
+    });
+
+    it('does not warp while the launcher holds its grab', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.engine.run([{type: 'launcher', term: null}], 0);
+      f.engine.run([{type: 'focus_output', target: 'right'}], 1);
+      expect(f.pointer.warps()).toEqual([]);
+    });
+
+    it('is unchanged, and does not warp, when the target is already the focused output', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      expect(f.engine.run([{type: 'focus_output', target: 'primary'}], 1)).toBe('focus output: unchanged');
+      expect(f.engine.state().focusedOutput).toBe(0);
+      expect(f.pointer.warps()).toEqual([]);
+    });
+
+    it('resolves a connector name', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {
+        monitors: [{id: 0, index: 0, connectors: ['HDMI-1']}, {id: 1, index: 1, connectors: ['DP-1']}],
+        primary: 0, workspaceCount: 10,
+      });
+      f.engine.start();
+      expect(f.engine.run([{type: 'focus_output', target: {name: 'DP-1'}}], 1)).toBe('focus output');
+      expect(f.engine.state().focusedOutput).toBe(1);
+    });
+  });
 });
