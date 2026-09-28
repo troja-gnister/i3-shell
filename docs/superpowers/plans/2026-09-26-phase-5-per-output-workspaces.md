@@ -3095,8 +3095,20 @@ In `case 'move':`, before the existing `container to workspace` branch:
 ```ts
   /**
    * Reassign the focused workspace to `output` and show it there. The vacated output falls back to its
-   * lowest-numbered remaining workspace, or — owning none — takes the lowest-numbered workspace whose
-   * output has the most, because invariant 2 forbids an output showing nothing.
+   * lowest-numbered remaining workspace, or — owning none — one that `coverOutputs` takes from whichever
+   * output holds the most, because invariant 2 forbids an output showing nothing.
+   *
+   * **Do not hand-roll donor selection here.** `coverOutputs` in `src/tree/outputs.ts` is the single place
+   * that decides which output gives one up, it carries the pigeonhole argument for why a donor always
+   * exists, and `reconfigure` already applies it in exactly this shape — build a `preRepair` map of
+   * `index → output`, pass it through `coverOutputs`, write the result back. A third copy of that policy
+   * would be a second precedence to keep in step, which is why Task 16 was also pointed at the helper.
+   *
+   * `coverOutputs` needs the outputs in order, and **`[...this.visible.keys()]` is not that order.**
+   * `reconfigure` deletes dead keys and re-sets survivors, and re-setting an existing Map key leaves it
+   * where it was while a newly attached output is appended — so after a replug the key order diverges
+   * from the real one. Store the ordered list as a private field (`_ordered`), assigned from
+   * `orderOutputs(...)` in both the constructor and `reconfigure`, and read it here.
    */
   moveWorkspaceToOutput(output: MonitorId): {vacated: MonitorId; nowVisible: number} | null {
     if (!this.visible.has(output)) return null;
@@ -3106,20 +3118,13 @@ In `case 'move':`, before the existing `container to workspace` branch:
     this.workspace(index).output = output;
     this.visible.set(output, index);
     this.focusedOutput = output;
+    // The vacated output may now own nothing; coverOutputs repairs exactly that and nothing else.
+    const preRepair = new Map([...this.workspaces.values()].map(w => [w.index, w.output]));
+    for (const [i, out] of coverOutputs(preRepair, this._ordered, this.visible))
+      this.workspace(i).output = out;
     const own = this.workspacesOn(vacated);
-    if (own.length > 0) {
-      this.visible.set(vacated, own[0]!);
-      return {vacated, nowVisible: own[0]!};
-    }
-    const donor = [...this.visible.keys()]
-      .filter(candidate => candidate !== vacated)
-      .sort((a, b) => this.workspacesOn(b).length - this.workspacesOn(a).length || a - b)[0]!;
-    const taken = this.workspacesOn(donor).at(-1)!;
-    this.workspace(taken).output = vacated;
-    this.visible.set(vacated, taken);
-    // Taking the donor's highest-numbered leaves its visible workspace — usually its lowest — alone.
-    if (this.visible.get(donor) === taken) this.visible.set(donor, this.workspacesOn(donor)[0]!);
-    return {vacated, nowVisible: taken};
+    this.visible.set(vacated, own[0]!);
+    return {vacated, nowVisible: own[0]!};
   }
 ```
 
