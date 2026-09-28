@@ -359,8 +359,11 @@ describe('Engine', () => {
     it('retains the last known per-output pills across a commit with no tree', () => {
       // F3: a commit that runs with no tree -- topology not ready yet, or momentarily gone mid-restart
       // -- must not blank the map the panel and every bar are currently showing with an empty one.
-      // `_tree` is poked directly (as `fakeEngine.ts`'s own `tree()` helper does) because there is no
-      // public way to force "no tree, no ready topology" back onto an engine that already has both.
+      // `restart` sets `_tree = null` inside a `commit()` that synchronously re-runs
+      // `_layoutAndPublish()`; with the topology already unready at that moment (set below) the
+      // tree-recreate branch is skipped and `_tree` stays null through the pill section -- the same
+      // `f.setTopology(null)` + `restart` construction already used at commands.test.ts's and
+      // lifecycle.test.ts's own restart-rejection tests, not a state fabricated for this test alone.
       const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
       const e = f.engine;
       e.start();
@@ -368,8 +371,7 @@ describe('Engine', () => {
       expect(before.size).toBeGreaterThan(0);
 
       f.setTopology(null);
-      (e as unknown as {_tree: unknown})._tree = null;
-      e.onMonitorsChanged();
+      expect(e.run([{type: 'restart'}], 0)).toBe('restarted');
 
       expect(f.pillsByOutput).toEqual(before);
     });
