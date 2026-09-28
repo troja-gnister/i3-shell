@@ -73,6 +73,7 @@ export function resolve(parsed: ParseResult): ResolveResult {
     floatingModifier: 'Mod4',
     focusWrapping: 'yes',
     workspaceAutoBackAndForth: false,
+    focusFollowsMouse: true,
     stripWorkspaceNumbers: false,
     workspaceCount: 0,
     workspaceOutputs,
@@ -138,6 +139,9 @@ export function resolve(parsed: ParseResult): ResolveResult {
         break;
       case 'workspace_auto_back_and_forth':
         config.workspaceAutoBackAndForth = d.value === 'yes';
+        break;
+      case 'focus_follows_mouse':
+        config.focusFollowsMouse = d.value === 'yes';
         break;
       case 'strip_workspace_numbers':
         config.stripWorkspaceNumbers = d.value === 'yes';

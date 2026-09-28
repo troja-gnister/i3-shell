@@ -13,6 +13,7 @@ export type Directive =
   | {kind: 'floating_modifier'; line: number; value: string}
   | {kind: 'focus_wrapping'; line: number; value: string}
   | {kind: 'workspace_auto_back_and_forth'; line: number; value: string}
+  | {kind: 'focus_follows_mouse'; line: number; value: string}
   | {kind: 'strip_workspace_numbers'; line: number; value: string}
   | {kind: 'workspace_output'; line: number; index: number; names: string[]}
   | {kind: 'client'; line: number; which: ClientColorKey; colors: string[]}
@@ -29,7 +30,7 @@ const IGNORED = new Set(['font', 'client.background', 'client.placeholder']);
 
 /** Tier 2 (§6.3): valid i3, not implemented — warning, line skipped. */
 const UNSUPPORTED = new Set([
-  'bindcode', 'assign', 'workspace_layout', 'focus_follows_mouse', 'exec', 'exec_always',
+  'bindcode', 'assign', 'workspace_layout', 'exec', 'exec_always',
   'gaps', 'hide_edge_borders', 'title_format', 'floating_minimum_size', 'floating_maximum_size',
   'force_focus_wrapping', 'popup_during_fullscreen', 'mouse_warping', 'focus_on_window_activation',
   'show_marks', 'smart_borders', 'smart_gaps', 'no_focus', 'ipc_socket',
@@ -195,6 +196,17 @@ export function parse(lines: LogicalLine[]): ParseResult {
         continue;
       }
       directives.push({kind: 'workspace_auto_back_and_forth', line: l.line, value: rest});
+      continue;
+    }
+
+    if (head === 'focus_follows_mouse') {
+      // Warned, not erred: this is a boolean with a sensible default (i3's own default, yes), so a
+      // typo here should not reject the whole config the way a structural error does.
+      if (rest !== 'yes' && rest !== 'no') {
+        warn(`focus_follows_mouse: expected yes or no, got '${rest}'`);
+        continue;
+      }
+      directives.push({kind: 'focus_follows_mouse', line: l.line, value: rest});
       continue;
     }
 

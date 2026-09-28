@@ -15,7 +15,7 @@ const APP_SWITCHER = 'org.gnome.shell.app-switcher';
 const WM_KEYBINDINGS = 'org.gnome.desktop.wm.keybindings';
 const plan: OverridePlan = {
   accels: ['<Super>1', 'XF86AudioRaiseVolume'],
-  workspaceCount: 3, mouseButtonModifier: '<Alt>',
+  workspaceCount: 3, mouseButtonModifier: '<Alt>', focusMode: 'sloppy',
 };
 
 function overrides(extension: FakeSettings): SettingsOverrides {
@@ -31,6 +31,7 @@ function fixture() {
   const media = new FakeSettings(MEDIA, {'volume-up-static': 'XF86AudioRaiseVolume'});
   const prefs = new FakeSettings(PREFS, {
     'num-workspaces': 4, 'workspace-names': ['Original'], 'mouse-button-modifier': '<Super>',
+    'focus-mode': 'click',
   });
   const mutter = new FakeSettings(MUTTER, {
     'dynamic-workspaces': true, 'workspaces-only-on-primary': true,
@@ -61,6 +62,7 @@ describe('SettingsOverrides', () => {
       // GNOME is held at two workspaces regardless of the config's count; workspace-names is never
       // written any more, so it is untouched by apply().
       'num-workspaces': 2, 'workspace-names': ['Original'], 'mouse-button-modifier': '<Alt>',
+      'focus-mode': 'sloppy',
     });
     // Every live write must already have its original in the persisted recovery record.
     let snapshot: Record<string, Record<string, unknown>> = {};
@@ -82,6 +84,7 @@ describe('SettingsOverrides', () => {
     });
     expect(f.prefs.values).toEqual({
       'num-workspaces': 4, 'workspace-names': ['Original'], 'mouse-button-modifier': '<Super>',
+      'focus-mode': 'click',
     });
     expect(f.extension.get_string('overridden-settings')).toBe('{}');
     const writeCount = writes.length;
@@ -313,6 +316,23 @@ describe('SettingsOverrides', () => {
     expect(wmKeybindings.values['switch-applications']).toEqual(['<Super>Tab']);
   });
 
+  it('applies focus-mode from the plan and restores the original on disable', () => {
+    const f = fixture();
+    const settings = overrides(f.extension);
+    settings.apply({...plan, focusMode: 'sloppy'});
+    expect(f.prefs.values['focus-mode']).toBe('sloppy');
+    settings.restoreAll();
+    expect(f.prefs.values['focus-mode']).toBe('click');
+  });
+
+  it('leaves focus-mode at click when the config disables focus_follows_mouse', () => {
+    const f = fixture();
+    overrides(f.extension).apply({...plan, focusMode: 'click'});
+    expect(f.prefs.values['focus-mode']).toBe('click');
+    // Nothing to remember or restore: the desired value already matched GNOME's own setting.
+    expect(writes.filter(w => w.key === 'focus-mode')).toEqual([]);
+  });
+
   it('restores the workspace-switch and move-to-workspace bindings on disable', () => {
     const f = fixture();
     const wmKeybindings = new FakeSettings(WM_KEYBINDINGS, {
@@ -340,7 +360,7 @@ describe('accelerators claimed outside GNOME\'s own keybinding schemas', () => {
   // already applied to GNOME's own schemas.
   const ibusPlan: OverridePlan = {
     accels: ['<Super>semicolon', '<Super>space'],
-    workspaceCount: 0, mouseButtonModifier: '<Alt>',
+    workspaceCount: 0, mouseButtonModifier: '<Alt>', focusMode: 'sloppy',
   };
 
   function ibusFixture() {

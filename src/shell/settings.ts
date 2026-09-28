@@ -133,8 +133,10 @@ export class SettingsOverrides implements SettingsPort {
     }
 
     const prefs = this._settings(WM_PREFS);
-    if (prefs)
+    if (prefs) {
       this._applyValue(WM_PREFS, prefs, 'mouse-button-modifier', plan.mouseButtonModifier);
+      this._applyValue(WM_PREFS, prefs, 'focus-mode', plan.focusMode);
+    }
 
     this._saveSnapshot();
     for (const c of cleared)

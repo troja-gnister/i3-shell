@@ -198,3 +198,27 @@ describe('workspace N output', () => {
     expect(config!.workspaceOutputs.size).toBe(0);
   });
 });
+
+describe('focus_follows_mouse', () => {
+  it('defaults to yes, as i3 does', () => {
+    expect(load('').config!.focusFollowsMouse).toBe(true);
+  });
+
+  it('parses an explicit no', () => {
+    const {config, diagnostics} = load('focus_follows_mouse no\n');
+    expect(diagnostics).toEqual([]);
+    expect(config!.focusFollowsMouse).toBe(false);
+  });
+
+  it('parses an explicit yes', () => {
+    const {config, diagnostics} = load('focus_follows_mouse yes\n');
+    expect(diagnostics).toEqual([]);
+    expect(config!.focusFollowsMouse).toBe(true);
+  });
+
+  it('warns on a value it does not understand, rather than erroring out the whole config', () => {
+    const r = P('focus_follows_mouse perhaps\n');
+    expect(r.diagnostics.map(d => d.severity)).toEqual(['warning']);
+    expect(r.diagnostics[0]!.message).toMatch(/focus_follows_mouse/);
+  });
+});

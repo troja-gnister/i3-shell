@@ -20,4 +20,10 @@ describe('planOverrides', () => {
     expect(plan.mouseButtonModifier).toBe('<Alt>');
     expect(planOverrides(loadConfigText('floating_modifier none').config!).mouseButtonModifier).toBe('');
   });
+
+  it('maps focus_follows_mouse to a GNOME focus mode', () => {
+    expect(planOverrides(loadConfigText('').config!).focusMode).toBe('sloppy');
+    expect(planOverrides(loadConfigText('focus_follows_mouse no').config!).focusMode).toBe('click');
+    expect(planOverrides(loadConfigText('focus_follows_mouse yes').config!).focusMode).toBe('sloppy');
+  });
 });

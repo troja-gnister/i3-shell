@@ -73,6 +73,12 @@ export interface Config {
   floatingModifier: 'Mod4' | 'Mod1' | 'none';
   focusWrapping: 'yes' | 'no' | 'force' | 'workspace';
   workspaceAutoBackAndForth: boolean;
+  /**
+   * i3's default is yes, so a config that never mentions it still wants it. Maps to
+   * org.gnome.desktop.wm.preferences focus-mode = sloppy, which is Mutter's own focus-follows-mouse and
+   * has i3's semantics: the window under the pointer takes focus, empty desktop changes nothing.
+   */
+  focusFollowsMouse: boolean;
   /** bar { strip_workspace_numbers }: render pills without the leading number. */
   stripWorkspaceNumbers: boolean;
   /** Workspace number → full configured name, e.g. 1 → "1:I". */

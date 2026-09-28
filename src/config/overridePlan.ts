@@ -7,6 +7,11 @@ export interface OverridePlan {
   workspaceCount: number;
   /** Value for org.gnome.desktop.wm.preferences mouse-button-modifier ('' disables). */
   mouseButtonModifier: string;
+  /**
+   * Value for org.gnome.desktop.wm.preferences focus-mode. 'sloppy' is Mutter's own
+   * focus-follows-mouse, with i3's semantics; 'click' is GNOME's ordinary click-to-focus.
+   */
+  focusMode: 'sloppy' | 'click';
 }
 
 export function planOverrides(config: Config): OverridePlan {
@@ -14,5 +19,6 @@ export function planOverrides(config: Config): OverridePlan {
   const mouseButtonModifier =
     config.floatingModifier === 'Mod4' ? '<Super>' :
     config.floatingModifier === 'Mod1' ? '<Alt>' : '';
-  return {accels, workspaceCount: config.workspaceCount, mouseButtonModifier};
+  const focusMode = config.focusFollowsMouse ? 'sloppy' : 'click';
+  return {accels, workspaceCount: config.workspaceCount, mouseButtonModifier, focusMode};
 }
