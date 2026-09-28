@@ -119,6 +119,61 @@ describe('Tree topology reconfiguration', () => {
     tree.check();
   });
 
+  it("honours a pin for a workspace growth creates, F1: `workspace N output` at birth on reconfigure too", () => {
+    // Output 30 attaches and the requested count rises by two, so growth creates workspaces 2 and 3;
+    // only workspace 2 is pinned, to the newly attached output. Workspace 3 defaults to the primary,
+    // which already owns workspace 0, so after growth every output already owns something and
+    // coverOutputs has nothing left to repair (see the next test for when it does) -- this isolates the
+    // pin itself from being incidentally satisfied by coverOutputs's own, separate safety net.
+    const tree = new Tree(2, [{id: 10, index: 0}, {id: 20, index: 1}], 10);
+    expect(tree.reconfigure(4, [{id: 10, index: 0}, {id: 20, index: 1}, {id: 30, index: 2}], 10,
+      new Map([[2, 30]]))).toEqual(new Map());
+    expect(tree.outputOf(2)).toBe(30);
+    expect(tree.outputOf(3)).toBe(10);
+    tree.check();
+  });
+
+  it('does not let a pin move a workspace that already existed before this reconfigure', () => {
+    // §2.3: a pin says where a workspace is *born*, not where it stays forever -- otherwise
+    // `move workspace to output` would be silently undone on the very next reconfigure. Three
+    // workspaces across two outputs is a surplus: moving workspace 2 from 10 to 20 would still leave
+    // both outputs owning at least one, so coverOutputs stays a no-op either way and cannot mask a pin
+    // wrongly applied to an existing workspace by quietly moving it back (the same confound the growth
+    // tests above must avoid, mirrored here).
+    const tree = new Tree(3, [{id: 10, index: 0}, {id: 20, index: 1}], 10);
+    expect(tree.outputOf(2)).toBe(10);
+    expect(tree.reconfigure(3, [{id: 10, index: 0}, {id: 20, index: 1}], 10, new Map([[2, 20]])))
+      .toEqual(new Map());
+    expect(tree.outputOf(2)).toBe(10);
+    tree.check();
+  });
+
+  it('lets coverOutputs override a birth pin rather than leave a newly attached output with nothing', () => {
+    // The pin asks for workspace 2 on output 20, which already owns workspace 1 -- so honouring it
+    // literally would leave the newly attached output 30 owning nothing, breaking the invariant that
+    // every live output shows one of its own. coverOutputs runs after assignment (same order as the
+    // constructor) and takes the freshly pinned workspace back for the output that would be starved.
+    const tree = new Tree(2, [{id: 10, index: 0}, {id: 20, index: 1}], 10);
+    tree.reconfigure(2, [{id: 10, index: 0}, {id: 20, index: 1}, {id: 30, index: 2}], 10,
+      new Map([[2, 20]]));
+    expect(tree.outputOf(2)).toBe(30);
+    expect(tree.workspacesOn(30).length).toBeGreaterThan(0);
+    tree.check();
+  });
+
+  it('ignores a birth pin naming an output that is not among the outputs passed to reconfigure', () => {
+    // Asserting merely that workspace 2 doesn't land on 99 would pass by construction -- nothing in
+    // `outputs` is 99, so no correct *or* buggy code can assign it there directly. What a missing
+    // liveness check actually breaks is coverOutputs's own invariant: an unchecked pin of 99 would
+    // still count as an "owner" in its tally, diluting it and potentially leaving output 30 -- the one
+    // actually newly attached -- without a workspace of its own. That is what this asserts.
+    const tree = new Tree(2, [{id: 10, index: 0}, {id: 20, index: 1}], 10);
+    tree.reconfigure(2, [{id: 10, index: 0}, {id: 20, index: 1}, {id: 30, index: 2}], 10,
+      new Map([[2, 99]]));
+    for (const output of [10, 20, 30]) expect(tree.workspacesOn(output).length).toBeGreaterThan(0);
+    tree.check();
+  });
+
   it('combines workspace and output removal, retains moved active focus, and supports later growth', () => {
     const tree = new Tree(3, [{id: 10, index: 0}, {id: 20, index: 1}], 10);
     const destination = tree.insert(1, 1);

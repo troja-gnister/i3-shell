@@ -210,6 +210,12 @@ export function parse(lines: LogicalLine[]): ParseResult {
         warn(`workspace: expected a workspace number, got '${words[1] ?? ''}'`);
         continue;
       }
+      // i3 workspace numbers are 1-based; `workspaceNumber` itself cannot return a negative one (its
+      // leading-digits regex only ever matches `\d+`), so 0 is the one value left to reject here.
+      if (number < 1) {
+        warn(`workspace: workspace numbers start at 1, got '${words[1] ?? ''}'`);
+        continue;
+      }
       if (words[2] !== 'output' || words.length < 4) {
         warn("workspace: only 'workspace <n> output <name...>' is implemented");
         continue;

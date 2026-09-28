@@ -1,7 +1,7 @@
 import {describe, it, expect} from 'vitest';
 import {readFileSync} from 'node:fs';
 import type {Binding, Config} from '../../src/config/model';
-import {fakeEngine as fakePorts} from './engine/fakeEngine';
+import {fakeEngine as fakePorts, outputsTopology} from './engine/fakeEngine';
 
 const referenceText = readFileSync(new URL('./fixtures/reference.i3config', import.meta.url), 'utf8');
 
@@ -415,6 +415,46 @@ describe('Engine', () => {
       f.engine.start();
       expect(f.tree().outputOf(2)).toBe(0);
       expect(f.calls.filter(c => c.startsWith('warn:'))).toEqual([]);
+    });
+
+    // Fix round 1, F1: a pin must also apply to a workspace born later, by `Tree.reconfigure`'s growth
+    // loop, not only to one born at `Tree` construction. Two paths reach that loop; both are tested.
+    it('honours a pin for a workspace growth creates when a display attaches', () => {
+      const f = fakePorts('workspace 2 output DP-1\n', {
+        monitors: [{id: 0, index: 0, connectors: ['HDMI-1']}],
+        primary: 0, workspaceCount: 1,
+      });
+      f.engine.start();
+      expect(f.tree().workspaces.size).toBe(1); // one output, one workspace -- nothing to grow into yet
+
+      // Two displays attach at once, so growth creates two workspaces, not one: with only one new
+      // workspace, coverOutputs's own repair for the newly attached output happens to land in the same
+      // place a correctly-honoured pin would, and a test could not tell "the pin worked" from "coverage
+      // would have put it there anyway" (see topology.test.ts for the isolated version of this same
+      // concern). Only workspace 2 (index 1) is pinned; workspace 3 (index 2) takes the unpinned
+      // default and is what coverOutputs sweeps onto the other new output instead.
+      f.setTopology(outputsTopology(
+        [{id: 0, index: 0, connectors: ['HDMI-1']}, {id: 1, index: 1, connectors: ['DP-1']},
+          {id: 2, index: 2, connectors: ['VGA-1']}], 0));
+      f.engine.onMonitorsChanged();
+
+      expect(f.tree().outputOf(1)).toBe(1);
+    });
+
+    it('honours a pin for a workspace growth creates when a config reload raises workspaceCount', () => {
+      const f = fakePorts('bindsym Mod4+q kill', {
+        monitors: [{id: 0, index: 0, connectors: ['HDMI-1']}, {id: 1, index: 1, connectors: ['DP-1']}],
+        primary: 0, workspaceCount: 2,
+      });
+      f.engine.start();
+      expect(f.tree().workspaces.size).toBe(2);
+
+      const loaded = f.load('workspace 3 output DP-1\n');
+      f.setNextLoad({...loaded, config: {...loaded.config!, workspaceCount: 3}});
+      f.engine.run([{type: 'reload'}], 0);
+      f.flush();
+
+      expect(f.tree().outputOf(2)).toBe(1);
     });
   });
 });

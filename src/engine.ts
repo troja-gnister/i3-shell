@@ -512,7 +512,8 @@ export class Engine {
         this._tree = new Tree(this._workspaceCount, outputs, topology.primary, this._pinnedOutputs());
       else if (this._tree.workspaces.size !== wanted ||
         this._tree.outputSignature() !== outputs.map(o => o.id).sort((a, b) => a - b).join(','))
-        this._moveReconfigured(this._tree.reconfigure(this._workspaceCount, outputs, topology.primary));
+        this._moveReconfigured(
+          this._tree.reconfigure(this._workspaceCount, outputs, topology.primary, this._pinnedOutputs()));
       if (this._disposed) return;
       const tree = this._tree;
       const live = this._ports.windows.list();
@@ -673,13 +674,15 @@ export class Engine {
   }
 
   /**
-   * `workspace N output <names>` resolved against the attached displays. First live name wins, `primary`
-   * included — the same list-of-outputs form `resolveOutputArg` accepts for `focus output` (§2.3). An
-   * unattached name warns once, naming the config line, and the workspace falls back to the default
-   * assignment — a config written for a different desk must still load.
+   * `workspace N output <names>` resolved against the attached displays: the names are tried in order
+   * and the first one naming a live output wins, with `primary` recognised among them as a name in its
+   * own right (§2.3's list-of-outputs form). An unattached name warns once, naming the config line, and
+   * the workspace falls back to the default assignment — a config written for a different desk must
+   * still load.
    *
-   * `byName`'s keys are lowercased on insert: `resolveOutputArg` in tree/outputs.ts only lowercases the
-   * query side of the map it is handed, so any map built for a name lookup must normalise on the way in.
+   * `byName`'s keys are lowercased on insert: `resolveOutputArg` in tree/outputs.ts (not yet called from
+   * anywhere in `src/`, but the function this maps' shape is for) only lowercases the query side of the
+   * map it is handed, so any map built for that lookup must normalise on the way in.
    */
   private _pinnedOutputs(): ReadonlyMap<number, MonitorId> {
     const topology = this._topology;
@@ -1134,7 +1137,7 @@ export class Engine {
       this._workspaceCount = count;
       if (this._tree && this._topology) {
         const outputs = this._topology.monitors.map(m => ({id: m.id, index: m.index}));
-        const moves = this._tree.reconfigure(count, outputs, this._topology.primary);
+        const moves = this._tree.reconfigure(count, outputs, this._topology.primary, this._pinnedOutputs());
         this._moveReconfigured(moves);
         if (this._disposed) return;
       }

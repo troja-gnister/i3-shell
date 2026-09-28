@@ -290,6 +290,7 @@ export class Tree {
     requestedWorkspaceCount: number,
     outputs: readonly OutputRef[],
     primary: MonitorId,
+    pinned: ReadonlyMap<number, MonitorId> = new Map(),
   ): Map<WindowId, number> {
     assertInteger(requestedWorkspaceCount, 'workspace count');
     // Rejected explicitly, before the clamp: only a request that is merely low, not negative, is
@@ -324,11 +325,21 @@ export class Tree {
     for (const [index, output] of reassignLost(lossAssignment, live, primary))
       this.workspace(index).output = output;
 
+    // `pinned` is consulted only here, for the indices this loop is creating — never for a workspace
+    // that already existed (those are `reassignLost`'s concern above, never a pin's). §2.3: a pin says
+    // where a workspace is born, not where it stays forever; `move workspace to output` must still be
+    // able to move an existing one, so re-reading the pin on every reconfigure would silently undo that.
+    // If a future task adds remembered placements for a returning output (`adoptOutput`), those apply to
+    // workspaces that already existed before this call and so are outside this loop too — memory is
+    // about where a workspace already was, a pin is about where one that has never existed yet should
+    // start, and the two do not compete here. A pin naming an output that is not live (or gone missing
+    // from `outputs` since it was resolved) is ignored, exactly as at birth in the constructor.
     for (let index = this.workspaces.size; index < workspaceCount; index++) {
       const root = this.allocateSplit('splith', true);
+      const pin = pinned.get(index);
       this.workspaces.set(index, {
         index,
-        output: primary,
+        output: pin !== undefined && targetOutputs.has(pin) ? pin : primary,
         root,
         focusedCon: root,
         floating: [],

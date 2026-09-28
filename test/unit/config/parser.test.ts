@@ -187,4 +187,14 @@ describe('workspace N output', () => {
     const {diagnostics} = load('workspace bogus output DP-1\n');
     expect(diagnostics.map(d => d.severity)).toEqual(['warning']);
   });
+
+  it('rejects workspace 0, rather than silently recording an unreachable zero-based index of -1', () => {
+    // Fix round 1, F3: i3 workspace numbers are 1-based; workspaceNumber("0") legitimately returns 0
+    // (it *is* a leading digit), so without this guard `index = number - 1` would store -1, a key no
+    // real workspace index can ever match, and the pin would silently do nothing forever.
+    const {config, diagnostics} = load('workspace 0 output DP-1\n');
+    expect(diagnostics.map(d => d.severity)).toEqual(['warning']);
+    expect(diagnostics[0]!.message).toMatch(/workspace/);
+    expect(config!.workspaceOutputs.size).toBe(0);
+  });
 });
