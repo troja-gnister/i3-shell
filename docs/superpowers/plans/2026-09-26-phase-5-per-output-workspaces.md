@@ -2249,8 +2249,13 @@ it('parses focus_follows_mouse no', () => {
   expect(diagnostics).toEqual([]);
   expect(config.focusFollowsMouse).toBe(false);
 });
-it('warns on a focus_follows_mouse value it does not understand', () => {
-  expect(parse('focus_follows_mouse perhaps\n').diagnostics.map(d => d.severity)).toEqual(['warning']);
+it('rejects a focus_follows_mouse value it does not understand', () => {
+  // `err`, not `warn`, and deliberately: the two structurally identical sibling directives
+  // (`focus_wrapping`, `workspace_auto_back_and_forth`) both reject a malformed single-token value, and
+  // "it has a safe default" cannot justify warning here because `workspace_auto_back_and_forth` has one
+  // too. The main spec's tier-2 warning for `focus_follows_mouse` was about the directive being
+  // unimplemented -- which this task changes -- not about a malformed value.
+  expect(parse('focus_follows_mouse perhaps\n').diagnostics.map(d => d.severity)).toEqual(['error']);
 });
 
 // test/unit/config/overridePlan.test.ts
@@ -2285,7 +2290,10 @@ boolean directives use (`workspaceAutoBackAndForth` is the nearest model):
     case 'focus_follows_mouse': {
       const value = booleanWord(words[1]);
       if (value === null) {
-        warn(line, `focus_follows_mouse: expected yes or no, got '${words[1] ?? ''}'`);
+        // `err`, matching `focus_wrapping` and `workspace_auto_back_and_forth`, which reject the same
+        // single-token shape. A parser where one boolean typo rejects the file and the next silently
+        // defaults is unpredictable.
+        err(line, `focus_follows_mouse: expected yes or no, got '${words[1] ?? ''}'`);
         return;
       }
       config.focusFollowsMouse = value;
