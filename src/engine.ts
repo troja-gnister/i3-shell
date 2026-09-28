@@ -483,9 +483,14 @@ export class Engine {
   }
 
   /**
-   * Test-only entry point for `_showOnOutput`, which still has no production caller of its own -- the
-   * `workspace` command drives `_parkAndShow` directly, through `Tree.showWorkspace` instead. Tasks 14
-   * and 15 are `_showOnOutput`'s real callers.
+   * Test-only entry point for `_showOnOutput`, which has no production caller of its own -- the
+   * `workspace` command drives `_parkAndShow` directly, through `Tree.showWorkspace` instead, and
+   * neither Task 14 (`move`/`focus` crossing an output edge, via `Tree.moveIntoOutput`/`enterOutput`)
+   * nor Task 15 (`move container/workspace to output`) turned out to need it either: `_showOnOutput`
+   * sets `tree.visible`/`workspace.output` with no `coverOutputs` repair for the output a workspace
+   * moved away from, which is exactly the gap `Tree.moveWorkspaceToOutput` exists to close. It is
+   * exercised only through this test-only wrapper, driven by Task 6's swap tests; whether it should
+   * still exist is for a later review to decide.
    */
   showOnOutputForTest(output: MonitorId, incoming: number): void {
     this._showOnOutput(output, incoming);
@@ -1506,7 +1511,17 @@ export class Engine {
           // moveIntoOutput sets focusedOutput as a side effect of lifting the selection; put it back,
           // since this command does not move focus.
           tree.focusedOutput = before;
-          for (const id of carried) this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE);
+          // Defensive, not a no-op guarded against: `carried` left an already-visible workspace for
+          // another already-visible one, so every id here should already be on LIVE_WORKSPACE -- but
+          // nothing upstream guarantees that stays true, and the warn-on-refusal contract every other
+          // moveToWorkspace call site in this file follows (_parkAndShow, _parkOrShow) applies here too.
+          for (const id of carried)
+            if (!this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE))
+              this._ports.log.warn(`could not show window ${id}; leaving it parked`);
+          // "Does not follow the window" has to mean the keyboard does not follow, not merely that
+          // focusedOutput is restored: without this, real focus stays on the window that just left,
+          // since the tree's selection is only ever reconciled inward from native focus reports.
+          this._activateSelection(timestamp);
           moved = true;
           return true;
         });
@@ -1527,9 +1542,11 @@ export class Engine {
           if (!result) return false;
           // Whatever the target output was showing is now on no output's screen.
           if (before !== undefined) for (const id of this._workspaceMembers(tree, before))
-            this._ports.windows.moveToWorkspace(id, ATTIC_WORKSPACE);
+            if (!this._ports.windows.moveToWorkspace(id, ATTIC_WORKSPACE))
+              this._ports.log.warn(`could not park window ${id}; leaving it on screen`);
           for (const id of this._workspaceMembers(tree, tree.activeWorkspace))
-            this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE);
+            if (!this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE))
+              this._ports.log.warn(`could not show window ${id}; leaving it parked`);
           this._activateSelection(timestamp);
           this._warpToFocusedOutput();
           moved = true;

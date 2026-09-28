@@ -623,6 +623,59 @@ describe('engine command dispatch', () => {
       expect(f.engine.state().focusedOutput).toBe(0);
     });
 
+    // Fix round 1, I1: "does not follow the window" has to mean the keyboard does not follow, not
+    // merely that focusedOutput is restored. Two windows on the source output so there is a
+    // distinguishable fallback -- window 1 should be activated, never window 2, which just left.
+    it('move container to output activates the window left behind, not the one that moved', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      f.add(2, {monitor: 0});
+      f.focus(2);
+      f.calls.length = 0;
+
+      expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1)).toBe('move container to output');
+      expect(f.tree().location(2)).toEqual({workspace: 1, output: 1, floating: false});
+      expect(f.calls.filter(call => call.startsWith('focus:'))).toEqual(['focus:1']);
+    });
+
+    // Fix round 1, folded item 1: the user's actual rescue binding is `move container to output
+    // primary`, not a direction -- covered only by the typechecker until now, since both tests above
+    // use `left`/`right`. `primary` also exercises the direction=null branch (normal insertion point
+    // rather than an entering edge) that neither of those does either.
+    it('move container to output accepts a primary target, at the normal insertion point rather than a forced edge', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(10, {monitor: 0});
+      f.add(9, {monitor: 1});
+      f.engine.run([{type: 'focus_output', target: 'right'}], 1);
+      expect(f.engine.run([{type: 'move_container_to_output', target: 'primary'}], 2)).toBe('move container to output');
+      expect(f.tree().location(9)).toEqual({workspace: 0, output: 0, floating: false});
+      // `primary` is not a direction: a direction would reseat window 9 at a forced edge (index 0 for
+      // `right`), displacing window 10; the normal insertion point instead leaves window 10 in place.
+      expect(windows(f.engine.treeSnapshot().workspaces[0].root)).toEqual([10, 9]);
+    });
+
+    // Fix round 1, I2: every other moveToWorkspace call site in the engine (_parkAndShow, _parkOrShow)
+    // warns rather than throws on a refused native move; these three call sites now match.
+    it('move container to output warns rather than desyncing when the native move is refused', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      f.refuseMove(1);
+      expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1)).toBe('move container to output');
+      expect(f.calls).toContain('warn:could not show window 1; leaving it parked');
+    });
+
+    it('move workspace to output warns rather than desyncing when the native move is refused', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      f.refuseMove(1);
+      expect(f.engine.run([{type: 'move_workspace_to_output', target: 'right'}], 1)).toBe('move workspace to output');
+      expect(f.calls).toContain('warn:could not show window 1; leaving it parked');
+    });
+
     it('move workspace to output takes the windows with it and parks nothing', () => {
       const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
       f.engine.start();
