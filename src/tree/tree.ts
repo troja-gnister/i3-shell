@@ -1,5 +1,5 @@
 import type {Direction, Layout} from '../commands/model';
-import {nextFocus, type Wrapping} from './focus';
+import {descendDirection, nextFocus, type Wrapping} from './focus';
 import {
   birthAssignment, coverOutputs, effectiveWorkspaceCount, orderOutputs, reassignLost, type OutputRef,
 } from './outputs';
@@ -10,6 +10,7 @@ import {
   descendFocused,
   detach,
   focusChain,
+  isForward,
   leaves,
   replace,
   type AllocateSplit,
@@ -539,6 +540,41 @@ export class Tree {
     return windows;
   }
 
+  /**
+   * Enter an output's visible workspace from the edge nearest the output being left: moving `right`
+   * enters at its left. Returns the leaf focused, or null when that workspace is empty — in which case
+   * its root is selected, because focus is output-level and an empty output is still focusable.
+   */
+  enterOutput(output: MonitorId, direction: Direction): LeafCon | null {
+    const index = this.visible.get(output);
+    if (index === undefined) return null;
+    this.focusedOutput = output;
+    const root = this.workspace(index).root;
+    const target = descendDirection(root, direction);
+    if (!target) {
+      this.select(root);
+      return null;
+    }
+    this.select(target);
+    return target;
+  }
+
+  /**
+   * Move the selection into an output's visible workspace. `direction` null means the workspace's normal
+   * insertion point (a named or `primary` target); a direction means the entering edge.
+   */
+  moveIntoOutput(output: MonitorId, direction: Direction | null): WindowId[] {
+    const index = this.visible.get(output);
+    if (index === undefined) return [];
+    if (index === this.activeWorkspace) return [];
+    // moveToWorkspace already preserves a moved subtree's structure, layout, percentages and focused
+    // child, including the root-contents case, so the cross-output move is that plus an edge choice.
+    const moved = this.moveToWorkspace(index);
+    if (moved.length > 0 && direction !== null) this._reseatAtEdge(index, direction);
+    if (moved.length > 0) this.focusedOutput = output;
+    return moved;
+  }
+
   insert(window: WindowId, workspace: number): LeafCon {
     assertWindowId(window);
     const ws = this.workspace(workspace);
@@ -714,6 +750,26 @@ export class Tree {
         ? parent.children.indexOf(selected) + 1
         : parent.children.length,
     };
+  }
+
+  /**
+   * Moves the child `moveToWorkspace` just attached to the front of the target root's children for a
+   * forward direction, or the back for a backward one — the entering edge, in place of wherever
+   * `insertionPoint` happened to land it. Reuses `detach`/`attach` (the same pair `moveCon` uses to
+   * relocate a child across a non-adjacent split) rather than splicing `percents` by hand a second
+   * time: detaching renormalizes what remains, and attaching at the edge index redistributes evenly
+   * over the same count, exactly as if the child had been inserted there to begin with.
+   */
+  private _reseatAtEdge(workspaceIndex: number, direction: Direction): void {
+    const root = this.workspace(workspaceIndex).root;
+    let child: Con | null = this.workspace(workspaceIndex).focusedCon;
+    while (child && child.parent !== root) child = child.parent;
+    if (!child || child.parent !== root) return;
+    const from = root.children.indexOf(child);
+    const to = isForward(direction) ? 0 : root.children.length - 1;
+    if (from === to) return;
+    detach(child);
+    attach(root, child, isForward(direction) ? 0 : root.children.length);
   }
 }
 

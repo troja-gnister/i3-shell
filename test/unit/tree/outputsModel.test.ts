@@ -124,6 +124,95 @@ describe('Tree, per-output', () => {
   });
 });
 
+describe('enterOutput', () => {
+  it('descends into the neighbour from the entering edge', () => {
+    const t = new Tree(10, outputs, 3);
+    t.focusedOutput = 2;
+    const a = t.insert(1, 1), b = t.insert(2, 1);
+    t.focusedOutput = 3;
+    // Moving right into output 2 enters at its left, which is its first child.
+    expect(t.enterOutput(2, 'right')).toBe(a);
+    expect(t.focusedOutput).toBe(2);
+    expect(b).toBeDefined();
+  });
+
+  it('enters from the far edge when moving left', () => {
+    const t = new Tree(10, outputs, 3);
+    t.focusedOutput = 2;
+    t.insert(1, 1); const b = t.insert(2, 1);
+    t.focusedOutput = 3;
+    expect(t.enterOutput(2, 'left')).toBe(b);
+  });
+
+  it('focuses an empty output’s root and returns null', () => {
+    const t = new Tree(10, outputs, 3);
+    expect(t.enterOutput(2, 'right')).toBeNull();
+    expect(t.focusedOutput).toBe(2);
+    expect(t.selection()).toEqual({kind: 'tiled', con: t.root(1)});
+  });
+});
+
+describe('moveIntoOutput', () => {
+  it('reseats the moved subtree at the front of the target root for a forward direction, keeping percents in step', () => {
+    const t = new Tree(10, outputs, 3);
+    t.focusedOutput = 2;
+    const existing = t.insert(1, 1);
+    t.focusedOutput = 3;
+    t.insert(2, 0);
+
+    const moved = t.moveIntoOutput(2, 'right');
+
+    expect(moved).toEqual([2]);
+    const root = t.root(1);
+    expect(root.children).toEqual([t.find(2), existing]);
+    expect(root.percents.length).toBe(2);
+    expect(root.percents.reduce((sum, p) => sum + p, 0)).toBeCloseTo(1);
+    expect(t.focusedOutput).toBe(2);
+  });
+
+  it('reseats the moved subtree at the back of the target root for a backward direction', () => {
+    const t = new Tree(10, outputs, 3);
+    t.focusedOutput = 2;
+    const first = t.insert(10, 1);
+    t.insert(11, 1);
+    // Focus the *first* child, so the plain insertion point lands the moved subtree in the middle --
+    // otherwise a backward reseat would be a no-op even if `_reseatAtEdge` did nothing at all.
+    t.select(first);
+    t.focusedOutput = 3;
+    t.insert(99, 0);
+
+    const moved = t.moveIntoOutput(2, 'left');
+
+    expect(moved).toEqual([99]);
+    const root = t.root(1);
+    expect(root.children.map(con => con.kind === 'leaf' ? con.window : null)).toEqual([10, 11, 99]);
+    expect(root.percents.length).toBe(3);
+    expect(root.percents.reduce((sum, p) => sum + p, 0)).toBeCloseTo(1);
+  });
+
+  it('leaves the normal insertion point alone when direction is null', () => {
+    const t = new Tree(10, outputs, 3);
+    t.focusedOutput = 2;
+    const existing = t.insert(1, 1);
+    t.focusedOutput = 3;
+    t.insert(2, 0);
+
+    const moved = t.moveIntoOutput(2, null);
+
+    expect(moved).toEqual([2]);
+    const root = t.root(1);
+    // No reseat: the moved subtree stays wherever insertionPoint put it (after the existing focused
+    // child), not forced to an edge.
+    expect(root.children).toEqual([existing, t.find(2)]);
+  });
+
+  it('is a no-op when the output already shows the active workspace', () => {
+    const t = new Tree(10, outputs, 3);
+    t.insert(1, 0);
+    expect(t.moveIntoOutput(3, 'right')).toEqual([]);
+  });
+});
+
 describe('showWorkspace', () => {
   it('moves focus to the output already showing that workspace, and swaps nothing', () => {
     const t = new Tree(10, outputs, 3);           // 0 on primary 3, 1 on 2

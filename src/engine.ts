@@ -1295,7 +1295,11 @@ export class Engine {
     return this._launcherArea();
   }
 
-  /** Test-only entry point for `_warpToFocusedOutput`, which has no production caller until Task 13. */
+  /**
+   * Test-only entry point for `_warpToFocusedOutput`, whose production callers are `focus_output`
+   * (Task 13) and, since this task, the `focus` and `move` commands' output-crossing branches -- never
+   * rule 4 (`onPointerOutput`), where the pointer is already there.
+   */
   warpToFocusedOutputForTest(): void {
     this._warpToFocusedOutput();
   }
@@ -1410,6 +1414,26 @@ export class Engine {
             if (changed) this._activateSelection(timestamp);
             return changed;
           }
+          // Crossing beats wrapping: try strictly inside this output first, with wrapping off. Only
+          // once that finds nothing does a neighbour get a look, and only once there is no neighbour
+          // either does the config's own focus_wrapping get to wrap inside this output -- get this
+          // order backwards and wrapping would satisfy the move before the edge ever crosses.
+          if (tree.focus(command.target, 'no')) {
+            changed = true;
+            this._activateSelection(timestamp);
+            return true;
+          }
+          const neighbour = this._resolveOutput(command.target);
+          if (neighbour !== null) {
+            tree.enterOutput(neighbour, command.target);
+            changed = true;
+            this._activateSelection(timestamp);
+            // The pointer follows only because this command itself just crossed an output, never from
+            // a generic "focusedOutput changed" hook -- see `focus_output` above and
+            // `_warpToFocusedOutput`'s own comment.
+            this._warpToFocusedOutput();
+            return true;
+          }
           changed = tree.focus(command.target, this._config.focusWrapping) !== null;
           if (changed) this._activateSelection(timestamp);
           return changed;
@@ -1439,8 +1463,23 @@ export class Engine {
       case 'move': {
         let moved = false;
         this.commit(() => {
-          moved = this._tree?.move(command.direction) ?? false;
-          if (moved) this._activateSelection(timestamp);
+          const tree = this._tree;
+          if (!tree) return false;
+          // Same order as `focus`: strictly inside this output first, a neighbour only once that
+          // fails. `move` has no config-level wrapping fallback of its own -- the edge is either
+          // crossed or the move is a no-op.
+          if (tree.move(command.direction)) {
+            moved = true;
+            this._activateSelection(timestamp);
+            return true;
+          }
+          const neighbour = this._resolveOutput(command.direction);
+          if (neighbour === null) return false;
+          moved = tree.moveIntoOutput(neighbour, command.direction).length > 0;
+          if (moved) {
+            this._activateSelection(timestamp);
+            this._warpToFocusedOutput();
+          }
           return moved;
         });
         return moved ? `move ${command.direction}` : `move ${command.direction}: no target`;

@@ -23,7 +23,10 @@ export function splitChain(text: string): string[] {
 }
 
 const DIRECTIONS: readonly string[] = ['left', 'right', 'up', 'down'];
-const isDirection = (s: string | undefined): s is Direction => s !== undefined && DIRECTIONS.includes(s);
+// Exported for the engine: both the focus/move crossing logic and `move container to output` need this
+// same membership test, and the engine already imports `parseCommands` from this module, so this adds
+// no new dependency edge.
+export const isDirection = (s: string | undefined): s is Direction => s !== undefined && DIRECTIONS.includes(s);
 
 function normalizeLayout(s: string): Layout | null {
   if (s === 'splith' || s === 'splitv' || s === 'tabbed')

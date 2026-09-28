@@ -516,4 +516,66 @@ describe('engine command dispatch', () => {
       expect(f.engine.state().focusedOutput).toBe(1);
     });
   });
+
+  // Task 14: the directional `focus`/`move` commands cross the output edge instead of wrapping. The
+  // config's effective focus_wrapping is `yes` (resolve.ts's default), so a fixture with only one
+  // window per output cannot tell "wrapped inside" apart from "crossed over" -- both land on the only
+  // other window there is. Every output below therefore carries at least two windows.
+  describe('focus and move across the output edge', () => {
+    it('focus right crosses to the neighbouring output at its edge rather than wrapping', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      f.add(2, {monitor: 0});
+      f.add(3, {monitor: 1});
+      f.add(4, {monitor: 1});
+      f.focus(2); // rightmost/focused window on output 0
+      f.calls.length = 0;
+
+      expect(f.engine.run([{type: 'focus', target: 'right'}], 1)).toBe('focus right');
+      expect(f.engine.state().focusedOutput).toBe(1);
+      // Entering edge for `right` is output 1's left, its first child -- window 3, not window 4.
+      expect(f.calls).toContain('focus:3');
+    });
+
+    it('focus right still wraps inside one output when there is no neighbour', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1);
+      f.add(2);
+      f.focus(1); // leftmost child; moving further left has no sibling and no neighbouring output
+      f.calls.length = 0;
+
+      expect(f.engine.run([{type: 'focus', target: 'left'}], 1)).toBe('focus left');
+      expect(f.engine.state().focusedOutput).toBe(0);
+      // No neighbour exists, so the config's own focus_wrapping (`yes`) wraps to the far child.
+      expect(f.calls).toContain('focus:2');
+    });
+
+    it('move right at the edge inserts into the neighbouring output at its entering edge', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      f.add(3, {monitor: 1});
+      f.add(4, {monitor: 1});
+      f.focus(1);
+      f.calls.length = 0;
+
+      expect(f.engine.run([{type: 'move', direction: 'right'}], 1)).toBe('move right');
+      expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: false});
+      expect(f.engine.state().focusedOutput).toBe(1);
+    });
+
+    it('move right is a no-op at the edge when there is no neighbour -- move never wraps', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1);
+      f.add(2);
+      f.focus(2);
+      f.calls.length = 0;
+
+      expect(f.engine.run([{type: 'move', direction: 'right'}], 1)).toBe('move right: no target');
+      expect(f.engine.state().focusedOutput).toBe(0);
+    });
+  });
 });
