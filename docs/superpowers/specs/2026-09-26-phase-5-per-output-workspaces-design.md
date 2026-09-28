@@ -182,7 +182,10 @@ Dumping everything onto workspace I would be the alternative and is worse.
 2. **`focus output <arg>`**, and a directional `focus` that walks off the edge of the visible
    workspace's root (§4.4).
 3. **`workspace N` landing on another output** (§2.4).
-4. **The pointer crossing onto an output whose visible workspace is empty.** The one case rule 1
+4. **The pointer crossing onto an output whose visible workspace is empty** — and only while
+   `focus_follows_mouse` is on. If the user has turned it off, pointer motion moves nothing and
+   `focus output` is how they reach another display; a rule that still followed the pointer would make
+   a documented setting half-effective in its least visible half. The one case rule 1
    cannot cover, structurally: there is no window there to take focus. This is the defect on the
    unoccupied workspaces in §1.
 
@@ -213,8 +216,20 @@ whatever lies under the stationary pointer, and every keyboard output command in
 mouse. The two features only work as a pair; implementing `focus-mode = sloppy` without warping would
 be a regression. `mouse_warping none` disables the warp and is honoured.
 
+**All three of i3's values are accepted.** i3 4.17 added `container`, which warps on *any* focus change
+rather than only on an output change. This design warps only on an output change, so `container` is
+accepted, treated as `output`, and **warned** about once — the extra granularity is not implemented. It
+must not be rejected: the entire input to this program is the user's real `~/.config/i3/config`, so a
+valid i3 value can never make the file fail to load, and the main spec's tier policy already has a
+category for valid-but-unimplemented behaviour.
+
 Warping is suppressed while the launcher holds its modal grab, and when the change of focused output
-was itself caused by rule 4 (the pointer is already there).
+was itself caused by rule 4 (the pointer is already there). **The launcher's grab is queried, not
+mirrored.** The engine cannot track it with a flag: `src/shell/launcher.ts` closes itself at seven
+sites the engine never hears about — a toggling second `open()`, a dismiss, three launch paths, a
+deferred key-focus-out and `destroy` — and abandons without opening when a modal grab is refused. A
+mirrored flag is therefore stuck `true` after the first ordinary use, which silently disables the warp
+for the rest of the session. The `launcher` port exposes `isOpen()` and the warp asks it.
 
 ### 3.4 What this fixes
 
@@ -568,7 +583,11 @@ one commit, which is the shape of change that produced 34 St-CRITICALs in Phase 
   output, and `$mod+d` then opens the launcher on that output.
 - **A60** With `focus-mode = sloppy` applied, moving the pointer onto a window on another output makes
   that output focused; a keyboard `focus output` warps the pointer to the newly focused window.
-- **A61** `mouse_warping none` suppresses the warp; the launcher's modal grab suppresses it too.
+- **A61** `mouse_warping none` suppresses the warp; the launcher's modal grab suppresses it too, and the
+  suppression survives the launcher closing itself (a dismiss, a launch, or a toggling second `$mod+d`)
+  rather than latching on after the first use. `mouse_warping container` loads with a warning.
+- **A61b** With `focus_follows_mouse no`, crossing the pointer onto an empty output does **not** move the
+  focused output.
 - **A62** Unplugging an output reassigns its workspaces to the primary with layout intact; replugging
   restores the original assignment.
 - **A63** GNOME's active workspace is `live` at all times; a forced switch to the attic is reverted
