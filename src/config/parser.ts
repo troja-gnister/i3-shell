@@ -218,11 +218,18 @@ export function parse(lines: LogicalLine[]): ParseResult {
       // implemented directive with an enumerated value rejects a malformed one, and a parser where one
       // typo rejects the file while the next silently defaults is unpredictable. The main spec's tier-2
       // warning is about a directive being *unimplemented*, which this task changes.
-      if (rest !== 'output' && rest !== 'none') {
-        err(`mouse_warping: expected output or none, got '${rest}'`);
+      //
+      // Fix round 1, I3: `container` (i3 4.17) is a genuinely valid value, not a typo, and this program's
+      // entire input is the user's real config -- a valid i3 value must never fail the load. It warps on
+      // any focus change, not only an output change, which this design does not implement; accepted,
+      // folded into `output` (the closest approximation), and warned about once rather than rejected.
+      if (rest !== 'output' && rest !== 'none' && rest !== 'container') {
+        err(`mouse_warping: expected output, container or none, got '${rest}'`);
         continue;
       }
-      directives.push({kind: 'mouse_warping', line: l.line, value: rest});
+      if (rest === 'container')
+        warn('mouse_warping container: warping on any focus change is not implemented; treating it as output');
+      directives.push({kind: 'mouse_warping', line: l.line, value: rest === 'container' ? 'output' : rest});
       continue;
     }
 

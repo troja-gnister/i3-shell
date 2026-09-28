@@ -3,6 +3,7 @@ import Mtk from 'gi://Mtk';
 import type {Rect} from '../tree/node';
 import {guard, type SignalTracker} from './util/signals';
 
+/** Kept identical to the inline `pointer` shape on `EnginePorts` in src/engine.ts -- see that comment. */
 export interface PointerPort {
   /** Put the pointer at the centre of `rect`. i3's `mouse_warping output`. */
   warpTo(rect: Rect): void;
@@ -30,6 +31,12 @@ export interface PointerPort {
  */
 export class Pointer implements PointerPort {
   private _lastMonitor: number | null = null;
+  // Reused across every report rather than constructed fresh each time: the spec promises the
+  // per-motion cost is one comparison, and `Mtk.Rectangle`'s x/y/width/height are plain writable
+  // fields, so mutating this one in place is the whole difference between that and an allocation on
+  // every pointer motion. `get_pointer()` and `get_monitor_index_for_rect()` are still called every
+  // report -- that part of the per-motion cost is unavoidable, not overstated by this comment.
+  private readonly _probe = new Mtk.Rectangle({x: 0, y: 0, width: 1, height: 1});
 
   constructor(tracker: SignalTracker, onCrossed: (monitorIndex: number) => void) {
     const cursor = global.backend.get_cursor_tracker();
@@ -39,8 +46,9 @@ export class Pointer implements PointerPort {
       // itself exists to have emitted the signal, so a null point here is not a case this file expects.
       const [point] = cursor.get_pointer();
       if (!point) return;
-      const rect = new Mtk.Rectangle({x: Math.round(point.x), y: Math.round(point.y), width: 1, height: 1});
-      const monitor = global.display.get_monitor_index_for_rect(rect);
+      this._probe.x = Math.round(point.x);
+      this._probe.y = Math.round(point.y);
+      const monitor = global.display.get_monitor_index_for_rect(this._probe);
       if (monitor === this._lastMonitor) return;
       const first = this._lastMonitor === null;
       this._lastMonitor = monitor;

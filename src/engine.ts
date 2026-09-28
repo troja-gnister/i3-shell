@@ -87,12 +87,24 @@ export interface EnginePorts {
     open(request: LauncherRequest): void;
     close(): void;
     setColors(colors: Colors): void;
+    /**
+     * Fix round 1, C1: queried, not mirrored. `Launcher` closes itself at seven sites the engine never
+     * hears about (a toggling second `open()`, a dismiss, three launch paths, a deferred key-focus-out
+     * and `destroy()`) and abandons without opening when its modal grab is refused, so an engine-side
+     * flag set on the `launcher` command and cleared only where the engine itself calls `close()` would
+     * latch `true` after the first ordinary use and silently disable `_warpToFocusedOutput` for the
+     * rest of the session. This asks the launcher's own state instead.
+     */
+    isOpen(): boolean;
   };
   /**
    * i3's `mouse_warping output`: when a keyboard command moves the focused output, the pointer follows
    * it, or sloppy focus (focus-mode = sloppy) would immediately drag focus back to whatever sits under
    * the stationary pointer. Told a rect, never a monitor -- the engine already resolved which one; see
-   * `_warpToFocusedOutput`.
+   * `_warpToFocusedOutput`. Kept as an inline shape rather than importing `PointerPort` from
+   * `src/shell/pointer.ts`: `engine.ts` is one of the roots `check-layer0.mjs` scans for imports under
+   * `src/shell/`, so this shape and that interface are duplicated on purpose and must be kept in sync
+   * by hand -- see the comment on `PointerPort` itself.
    */
   pointer: {warpTo(rect: Rect): void};
   exec(command: string): void;
@@ -156,14 +168,6 @@ export class Engine {
   private readonly _frameReads = new Map<WindowId, {token: number; generation: number | undefined}>();
   private readonly _listeners = new Set<() => void>();
   private readonly _raiseOrders = new Map<number, string>();
-  /**
-   * Whether the launcher is currently open, from the engine's own side: set where the `launcher`
-   * command opens it, cleared at every `this._ports.launcher.close()` call site (onMonitorsChanged,
-   * onLocked, `reload`, `restart`). `_warpToFocusedOutput` reads this to skip the warp while the
-   * launcher holds its modal grab -- warping the real pointer out from under an open launcher would
-   * move it out from under the click the user is about to make.
-   */
-  private _launcherOpen = false;
 
 
   constructor(private readonly _ports: EnginePorts) {}
@@ -314,7 +318,7 @@ export class Engine {
     // binding is dead and there is nothing on screen to explain why. `reload`
     // and `restart` below close for the same reason; a monitor change is the
     // only one of the three the user does not initiate.
-    this._closeLauncher();
+    this._ports.launcher.close();
     this.commit(() => { this._monitorInvalidation = true; });
   }
 
@@ -324,9 +328,16 @@ export class Engine {
    * that the user is there -- the pointer is the only remaining evidence, and this is the one path that
    * reads it. Sloppy focus owns the non-empty case; two mechanisms racing for the same output would
    * flap, so this returns without touching anything when `output` already has a window to focus.
+   *
+   * Fix round 1, folded item 1: gated on `focus_follows_mouse`. With it off, i3 treats pointer motion
+   * as inert and `focus output` is how the user reaches another display; a rule that still followed
+   * the pointer here would leave a documented setting half-effective in its least visible half.
+   *
+   * Fix round 1, folded item 4: gated on `_locked` too, for the same reason the `launcher` command is
+   * -- pointer motion over a lock screen must not reassign the focused output underneath it.
    */
   onPointerOutput(output: MonitorId): void {
-    if (!this._started || this._disposed) return;
+    if (!this._started || this._disposed || this._locked || !this._config.focusFollowsMouse) return;
     const tree = this._tree;
     if (!tree || tree.focusedOutput === output) return;
     const visible = tree.visible.get(output);
@@ -1102,7 +1113,7 @@ export class Engine {
 
   onLocked(): void {
     if (!this._started || this._disposed) return;
-    this._closeLauncher();
+    this._ports.launcher.close();
     this._locked = true;
     this._ports.indicator.setVisible(false);
     this._enterMode('default');
@@ -1266,10 +1277,9 @@ export class Engine {
     return this._launcherArea();
   }
 
-  /** Every `this._ports.launcher.close()` call site goes through here, so `_launcherOpen` cannot drift from one of them being missed. */
-  private _closeLauncher(): void {
-    this._ports.launcher.close();
-    this._launcherOpen = false;
+  /** Test-only entry point for `_warpToFocusedOutput`, which has no production caller until Task 13. */
+  warpToFocusedOutputForTest(): void {
+    this._warpToFocusedOutput();
   }
 
   /**
@@ -1277,12 +1287,13 @@ export class Engine {
    * focused output (never rule 4, where the pointer is already there -- warping it there again would
    * be a no-op at best and a fight with the user's own hand mid-drag at worst), the pointer follows, or
    * sloppy focus would immediately drag the focused output straight back to wherever the stationary
-   * pointer sits. Skipped while the launcher holds its modal grab: moving the real pointer out from
-   * under an open launcher would move it out from under the click the user is about to make. Task 12
-   * only defines this; Task 13 is its first caller.
+   * pointer sits. Skipped while the launcher holds its modal grab (fix round 1, C1: asked live via
+   * `isOpen()`, never mirrored -- see the doc comment on `EnginePorts.launcher.isOpen`): moving the real
+   * pointer out from under an open launcher would move it out from under the click the user is about to
+   * make. Task 12 only defines this; Task 13 is its first production caller.
    */
   private _warpToFocusedOutput(): void {
-    if (this._config.mouseWarping === 'none' || this._launcherOpen) return;
+    if (this._config.mouseWarping === 'none' || this._ports.launcher.isOpen()) return;
     const tree = this._tree;
     const topology = this._topology;
     if (!tree || !topology) return;
@@ -1547,17 +1558,16 @@ export class Engine {
           return 'launcher: not ready';
         }
         this._ports.launcher.open({area, term: command.term});
-        this._launcherOpen = true;
         return 'launcher';
       }
       case 'reload':
-        this._closeLauncher();
+        this._ports.launcher.close();
         return this._applyLoaded(ports.loadConfig('reload')) ? 'reloaded' : 'reload: config rejected, keeping previous';
       case 'restart':
         // Same reason as `reload` above: this rebuilds the tree and the
         // bindings, and a modal grab that outlives that rebuild holds the
         // keyboard with nothing listening behind it.
-        this._closeLauncher();
+        this._ports.launcher.close();
         if (!this._applyLoaded(ports.loadConfig('reload'))) return 'restart: config rejected, keeping previous';
         this.commit(() => {
           this._tree = null;

@@ -241,12 +241,24 @@ describe('mouse_warping', () => {
     expect(config!.mouseWarping).toBe('output');
   });
 
-  it('rejects a value that is not output or none', () => {
+  it('accepts container (i3 4.17), treats it as output, and warns once', () => {
+    // Fix round 1, I3: a valid i3 value must never fail the load. `container` warps on any focus
+    // change, which this design does not implement, so it folds into the closest approximation
+    // (`output`) with a warning rather than being rejected as malformed.
+    const {config, diagnostics} = load('mouse_warping container\n');
+    expect(diagnostics).toEqual([
+      {line: 1, severity: 'warning',
+        message: 'mouse_warping container: warping on any focus change is not implemented; treating it as output'},
+    ]);
+    expect(config!.mouseWarping).toBe('output');
+  });
+
+  it('rejects a value that is not output, container or none', () => {
     // `err`, not `warn`: every implemented directive with an enumerated value rejects a malformed one
     // (Task 11 settled this identically for focus_follows_mouse), so one typo does not silently default.
     const r = P('mouse_warping perhaps\n');
     expect(r.diagnostics).toEqual([
-      {line: 1, severity: 'error', message: "mouse_warping: expected output or none, got 'perhaps'"},
+      {line: 1, severity: 'error', message: "mouse_warping: expected output, container or none, got 'perhaps'"},
     ]);
   });
 });

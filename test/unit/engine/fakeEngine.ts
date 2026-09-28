@@ -63,6 +63,7 @@ export interface FakeEngineOptions {
 
 export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEngineOptions = {}) {
   const calls: string[] = [];
+  let launcherOpen = false;
   const pointerWarps: Rect[] = [];
   const windows = new Map<WindowId, WindowInfo>();
   const applied: Array<Map<WindowId, Rect>> = [];
@@ -152,9 +153,10 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
       setColors: colors => { f.decorationColors = colors; calls.push('decorations.colors'); },
     },
     launcher: {
-      open: request => { f.launcherRequest = request; calls.push('launcher.open'); },
-      close: () => { calls.push('launcher.close'); },
+      open: request => { f.launcherRequest = request; launcherOpen = true; calls.push('launcher.open'); },
+      close: () => { launcherOpen = false; calls.push('launcher.close'); },
       setColors: colors => { f.launcherColors = colors; calls.push('launcher.colors'); },
+      isOpen: () => launcherOpen,
     },
     pointer: {warpTo: rect => { pointerWarps.push({...rect}); calls.push('pointer.warp'); }},
     now: () => 123456789,
@@ -189,6 +191,13 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
     launcherColors: null as Colors | null,
     /** Every `pointer.warpTo` call the engine has made, in call order -- Task 13's `mouse_warping` tests read this. */
     pointer: {warps: (): Rect[] => pointerWarps.map(r => ({...r}))},
+    /**
+     * Fix round 1, C1: the real `Launcher` closes itself at seven sites the engine never calls
+     * `close()` for. This models exactly that -- the launcher's own open/closed state flips with no
+     * `close()` port call and nothing pushed to `calls`, the way a dismiss or a launch really looks
+     * from the engine's side.
+     */
+    launcherClosedItself() { launcherOpen = false; },
     get topology() { return currentTopology; },
     add(id: WindowId, patch: Partial<WindowInfo> = {}) { windows.set(id, windowInfo(id, patch)); engine.onWindowEvent({type: 'added', id}); },
     change(id: WindowId, patch: Partial<WindowInfo>, eventType: Exclude<WindowEvent['type'], 'added' | 'removed' | 'focused'>) {

@@ -496,5 +496,67 @@ describe('Engine', () => {
       f.remove(2);
       expect(e.state().focusedOutput).toBe(1);
     });
+
+    // Fix round 1, folded item 1: `focus_follows_mouse` gates rule 4 too. The "takes the focused
+    // output..." test above already covers the default (`yes`, i3's own default); this covers `no`.
+    it('does not move the focused output when focus_follows_mouse is off', () => {
+      const f = fakePorts('focus_follows_mouse no\n',
+        {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      e.onPointerOutput(1);
+      expect(e.state().focusedOutput).toBe(0);
+    });
+
+    // Fix round 1, folded item 4: consistent with the `launcher` command, which already refuses while
+    // locked. Pointer motion over a lock screen must not reassign the focused output underneath it.
+    it('does not move the focused output while the session is locked', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      e.onLocked();
+      e.onPointerOutput(1);
+      expect(e.state().focusedOutput).toBe(0);
+    });
+  });
+
+  // Fix round 1, folded item 2: `onPointerMonitorIndex` is the only production entry point (extension.ts
+  // calls it, nothing calls `onPointerOutput` directly outside tests), and every other test in this file
+  // uses `{id: n, index: n}` monitors, so a swapped `m.index`/`m.id` in its translation is invisible to
+  // them. `{id: 7, index: 1}` makes the two numbers different on purpose.
+  describe('onPointerMonitorIndex', () => {
+    it('translates Mutter’s own monitor index to this project’s MonitorId before touching the tree', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 7, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      e.onPointerMonitorIndex(1); // Mutter's index 1 -- this project's MonitorId 7, not 1
+      expect(e.state().focusedOutput).toBe(7);
+    });
+  });
+
+  // Fix round 1, C1: `_launcherOpen` (a flag the engine set on the `launcher` command and cleared only
+  // where it itself called `close()`) could never see the launcher closing itself -- seven sites in
+  // src/shell/launcher.ts do that with no call back into the engine at all. Deleted in favour of asking
+  // `ports.launcher.isOpen()` live. `warpToFocusedOutputForTest` is the test-only entry point for
+  // `_warpToFocusedOutput`, which (per the controller's ruling) has no production caller until Task 13.
+  describe('_warpToFocusedOutput and the launcher’s grab', () => {
+    it('suppresses the warp while the launcher holds its grab', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      e.run([{type: 'launcher', term: null}], 0);
+      e.warpToFocusedOutputForTest();
+      expect(f.pointer.warps()).toEqual([]);
+    });
+
+    it('does not stay suppressed once the launcher closes itself, unseen by the engine', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      e.run([{type: 'launcher', term: null}], 0);
+      f.launcherClosedItself(); // a dismiss, a launch, a toggling second open -- the engine hears none of it
+      e.warpToFocusedOutputForTest();
+      expect(f.pointer.warps().length).toBe(1);
+    });
   });
 });

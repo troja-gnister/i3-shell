@@ -98,9 +98,15 @@ describe('Pointer', () => {
   });
 
   it('disconnects its cursor subscription when the tracker is torn down', async () => {
+    // Fix round 1, I2: a fresh harness's `_lastMonitor` is already `null`, so a single crossing after
+    // disconnectAll() would be swallowed as the *baseline* whether or not the subscription is actually
+    // live -- the assertion could not tell "disconnected" from "connected". The baseline has to be
+    // established first, with the subscription still live, so the later move is unambiguously a
+    // crossing the disconnected handler must not see.
     const h = await pointerHarness(() => {});
+    h.movePointerTo(0, 10, 10); // establishes the baseline while still connected
     h.tracker.disconnectAll();
-    h.movePointerTo(1, 4000, 30);
+    h.movePointerTo(1, 4000, 30); // would be a real crossing if anything were still listening
     expect(h.crossings()).toEqual([]);
   });
 });
