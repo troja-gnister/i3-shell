@@ -1,8 +1,11 @@
 import {describe, it, expect} from 'vitest';
 import {logicalLines} from '../../../src/config/lexer';
 import {parse} from '../../../src/config/parser';
+import {loadConfigText} from '../../../src/config';
 
 const P = (src: string) => parse(logicalLines(src));
+/** Full pipeline (parse + resolve): `workspace N output` lands in the resolved Config, not a Directive. */
+const load = (src: string) => loadConfigText(src);
 
 describe('parse directives', () => {
   it('bindsym with flags, modes and raw commands', () => {
@@ -154,5 +157,34 @@ describe('bar block', () => {
     expect(r.diagnostics).toEqual([
       {line: 1, severity: 'error', message: 'unknown directive strip_workspace_numbers'},
     ]);
+  });
+});
+
+describe('workspace N output', () => {
+  it('parses workspace N output', () => {
+    const {config, diagnostics} = load('workspace 2 output DP-1\n');
+    expect(diagnostics).toEqual([]);
+    expect(config!.workspaceOutputs.get(1)).toEqual({names: ['DP-1'], line: 1});
+  });
+
+  it("takes the workspace number from a name's leading digits, as workspace number does", () => {
+    const {config} = load('workspace "3:III" output HDMI-1\n');
+    expect(config!.workspaceOutputs.get(2)).toEqual({names: ['HDMI-1'], line: 1});
+  });
+
+  it("accepts i3's list of outputs, first live one winning at resolution", () => {
+    const {config} = load('workspace 1 output primary DP-1 HDMI-1\n');
+    expect(config!.workspaceOutputs.get(0)!.names).toEqual(['primary', 'DP-1', 'HDMI-1']);
+  });
+
+  it('warns on a workspace directive with no output clause, rather than accepting it silently', () => {
+    const {diagnostics} = load('workspace 1 gaps inner 5\n');
+    expect(diagnostics.map(d => d.severity)).toEqual(['warning']);
+    expect(diagnostics[0]!.message).toMatch(/workspace/);
+  });
+
+  it('rejects a workspace directive whose number is not a number', () => {
+    const {diagnostics} = load('workspace bogus output DP-1\n');
+    expect(diagnostics.map(d => d.severity)).toEqual(['warning']);
   });
 });

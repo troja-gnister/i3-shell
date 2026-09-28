@@ -672,9 +672,34 @@ export class Engine {
     return [...[...leaves(ws.root)].map(leaf => leaf.window), ...ws.floating];
   }
 
-  /** `workspace N output <name>` pins, resolved against the live topology. Task 10 populates this. */
+  /**
+   * `workspace N output <names>` resolved against the attached displays. First live name wins, `primary`
+   * included — the same list-of-outputs form `resolveOutputArg` accepts for `focus output` (§2.3). An
+   * unattached name warns once, naming the config line, and the workspace falls back to the default
+   * assignment — a config written for a different desk must still load.
+   *
+   * `byName`'s keys are lowercased on insert: `resolveOutputArg` in tree/outputs.ts only lowercases the
+   * query side of the map it is handed, so any map built for a name lookup must normalise on the way in.
+   */
   private _pinnedOutputs(): ReadonlyMap<number, MonitorId> {
-    return new Map();
+    const topology = this._topology;
+    const pinned = new Map<number, MonitorId>();
+    if (!topology) return pinned;
+    const byName = new Map<string, MonitorId>();
+    for (const monitor of topology.monitors)
+      for (const connector of monitor.connectors) byName.set(connector.toLowerCase(), monitor.id);
+    for (const [workspace, {names, line}] of this._config.workspaceOutputs) {
+      const resolved = names
+        .map(name => name.toLowerCase() === 'primary' ? topology.primary : byName.get(name.toLowerCase()))
+        .find(id => id !== undefined);
+      if (resolved === undefined) {
+        this._ports.log.warn(
+          `line ${line}: no attached output matches ${names.join(' ')}; workspace ${workspace + 1} uses the default`);
+        continue;
+      }
+      pinned.set(workspace, resolved);
+    }
+    return pinned;
   }
 
   private _floating(info: WindowInfo): boolean {

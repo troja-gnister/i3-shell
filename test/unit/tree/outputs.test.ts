@@ -55,8 +55,11 @@ describe('birthAssignment', () => {
     expect(birthAssignment([3, 2], 4, new Map([[2, 2]]))).toEqual(new Map([[0, 3], [1, 2], [2, 2], [3, 3]]));
   });
 
-  it('ignores a pin naming an output that is not live', () => {
-    expect(birthAssignment([3, 2], 3, new Map([[2, 99]])).get(2)).toBe(3);
+  it('ignores a pin naming an output that is not live, falling back to the default assignment', () => {
+    // Index 1's unpinned default is output 2 (ordered[1]), not the primary (3) -- so this distinguishes
+    // "falls back to what the unpinned rule would have chosen" from a buggy "always primary" that would
+    // also satisfy the old assertion at index 2, where the unpinned default happened to be the primary.
+    expect(birthAssignment([3, 2], 3, new Map([[1, 99]])).get(1)).toBe(2);
   });
 
   it('puts everything on the single output when there is only one', () => {

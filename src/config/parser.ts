@@ -1,3 +1,4 @@
+import {workspaceNumber} from '../commands/parse';
 import {splitHead, tokenize, unquote} from '../util/text';
 import type {LogicalLine} from './lexer';
 import type {BorderStyle, Diagnostic} from './model';
@@ -13,6 +14,7 @@ export type Directive =
   | {kind: 'focus_wrapping'; line: number; value: string}
   | {kind: 'workspace_auto_back_and_forth'; line: number; value: string}
   | {kind: 'strip_workspace_numbers'; line: number; value: string}
+  | {kind: 'workspace_output'; line: number; index: number; names: string[]}
   | {kind: 'client'; line: number; which: ClientColorKey; colors: string[]}
   | {kind: 'ignored'; line: number; name: string}
   | {kind: 'unsupported'; line: number; name: string};
@@ -30,7 +32,7 @@ const UNSUPPORTED = new Set([
   'bindcode', 'assign', 'workspace_layout', 'focus_follows_mouse', 'exec', 'exec_always',
   'gaps', 'hide_edge_borders', 'title_format', 'floating_minimum_size', 'floating_maximum_size',
   'force_focus_wrapping', 'popup_during_fullscreen', 'mouse_warping', 'focus_on_window_activation',
-  'show_marks', 'smart_borders', 'smart_gaps', 'workspace', 'no_focus', 'ipc_socket',
+  'show_marks', 'smart_borders', 'smart_gaps', 'no_focus', 'ipc_socket',
   'restart_state', 'tiling_drag', 'title_align', 'include', 'set_from_resource',
 ]);
 
@@ -46,6 +48,9 @@ export function parse(lines: LogicalLine[]): ParseResult {
     const text = l.text;
     const err = (message: string): void => {
       diagnostics.push({line: l.line, severity: 'error', message});
+    };
+    const warn = (message: string): void => {
+      diagnostics.push({line: l.line, severity: 'warning', message});
     };
 
     if (barDepth > 0) {
@@ -190,6 +195,26 @@ export function parse(lines: LogicalLine[]): ParseResult {
         continue;
       }
       directives.push({kind: 'workspace_auto_back_and_forth', line: l.line, value: rest});
+      continue;
+    }
+
+    if (head === 'workspace') {
+      // `workspace <number|name> output <name...>` is the only form implemented. Everything else i3
+      // allows here (gaps, layout, a bare switch) still warns, so silence never means acceptance.
+      // Names are recorded verbatim, not resolved: at parse time no display is known, and a config
+      // written on another machine must still load. Warned, not erred, so one unsupported line does
+      // not reject the whole config the way a structural error does.
+      const words = tokenize(text);
+      const number = workspaceNumber(words[1]);
+      if (number === null) {
+        warn(`workspace: expected a workspace number, got '${words[1] ?? ''}'`);
+        continue;
+      }
+      if (words[2] !== 'output' || words.length < 4) {
+        warn("workspace: only 'workspace <n> output <name...>' is implemented");
+        continue;
+      }
+      directives.push({kind: 'workspace_output', line: l.line, index: number - 1, names: words.slice(3)});
       continue;
     }
 

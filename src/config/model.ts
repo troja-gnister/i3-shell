@@ -79,6 +79,12 @@ export interface Config {
   workspaceNames: Map<number, string>;
   /** Largest workspace number the config references (1..36); 0 when it references none. */
   workspaceCount: number;
+  /**
+   * `workspace N output <names>`: zero-based workspace index → the outputs it prefers, in order, with
+   * the config line that said so. Names are resolved against the live connector list by the engine,
+   * not here: at parse time no display is known, and a config written on another machine must load.
+   */
+  workspaceOutputs: Map<number, {names: string[]; line: number}>;
 }
 
 /** i3's default colours (client.* directives override them). */

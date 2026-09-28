@@ -376,4 +376,45 @@ describe('Engine', () => {
       expect(f.pillsByOutput).toEqual(before);
     });
   });
+
+  describe('Task 10: workspace N output', () => {
+    it('honours a pinned workspace output', () => {
+      const f = fakePorts('workspace 3 output DP-1\n', {
+        monitors: [{id: 0, index: 0, connectors: ['HDMI-1']}, {id: 1, index: 1, connectors: ['DP-1']}],
+        primary: 0, workspaceCount: 4,
+      });
+      f.engine.start();
+      expect(f.tree().outputOf(2)).toBe(1);
+    });
+
+    it('warns with the config line when a pinned output is not attached, and falls back', () => {
+      // A config written for another machine must still load: the pin is ignored, not fatal.
+      const f = fakePorts('workspace 3 output VGA-9\n', {
+        monitors: [{id: 0, index: 0, connectors: ['HDMI-1']}],
+        primary: 0, workspaceCount: 4,
+      });
+      f.engine.start();
+      expect(f.tree().outputOf(2)).toBe(0);
+      expect(f.calls.filter(c => c.startsWith('warn:')).join('\n')).toMatch(/line 1.*VGA-9/);
+    });
+
+    it('resolves a connector name case-insensitively, in either direction', () => {
+      const f = fakePorts('workspace 3 output dp-1\n', {
+        monitors: [{id: 0, index: 0, connectors: ['HDMI-1']}, {id: 1, index: 1, connectors: ['DP-1']}],
+        primary: 0, workspaceCount: 4,
+      });
+      f.engine.start();
+      expect(f.tree().outputOf(2)).toBe(1);
+    });
+
+    it("accepts i3's list of outputs, skipping a name that is not live and matching primary by name", () => {
+      const f = fakePorts('workspace 3 output nonexistent primary\n', {
+        monitors: [{id: 0, index: 0, connectors: ['HDMI-1']}, {id: 1, index: 1, connectors: ['DP-1']}],
+        primary: 0, workspaceCount: 4,
+      });
+      f.engine.start();
+      expect(f.tree().outputOf(2)).toBe(0);
+      expect(f.calls.filter(c => c.startsWith('warn:'))).toEqual([]);
+    });
+  });
 });

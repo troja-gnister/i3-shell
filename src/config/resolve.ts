@@ -65,6 +65,7 @@ export function resolve(parsed: ParseResult): ResolveResult {
   const colors: Colors = {...DEFAULT_COLORS};
   const specifiedColors = new Set<keyof Colors>();
   const workspaceNames = new Map<number, string>();
+  const workspaceOutputs = new Map<number, {names: string[]; line: number}>();
   const config: Config = {
     modes, rules, colors, specifiedColors, workspaceNames,
     defaultBorder: {style: 'normal', width: 2},
@@ -74,6 +75,7 @@ export function resolve(parsed: ParseResult): ResolveResult {
     workspaceAutoBackAndForth: false,
     stripWorkspaceNumbers: false,
     workspaceCount: 0,
+    workspaceOutputs,
   };
 
   /** Validates a command string now (so typos surface at load) and records workspace numbers/names. */
@@ -139,6 +141,9 @@ export function resolve(parsed: ParseResult): ResolveResult {
         break;
       case 'strip_workspace_numbers':
         config.stripWorkspaceNumbers = d.value === 'yes';
+        break;
+      case 'workspace_output':
+        workspaceOutputs.set(d.index, {names: d.names, line: d.line});
         break;
       case 'client': {
         const key = d.which === 'focused_inactive' ? 'focusedInactive' : d.which;

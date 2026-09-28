@@ -32,6 +32,18 @@ function normalizeLayout(s: string): Layout | null {
   return null;
 }
 
+/**
+ * The leading-digits rule behind `workspace number <name>`: "3:III" is workspace 3. Shared with the
+ * config's `workspace <n> output <name...>` directive, which names a workspace the same way — one
+ * grammar, read in one place.
+ */
+export function workspaceNumber(word: string | undefined): number | null {
+  if (word === undefined)
+    return null;
+  const m = /^(\d+)/.exec(unquote(word));
+  return m ? parseInt(m[1], 10) : null;
+}
+
 function workspaceTarget(args: string[]): WorkspaceTarget | null {
   if (args.length === 0)
     return null;
@@ -43,10 +55,10 @@ function workspaceTarget(args: string[]): WorkspaceTarget | null {
     return {kind: 'back_and_forth'};
   if (args[0] === 'number') {
     const name = unquote(args.slice(1).join(' '));
-    const m = /^(\d+)/.exec(name);
-    if (!m)
+    const number = workspaceNumber(name);
+    if (number === null)
       return null;
-    return {kind: 'number', number: parseInt(m[1], 10), name};
+    return {kind: 'number', number, name};
   }
   return {kind: 'name', name: unquote(args.join(' '))};
 }
