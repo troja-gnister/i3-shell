@@ -40,11 +40,19 @@ interface Bar {
   pills: Map<number, St.Button>;
   modeLabel: St.Label | null;
   /**
-   * This bar's own output, or `undefined` if the geometry backend has not assigned one yet (a monitor
-   * that appeared between a hardware change and the topology read that names it) -- such a bar shows
-   * no pills until a later `setPills` call finds an id for it.
+   * Mutter's own monitor index for this bar, fixed at build time. This bar's own *output id* is
+   * deliberately never cached from it -- `_pillsFor` resolves it afresh through `_monitorId` on every
+   * call instead. The index -> id table (`src/shell/geometry.ts`'s `MonitorIds`) is rewritten only
+   * when the engine reads a fresh topology, which happens strictly *after* a `monitors-changed` signal
+   * rebuilds these bars (`src/extension.ts`'s `remeasure()` runs `bars.monitorsChanged()` before
+   * `engine.onMonitorsChanged()`, deliberately -- a bar's strut has to exist before the engine can read
+   * the work area it leaves behind, or layout would run against work areas that do not yet account for
+   * it). A bar built or renumbered by that rebuild would therefore see a stale or missing id if it
+   * latched one at build time, permanently -- blank or, worse, pointed at another output's workspaces
+   * -- until some *later* `monitorsChanged()` happened to fix it by chance. Resolving lazily instead
+   * means the very next `setPills` call is self-correcting.
    */
-  id: MonitorId | undefined;
+  index: number;
   /** The pill states most recently rendered onto this bar -- this output's own list, never another's. */
   states: readonly PillState[];
 }
@@ -96,9 +104,14 @@ export class MonitorBars {
     for (const bar of [...this._bars]) this._applyOwnPills(bar);
   }
 
-  /** This bar's own slice of the last pills published, or `[]` if its output is not known yet. */
+  /**
+   * This bar's own slice of the last pills published, or `[]` if its output id has not resolved yet.
+   * Resolves `bar.index` through `_monitorId` fresh every call -- see the doc comment on `Bar.index`
+   * for why this must not be cached.
+   */
   private _pillsFor(bar: Bar): readonly PillState[] {
-    return bar.id !== undefined ? this._byOutput.get(bar.id) ?? [] : [];
+    const output = this._monitorId(bar.index);
+    return output !== undefined ? this._byOutput.get(output) ?? [] : [];
   }
 
   /** Re-renders `bar` only if its own output's pills actually changed -- `setPills`'s repaint guard. */
@@ -175,7 +188,7 @@ export class MonitorBars {
     actor.add_child(box);
     const modeLabel = createModeLabel();
     box.add_child(modeLabel);
-    const bar: Bar = {monitor, actor, box, pills: new Map(), modeLabel, id: this._monitorId(index), states: []};
+    const bar: Bar = {monitor, actor, box, pills: new Map(), modeLabel, index, states: []};
 
     // Every actor drops its own reference when it is destroyed, so one the
     // shell disposes behind our back cannot leave a dangling entry a later
@@ -227,13 +240,21 @@ export class MonitorBars {
   }
 
   private _renderPills(bar: Bar): void {
-    // Every pill in `bar.states` belongs to `bar.id` by construction (`_pillsFor` returns `[]` for a
-    // bar with no known output yet), so the click closure below always has a real output to report.
-    const output = bar.id;
     bar.states.forEach((_state, index) => {
       if (bar.pills.has(index)) return;
-      if (output === undefined) return;
-      const pill = createPill(() => this._onPill(output, index));
+      // Resolved *inside* the closure, not captured here: a pill created now is reused (never
+      // recreated) across every later `setPills` call for as long as it stays at this position (see
+      // the doc comment on `Bar.index`), so capturing `this._monitorId(bar.index)` once at creation
+      // time would silently re-latch the very id this class exists to keep unlatched -- a test proved
+      // exactly that before this closure was written this way (F1's renumbering case: the label
+      // followed the new output, but a stale capture here kept reporting clicks for the old one).
+      // `output` can only be undefined here in the narrow window between this bar's own output going
+      // away and its next teardown; dropping the click then is safer than reporting one for an id that
+      // no longer means anything.
+      const pill = createPill(() => {
+        const output = this._monitorId(bar.index);
+        if (output !== undefined) this._onPill(output, index);
+      });
       pill.connect('destroy', guard('monitor pill destroy', () => {
         if (bar.pills.get(index) === pill) bar.pills.delete(index);
       }));

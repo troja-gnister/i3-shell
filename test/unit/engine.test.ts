@@ -333,9 +333,7 @@ describe('Engine', () => {
     });
   });
 
-  // Task 8 RED evidence: PillState still has `active`, and the indicator port fake still hands back a
-  // flat PillState[], not a per-output map -- `f.pillsByOutput` does not exist yet.
-  describe('Task 8: focused vs visible, per output (RED)', () => {
+  describe('Task 8: focused vs visible, per output', () => {
     it('marks the workspace on the focused output focused, and the other output’s visible', () => {
       const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
       const e = f.engine;
@@ -356,6 +354,24 @@ describe('Engine', () => {
       expect(byOutput.get(1)!.map(p => p.name)).toEqual(['2:II']);
       expect(byOutput.get(0)!.map(p => p.name)).toEqual(
         ['1:I', '3:III', '4:IV', '5:V', '6:VI', '7:VII', '8:VIII', '9:IX', '10:X']);
+    });
+
+    it('retains the last known per-output pills across a commit with no tree', () => {
+      // F3: a commit that runs with no tree -- topology not ready yet, or momentarily gone mid-restart
+      // -- must not blank the map the panel and every bar are currently showing with an empty one.
+      // `_tree` is poked directly (as `fakeEngine.ts`'s own `tree()` helper does) because there is no
+      // public way to force "no tree, no ready topology" back onto an engine that already has both.
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      const before = new Map(f.pillsByOutput);
+      expect(before.size).toBeGreaterThan(0);
+
+      f.setTopology(null);
+      (e as unknown as {_tree: unknown})._tree = null;
+      e.onMonitorsChanged();
+
+      expect(f.pillsByOutput).toEqual(before);
     });
   });
 });

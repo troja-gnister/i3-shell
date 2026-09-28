@@ -329,6 +329,23 @@ describe('engine command dispatch', () => {
     // This focus-only move (nothing visible changes, `swap: false`) still has to relayout: without it,
     // the cached pills -- and the bar's focused-workspace highlight they drive -- would go stale.
     expect(f.engine.state().pills[1]!.focused).toBe(true);
+    // Output 0's own workspace 0 is still on screen, just not where the keyboard is now -- i3bar's
+    // third state (Task 8), the whole reason `active` could not describe a two-output desktop.
+    expect(f.engine.state().pills[0]).toMatchObject({visible: true, focused: false});
+  });
+
+  it('workspaceIndexOn resolves a click position back to the real workspace index, per output', () => {
+    const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+    f.engine.start();
+    // Output 0 owns workspaces {0,2,3,...,9} (birthAssignment gives the primary every workspace beyond
+    // the one each other output takes), so position 1 in its own, compacted list is real workspace
+    // index 2, not 1 -- exactly the mismatch a pill click has to resolve through, not around.
+    expect(f.engine.workspaceIndexOn(0, 1)).toBe(2);
+    // Output 1 owns only workspace 1, at position 0.
+    expect(f.engine.workspaceIndexOn(1, 0)).toBe(1);
+    // An output nothing lives on, and a position past the end of a real output's own list, both null.
+    expect(f.engine.workspaceIndexOn(99, 0)).toBeNull();
+    expect(f.engine.workspaceIndexOn(0, 99)).toBeNull();
   });
 
   it('workspace number brings an unshown workspace to the focused output', () => {

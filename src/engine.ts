@@ -618,8 +618,9 @@ export class Engine {
         byOutput.set(output, list);
       }
     } else {
-      // No tree yet (no usable topology): there is no output to key pills by, so `byOutput` stays
-      // empty and only the flat fallback below is populated, exactly as `_pills` used to be built.
+      // No tree (no usable topology yet, or momentarily none -- e.g. mid-restart): there is no output
+      // to key pills by, so only the flat fallback below is populated here. `_pillsByOutput` itself is
+      // deliberately left untouched below rather than replaced with this empty `byOutput` -- see there.
       for (let index = 0; index < count; index++) {
         const focused = index === 0;
         byIndex.set(index, {
@@ -634,7 +635,13 @@ export class Engine {
         });
       }
     }
-    this._pillsByOutput = byOutput;
+    // Only overwrite the per-output map when there is a tree to rebuild it from. Without this, a
+    // commit that runs with no tree -- topology not ready yet, or momentarily gone mid-restart --
+    // would replace whatever the panel and every bar are currently showing with nothing at all: a
+    // full-row blank flicker on exactly the kind of transient outage this project otherwise tolerates
+    // gracefully everywhere else. `_flatPills` (the `GetState` surface) keeps the fallback it always
+    // had in this case; only the rendered map is retained.
+    if (tree) this._pillsByOutput = byOutput;
     this._flatPills = Array.from({length: count}, (_, index) => byIndex.get(index)!);
     this._ports.indicator.setPills(this._copyPillsByOutput());
     if (this._disposed) return;

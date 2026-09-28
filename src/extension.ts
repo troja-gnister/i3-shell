@@ -115,8 +115,19 @@ export default class I3ShellExtension extends Extension {
       // engine published pills with, turning the click back into the workspace it was built for.
       position => {
         const primaryId = monitorIdOf(Main.layoutManager.primaryIndex);
-        const index = primaryId !== undefined ? this._engine?.workspaceIndexOn(primaryId, position) : null;
-        if (index !== null && index !== undefined) switchToWorkspace(index);
+        if (primaryId === undefined) {
+          // Distinguishable on purpose from the "no workspace at that position" warning below: this
+          // one means the geometry backend has no id for the primary monitor yet, not that the click
+          // itself was stale.
+          log.warn(`pill click: no output id yet for the primary monitor (position ${position})`);
+          return;
+        }
+        const index = this._engine?.workspaceIndexOn(primaryId, position);
+        if (index === null || index === undefined) {
+          log.warn(`pill click: no workspace at position ${position} on output ${primaryId}`);
+          return;
+        }
+        switchToWorkspace(index);
       },
       direction => runNow({type: 'workspace', target: {kind: direction}}));
     this._indicator = indicator;
@@ -126,7 +137,11 @@ export default class I3ShellExtension extends Extension {
     const bars = new MonitorBars(
       (output, position) => {
         const index = this._engine?.workspaceIndexOn(output, position);
-        if (index !== null && index !== undefined) switchToWorkspace(index);
+        if (index === null || index === undefined) {
+          log.warn(`pill click: no workspace at position ${position} on output ${output}`);
+          return;
+        }
+        switchToWorkspace(index);
       },
       monitorIdOf);
     this._bars = bars;

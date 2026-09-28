@@ -56,7 +56,7 @@ describe('panel indicator lifetime', () => {
     const button = panel.button;
     expect(button).not.toBeNull();
     expect(labelsOf(button!)).toEqual(['1', '2', '3']);
-    expect(activeIndexOf(button!)).toBe(1);
+    expect(activeIndexOf(button!, DEFAULT_COLORS)).toBe(1);
   });
 
   it('touches nothing once the shell destroys the panel button under it', () => {

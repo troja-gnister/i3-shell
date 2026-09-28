@@ -214,8 +214,8 @@ describe('the panel and a monitor bar render the same pills', () => {
     expect(opacities(bar)).toEqual(opacities(button));
     // Not a tautology if both sides were blank: the look is pinned too.
     expect(opacities(bar)).toEqual([255, 255, 128]);
-    expect(activeIndexOf(bar)).toBe(activeIndexOf(button));
-    expect(activeIndexOf(bar)).toBe(1);
+    expect(activeIndexOf(bar, COLORS)).toBe(activeIndexOf(button, COLORS));
+    expect(activeIndexOf(bar, COLORS)).toBe(1);
   });
 
   it('keeps them the same after the colours change under both', () => {

@@ -46,9 +46,12 @@ const monitor = (index: number, x: number, width: number, height: number) =>
 /** Two monitors side by side, the left one primary -- one bar, on the right-hand screen. */
 const TWO = [monitor(0, 0, 1728, 1048), monitor(1, 1728, 1920, 1080)];
 
-// Mutter's own monitor index doubles as this project's stable output id throughout this file, so a
-// bar built on monitor index N always owns id N -- readable at a glance in every fixture below.
-const monitorId = (index: number): MonitorId => index;
+// A mutable table, not a pure function: F1 needs a test that changes what an index resolves to
+// *without* a `monitorsChanged()` rebuild, to prove `MonitorBars` re-resolves it lazily rather than
+// latching whatever `monitorId` answered when a bar was built. The default -- index N maps to id N --
+// keeps every other fixture in this file readable at a glance, matching the pre-F1 identity behaviour.
+let monitorIds: Map<number, MonitorId>;
+const monitorId = (index: number): MonitorId | undefined => monitorIds.get(index);
 
 const pills: PillState[] = [
   {name: '1:I', focused: true, visible: true, occupied: true, urgent: false},
@@ -68,6 +71,7 @@ beforeEach(() => {
   resetFakeActors();
   layout.monitors = [...TWO];
   layout.primaryIndex = 0;
+  monitorIds = new Map([[0, 0], [1, 1], [2, 2]]);
 });
 
 describe('MonitorBars', () => {
@@ -149,7 +153,7 @@ describe('MonitorBars', () => {
 
     expect(bars()).toHaveLength(2);
     expect(labelsOf(bars()[0])).toEqual(['1:I', '2:II']);
-    expect(activeIndexOf(bars()[0])).toBe(0);
+    expect(activeIndexOf(bars()[0], DEFAULT_COLORS)).toBe(0);
     // A different output's bar shows a different, unrelated list -- not a mirror of the first.
     expect(labelsOf(bars()[1])).toEqual(['5:V']);
   });
@@ -169,9 +173,47 @@ describe('MonitorBars', () => {
 
     expect(bars()).toHaveLength(2);
     expect(labelsOf(bars()[1])).toEqual(['5:V']);
-    expect(activeIndexOf(bars()[1])).toBe(0);
+    expect(activeIndexOf(bars()[1], DEFAULT_COLORS)).toBe(0);
     expect(modeLabelOf(bars()[1])?.text).toBe('resize');
     expect(modeLabelOf(bars()[1])?.visible).toBe(true);
+  });
+
+  it('picks up its pills once its output id resolves, with no rebuild', () => {
+    // F1: a monitor can appear at an index the geometry backend has not assigned an id for yet (it
+    // catches up on the *engine's* next topology read, not on this bar's own build). Before the fix,
+    // `Bar` latched `undefined` at build time and stayed blank forever; resolving lazily means the
+    // very next `setPills` -- not a `monitorsChanged()` rebuild -- is what fixes it.
+    monitorIds.delete(1);
+    const monitorBars = new MonitorBars(() => {}, monitorId);
+    monitorBars.setPills(singleBar());
+    expect(labelsOf(bars()[0])).toEqual([]);   // no id yet: nothing to render
+
+    monitorIds.set(1, 1);                      // the table catches up, with no monitorsChanged() at all
+    monitorBars.setPills(singleBar());
+
+    expect(labelsOf(bars()[0])).toEqual(['1:I', '2:II']);
+  });
+
+  it('follows a renumbered output rather than the id it was first built with', () => {
+    // F1: unplugging the middle of three monitors renumbers Mutter's indices without necessarily
+    // changing which physical output is which id. Before the fix, a bar latched the id `_monitorId`
+    // answered for its index at build time and kept rendering (and reporting clicks for) that output
+    // forever, even after the table said its index now means a different one.
+    const switched: Array<[MonitorId, number]> = [];
+    const monitorBars = new MonitorBars((output, position) => switched.push([output, position]), monitorId);
+    const forId1: PillState[] = [{name: '1:I', focused: true, visible: true, occupied: true, urgent: false}];
+    const forId2: PillState[] = [{name: '5:V', focused: false, visible: false, occupied: true, urgent: false}];
+    monitorBars.setPills(new Map([[1, forId1], [2, forId2]]));
+    expect(labelsOf(bars()[0])).toEqual(['1:I']);
+
+    // Mutter index 1 now means output 2, not output 1 -- no monitorsChanged() call, exactly as a
+    // hotplug-triggered geometry re-read (not a bars rebuild) would deliver it.
+    monitorIds.set(1, 2);
+    monitorBars.setPills(new Map([[1, forId1], [2, forId2]]));
+
+    expect(labelsOf(bars()[0])).toEqual(['5:V']);
+    pillsOf(bars()[0])[0].emit('clicked');
+    expect(switched).toEqual([[2, 0]]);        // reports output 2, the id its index means now
   });
 
   it('reports its own output and the clicked position when a pill is clicked', () => {
@@ -250,7 +292,7 @@ describe('MonitorBars', () => {
     monitorBars.setPills(singleBar(three.map((pill, index) => ({...pill, focused: index === 2, visible: index === 2}))));
 
     expect(labelsOf(bars()[0])).toEqual(['1:I', '2:II', '3:III']);
-    expect(activeIndexOf(bars()[0])).toBe(2);
+    expect(activeIndexOf(bars()[0], DEFAULT_COLORS)).toBe(2);
     pillsOf(bars()[0])[2].emit('clicked');
     expect(switched).toEqual([[1, 2]]);
     expect(criticals).toEqual([]);
@@ -265,7 +307,7 @@ describe('MonitorBars', () => {
       {name: '2:II', focused: true, visible: true, occupied: true, urgent: false},
     ]));
 
-    expect(activeIndexOf(bars()[0])).toBe(1);
+    expect(activeIndexOf(bars()[0], DEFAULT_COLORS)).toBe(1);
   });
 
   it('paints the bar itself with the configured background', () => {
