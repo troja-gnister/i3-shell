@@ -293,14 +293,40 @@ export class Engine {
     });
   }
 
+  /**
+   * Task 19, D2. Mutter emits `active-workspace-changed` from inside `workspace.activate()`, before
+   * `get_active_workspace_index()` reports the new index -- and the switch itself lands a main-loop turn
+   * later, so the index is stale for the whole of the handler below. The correction therefore re-entered
+   * itself: 3376 corrections in four seconds at every login, ending in repeated `JS ERROR: too much
+   * recursion` inside the compositor.
+   *
+   * The guard lives here, not in `src/shell/workspaces.ts`, because this is the only layer that can tell
+   * the two apart. The loop is a policy loop -- the handler's own response to the signal is what raises
+   * the signal -- and `LIVE_WORKSPACE` is this layer's notion: the adapter forwards a signal and has no
+   * idea that any particular re-emission wants correcting, so suppressing it there would be a blanket
+   * deafness during `activate()` that also silences the `n-workspaces` branch below. Held here it also
+   * holds for every `WorkspacesPort` implementation rather than for one adapter, and it is provable by
+   * the unit suite, which does not typecheck `src/shell` at all.
+   */
+  private _correctingActiveWorkspace = false;
+
   onWorkspacesChanged(): void {
+    // Our own `activate()` below is still on the stack: this signal is the one it just caused, so
+    // correcting again would be correcting a change nobody made. A genuine gesture's signal never
+    // arrives inside that window.
+    if (this._correctingActiveWorkspace) return;
     this.commit(() => {
       // GNOME's active workspace is a constant while the extension is enabled. Touchpad workspace
       // gestures have no GSetting to clear, so this is the only cover for them.
       if (this._started && !this._disposed && this._ports.workspaces.activeIndex !== LIVE_WORKSPACE) {
         this._ports.log.warn('active workspace left live; switching back');
-        if (!this._ports.workspaces.activate(LIVE_WORKSPACE, 0))
-          this._ports.log.warn('could not switch the active workspace back to live');
+        this._correctingActiveWorkspace = true;
+        try {
+          if (!this._ports.workspaces.activate(LIVE_WORKSPACE, 0))
+            this._ports.log.warn('could not switch the active workspace back to live');
+        } finally {
+          this._correctingActiveWorkspace = false;
+        }
       }
       // GNOME's own workspace count is always two now (live + attic), independent of the config's
       // i3 workspace count, which the settings port never sees translated 1:1 into GNOME any more.
@@ -323,11 +349,18 @@ export class Engine {
   }
 
   /**
-   * Rule 4 of the focused-output state: the pointer crossed onto `output`, whose visible workspace is
-   * empty. An empty workspace has no window to take focus, so sloppy focus (rule 1) can never report
-   * that the user is there -- the pointer is the only remaining evidence, and this is the one path that
-   * reads it. Sloppy focus owns the non-empty case; two mechanisms racing for the same output would
-   * flap, so this returns without touching anything when `output` already has a window to focus.
+   * Rule 4 of the focused-output state: the pointer crossed onto `output`, so that is the display the
+   * user is on.
+   *
+   * Task 19, D4: this used to fire only for an output whose visible workspace was *empty*, on the
+   * reasoning that sloppy focus (rule 1) owned the populated case and two mechanisms racing would flap.
+   * Sloppy focus does not own it: GNOME reports a focus change only when the pointer enters a *window*,
+   * so crossing onto another display's gaps, bar or background reported nothing at all. With only the
+   * empty case claimed, the focused output could drain onto whichever display showed an empty workspace
+   * and the pointer could never bring it back -- measured on the user's desk as the focused output
+   * reverting from the external display to the panel on its own. There is no flap, because neither
+   * mechanism triggers the other: a focus report moves the focused output to the focused window's
+   * display (D5), this moves it to the display under the pointer, and both agree wherever both apply.
    *
    * Fix round 1, folded item 1: gated on `focus_follows_mouse`. With it off, i3 treats pointer motion
    * as inert and `focus output` is how the user reaches another display; a rule that still followed
@@ -340,8 +373,10 @@ export class Engine {
     if (!this._started || this._disposed || this._locked || !this._config.focusFollowsMouse) return;
     const tree = this._tree;
     if (!tree || tree.focusedOutput === output) return;
-    const visible = tree.visible.get(output);
-    if (visible === undefined || this._workspaceMembers(tree, visible).length > 0) return;
+    // An output with no visible entry is not one the focus can sit on: `activeWorkspace` reads
+    // `visible.get(focusedOutput)` and throws without one. `coverOutputs` makes that unreachable for a
+    // live output; this keeps it unreachable for anything else the pointer can name.
+    if (!tree.visible.has(output)) return;
     this.commit(() => {
       tree.focusedOutput = output;
       return true;
@@ -976,12 +1011,30 @@ export class Engine {
     return this._reconciler.observe(id, info.rect, generation);
   }
 
+  /**
+   * Accept a window as the selection -- the one funnel for "this window has the keyboard now", whether
+   * that came from the compositor (`_acceptFocus`) or from a click on i3-shell's own chrome
+   * (`focusWindow`).
+   *
+   * Task 19, D5: it moves the focused output too. `Tree.select`/`selectFloating` are structural
+   * primitives that every intra-workspace focus command calls with the focused output already correct
+   * -- and `moveIntoOutput` already has to *undo* one focusedOutput side effect (see `move` below), so
+   * giving them another would multiply that fight. The policy belongs here, where a *native* focus
+   * report is turned into tree state, and the layer-0 half of it is `Tree.outputShowing`.
+   *
+   * Only an output actually showing the window's workspace is taken: `activeWorkspace` is
+   * `visible.get(focusedOutput)`, so pointing the focused output at a display that shows something else
+   * would make every workspace-scoped command act on the wrong workspace. A focus report for a parked
+   * window (Mutter can still send one) therefore leaves the focused output alone.
+   */
   private _selectWindow(id: WindowId): void {
     const tree = this._tree;
     const location = tree?.location(id);
     if (!tree || !location) return;
     if (location.floating) tree.selectFloating(id);
     else { const leaf = tree.find(id); if (leaf) tree.select(leaf); }
+    const showing = tree.outputShowing(location.workspace);
+    if (showing !== null) tree.focusedOutput = showing;
   }
 
   private _acceptFocus(id: WindowId | null): void {
@@ -1408,15 +1461,33 @@ export class Engine {
         // the switch itself. `commit()` queues on re-entry (a `for_window` rule's own command list runs
         // from inside the commit its matching 'added'/'title' event opened), so a `workspace` command
         // still queued from earlier in the same chain can leave this read stale by the time this one's
-        // closure actually drains; the closure below re-reads `tree.visible` itself rather than
+        // closure actually drains; `Tree.showWorkspace` re-reads `tree.visible` itself rather than
         // trusting it, so the workspace it parks is whatever is *actually* showing when it runs, not
         // whatever was showing when it was merely scheduled.
-        if (tree.visible.get(tree.focusedOutput) === index) return 'workspace: already active';
+        if (tree.visible.get(tree.focusedOutput) === index) {
+          // Task 19, D3: still push focus. This used to return without committing anything, so the one
+          // key the user reaches for when sloppy focus has handed the keyboard to whatever the pointer
+          // crossed (i3's `focus_follows_mouse yes` is GNOME's sloppy mode -- see overridePlan.ts) did
+          // nothing at all. `return false` keeps the early return's cheapness: no park/show, no
+          // relayout, no workspace moved, just the selection re-activated.
+          this.commit(() => { this._activateSelection(0); return false; });
+          return 'workspace: already active';
+        }
         this.commit(() => {
-          const outgoing = tree.visible.get(tree.focusedOutput);
-          const {swap} = tree.showWorkspace(index);
+          const before = tree.focusedOutput;
+          // Task 19, D1: the outgoing workspace is whatever the *resolved* output was showing, which is
+          // no longer necessarily the focused one -- an occupied workspace is shown on its own display,
+          // a pinned one on its pin. Reading it off the focused output parked the wrong display's
+          // windows and left the hidden ones on screen.
+          const {swap, outgoing} = tree.showWorkspace(index);
           if (swap && outgoing !== undefined) this._parkAndShow(outgoing, index);
           else this._activateSelection(0);
+          // The pointer follows a switch that crossed displays, for the exact reason
+          // `_warpToFocusedOutput` exists: it is stationary on the display the user just left, and rule
+          // 4 (D4, now that it claims a populated display too) would hand the focused output straight
+          // back to it on the next twitch. `workspace N` could always cross displays via the "already
+          // visible elsewhere" branch; D1's occupied and pinned rules make it routine.
+          if (tree.focusedOutput !== before) this._warpToFocusedOutput();
           return true;
         });
         return `workspace ${index + 1}`;

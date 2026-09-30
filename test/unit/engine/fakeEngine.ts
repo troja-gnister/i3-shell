@@ -68,7 +68,7 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
   const windows = new Map<WindowId, WindowInfo>();
   const applied: Array<Map<WindowId, Rect>> = [];
   const queue = new Map<number, () => void>();
-  let token = 0, active = 0, count = options.workspaceCount ?? 10;
+  let token = 0, active = 0, count = options.workspaceCount ?? 10, staleActivations = 0;
   let focused: WindowId | null = null;
   const refusedMoves = new Set<WindowId>();
   let currentTopology: Topology | null = options.monitors
@@ -88,7 +88,20 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
     },
     workspaces: {
       get count() { return count; }, get activeIndex() { return active; },
-      activate: index => { active = index; calls.push(`activate:${index}`); engine.onWorkspacesChanged(); return true; },
+      activate: index => {
+        calls.push(`activate:${index}`);
+        if (!f.staleActivate) { active = index; engine.onWorkspacesChanged(); return true; }
+        // Task 19, D2: Mutter's own `workspace.activate()` emits `active-workspace-changed`
+        // synchronously, BEFORE `get_active_workspace_index()` reports the new index -- and the switch
+        // itself lands later still, so the index is stale for the whole of the handler that follows.
+        // That is the re-entrancy the engine's attic guard has to survive; the 25-call cap stands in for
+        // the 3376 corrections the journal recorded at login before the stack gave out, and makes a
+        // missing guard a legible failure rather than a hung suite.
+        if (++staleActivations > 25)
+          throw new Error(`re-entrant activate: ${staleActivations} corrections with the index still stale`);
+        engine.onWorkspacesChanged();
+        return true;
+      },
     },
     windows: {
       list: () => [...windows.values()], get: id => windows.get(id), focused: () => focused,
@@ -185,6 +198,12 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
     },
     pushedColors: null as Colors | null, decorationColors: null as Colors | null,
     visible: true, refuseGeometry: false, emitFrames: true, activationFails: false,
+    /**
+     * Makes `workspaces.activate()` behave the way Mutter's really does: emit the change signal before
+     * the index it reports has moved, and leave it unmoved (the switch lands in a later main-loop turn).
+     * Off by default, so every test written before Task 19 keeps the confirm-and-forget fake it had.
+     */
+    staleActivate: false,
     onApply: null as ((id: WindowId) => void) | null,
     plan: null as DecorationPlan | null,
     launcherRequest: null as LauncherRequest | null,

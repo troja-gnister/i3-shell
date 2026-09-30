@@ -264,6 +264,43 @@ describe('Engine', () => {
       expect(f.calls.filter(c => c.startsWith('warn:')).join('\n')).toMatch(/active workspace left live/);
     });
 
+    // Task 19, D2: the guard's own `activate()` re-emits `active-workspace-changed` before Mutter
+    // reports the new index, so the handler re-entered itself unboundedly -- 3376 corrections in four
+    // seconds at every login, ending in repeated `JS ERROR: too much recursion` inside the compositor.
+    // It failed closed, which is why nothing else caught it, but it also meant the touchpad-gesture
+    // cover this guard exists to provide never worked.
+    it('corrects a workspace gesture exactly once, however Mutter re-emits the signal', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      f.staleActivate = true;
+      f.setActiveIndex(1);
+      f.calls.length = 0;
+
+      e.onWorkspacesChanged();
+
+      expect(f.calls.filter(call => call === 'activate:0')).toEqual(['activate:0']);
+      expect(f.calls.filter(call => call.startsWith('warn:active workspace left live')))
+        .toEqual(['warn:active workspace left live; switching back']);
+    });
+
+    it('still corrects the next genuine gesture after a re-entrant correction', () => {
+      // The guard must bound the self-inflicted signal without going deaf: a second gesture, arriving
+      // after the first correction has returned, has to be corrected too.
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      f.staleActivate = true;
+      f.setActiveIndex(1);
+      e.onWorkspacesChanged();
+      f.calls.length = 0;
+
+      f.setActiveIndex(1);
+      e.onWorkspacesChanged();
+
+      expect(f.calls.filter(call => call === 'activate:0')).toEqual(['activate:0']);
+    });
+
     it('warns again when the forced switch back to live itself is refused', () => {
       const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
       const e = f.engine;
@@ -472,14 +509,37 @@ describe('Engine', () => {
       expect(e.launcherAreaForTest()).toEqual(f.topology!.workAreas.get(1));
     });
 
-    it('leaves the focused output alone when the pointer’s output has a window to focus', () => {
-      // Sloppy focus (rule 1) owns this case; two mechanisms racing for it would flap.
+    // Task 19, D4: this test used to assert the opposite -- that the pointer leaves a *populated*
+    // output alone, on the reasoning that sloppy focus (rule 1) owns that case and two mechanisms
+    // racing would flap. It does not own it: GNOME's sloppy focus reports a focus change only when the
+    // pointer enters a *window*, so crossing onto another display's gaps, its bar or its background
+    // produced nothing at all. Combined with the empty case being claimed, focus could only ever drain
+    // onto whichever display showed an empty workspace and the pointer could never pull it back -- the
+    // user's focused output reverting from the external display to the panel on its own. Neither
+    // mechanism triggers the other, so there is no flap: a focus report moves the focused output to the
+    // focused window's display (D5), and the pointer moves it to the display under the pointer.
+    it('claims the display under the pointer even when its workspace has windows', () => {
       const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
       const e = f.engine;
       e.start();
       f.add(1, {workspace: 0, monitor: 0});
       f.add(2, {workspace: 0, monitor: 1});
       e.onPointerOutput(1);
+      expect(e.state().focusedOutput).toBe(1);
+    });
+
+    it('lets the pointer take focus back off an empty display, not only onto one', () => {
+      // The drain, end to end: output 1 holds the windows, output 0 shows an empty workspace. Focus must
+      // be able to make the round trip under the pointer alone.
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      f.add(2, {workspace: 0, monitor: 1});
+      e.onPointerOutput(0);
+      expect(e.state().focusedOutput).toBe(0);
+      e.onPointerOutput(1);
+      expect(e.state().focusedOutput).toBe(1);
+      e.onPointerOutput(0);
       expect(e.state().focusedOutput).toBe(0);
     });
 

@@ -41,8 +41,10 @@ export function effectiveWorkspaceCount(requested: number, outputCount: number):
  * i3's startup rule: workspace N to output N, for as many outputs as exist.
  *
  * Every workspace gets an output — the surplus go to the primary — so "a workspace has exactly one
- * output" is total and needs no separate notion of being placed. `workspace N` moves an unshown
- * workspace to the focused output regardless of what this assigned it (see the Tree's `showWorkspace`).
+ * output" is total and needs no separate notion of being placed. For the surplus that output is pure
+ * bookkeeping (coverage and the bars read it); it is not an affinity, because `resolveShowOutput` below
+ * decides where an unshown workspace materialises at switch time. Task 19, D1: that distinction is the
+ * whole fix, and it is why this line still hands the surplus to the primary.
  */
 export function birthAssignment(
   ordered: readonly MonitorId[],
@@ -64,6 +66,51 @@ export function birthAssignment(
     assignment.set(index, ordered[index] ?? primary);
   }
   return assignment;
+}
+
+/**
+ * Which output `workspace N` shows a workspace on, when no output is showing it already.
+ *
+ * Task 19, D1. The birth spread gives every workspace a stored output because coverage and the bars
+ * need one (`birthAssignment` above hands the surplus to the primary), but for an *empty* workspace
+ * that stored output is bookkeeping, not an affinity: real i3 has no such workspace until you switch to
+ * it, and `workspace N` materialises it on the focused output. Treating the stored output as an
+ * affinity is what left eight of the user's ten workspaces bound to the laptop panel, so that every
+ * `$mod+N` switched the panel and took the keyboard with it while they were looking at the external
+ * display.
+ *
+ * The controller's precedence, in order:
+ *
+ * 1. **Occupied** -- a workspace holding windows keeps the output it is on. A number key must never
+ *    move a window between displays; i3 takes you to the workspace, it does not fetch it.
+ * 2. **Config pin** -- `workspace N output X` wins for an empty workspace, on every switch and not
+ *    merely at birth. An empty workspace has nothing to lose by honouring it, which is why rule 1
+ *    outranks it: a pinned workspace the user has since moved, with windows on it, stays moved.
+ * 3. **Memory** -- Task 16's record of where an unplug found a workspace, for one whose output has
+ *    come back.
+ * 4. **Focused output** -- an empty, unpinned, unremembered workspace materialises where the user is
+ *    looking. This is the rule the defect was missing.
+ *
+ * Every tier is filtered through `live`, including the occupied workspace's own output: the result is
+ * written straight into `Tree.visible`, and an output that is not attached has no work area to lay a
+ * workspace out in. Coverage is not this function's business -- `coverOutputs` stays the single
+ * authority for that.
+ */
+export function resolveShowOutput(state: {
+  /** Does the workspace hold any window, tiled or floating? */
+  occupied: boolean;
+  /** The workspace's stored output. */
+  current: MonitorId;
+  pin: MonitorId | undefined;
+  remembered: MonitorId | undefined;
+  focused: MonitorId;
+  live: ReadonlySet<MonitorId>;
+}): MonitorId {
+  const {occupied, current, pin, remembered, focused, live} = state;
+  if (occupied && live.has(current)) return current;
+  if (pin !== undefined && live.has(pin)) return pin;
+  if (remembered !== undefined && live.has(remembered)) return remembered;
+  return focused;
 }
 
 /**

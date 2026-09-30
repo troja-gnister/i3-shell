@@ -2,7 +2,7 @@ import type {Direction, Layout} from '../commands/model';
 import {descendDirection, nextFocus, type Wrapping} from './focus';
 import {
   adoptOutput, birthAssignment, coverOutputs, effectiveWorkspaceCount, orderOutputs, reassignLost,
-  type OutputRef,
+  resolveShowOutput, type OutputRef,
 } from './outputs';
 import {resizeCon, type ResizeRequest} from './resize';
 import {moveCon, setLayout, splitCon, toggleLayout} from './operations';
@@ -50,6 +50,14 @@ export class Tree {
    * workspace an unplug actually displaced, and erased the moment that workspace is home again.
    */
   private _remembered = new Map<number, MonitorId>();
+  /**
+   * The config's `workspace N output X` pins, as the last construction or reconfigure resolved them.
+   *
+   * Held rather than passed per call because `showWorkspace` needs them too (Task 19, D1 rule 2: a pin
+   * wins for an empty workspace on every switch, not only at birth), and the `workspace` command has no
+   * business threading config through the tree's own switch path.
+   */
+  private _pinned: ReadonlyMap<number, MonitorId>;
 
   allocateSplit: AllocateSplit = (layout, root = false) => {
     if (!layouts.has(layout)) throw new Error(`invalid layout: ${String(layout)}`);
@@ -93,6 +101,7 @@ export class Tree {
 
     const ordered = orderOutputs(outputs, primary);
     this._ordered = ordered;
+    this._pinned = new Map(pinned);
     // The clamp guarantees enough workspaces exist; it does not guarantee birthAssignment's pins
     // distributed them so every output has one — coverOutputs repairs that. Nothing is shown yet, so
     // there is no "currently displayed" workspace for it to avoid taking.
@@ -131,6 +140,20 @@ export class Tree {
     return new Map(this._remembered);
   }
 
+  /**
+   * Which live output is showing a workspace, or null when nothing is -- a parked workspace.
+   *
+   * Task 19, D5: the engine needs this to move `focusedOutput` when the compositor focuses a window on
+   * another display. `outputOf` is not the same question: a workspace's stored output is where it would
+   * appear, this is where it actually is, and only the latter keeps `activeWorkspace`
+   * (`visible.get(focusedOutput)`) naming the workspace the newly focused window is really on.
+   */
+  outputShowing(workspace: number): MonitorId | null {
+    this.workspace(workspace);
+    for (const [output, visible] of this.visible) if (visible === workspace) return output;
+    return null;
+  }
+
   /** The output a workspace lives on. */
   outputOf(workspace: number): MonitorId {
     return this.workspace(workspace).output;
@@ -160,30 +183,55 @@ export class Tree {
     return [...this.visible.keys()].sort((a, b) => a - b).join(',');
   }
 
+  /** Does a workspace hold any window at all? An empty workspace is the one with no output affinity. */
+  occupied(index: number): boolean {
+    const workspace = this.workspace(index);
+    return workspace.floating.length > 0 || !leaves(workspace.root).next().done;
+  }
+
   /**
    * i3's `workspace N`. Two cases, and only two.
    *
    * Visible somewhere already: move the focused output to it, changing no window's workspace — this is
    * i3's "go to where that workspace is", and it is why a keypress can move you to another screen.
-   * Not visible: bring it to the focused output, which is what i3 does for a workspace that does not
-   * exist yet. With the fixed set of workspaces this design keeps, "not yet placed" plays that role.
+   * Not visible: materialise it, on the output `resolveShowOutput` picks by the controller's precedence
+   * — occupied, then a config pin, then Task 16's memory, then the focused output. With the fixed set of
+   * workspaces this design keeps, "not yet placed" plays the role of i3's "does not exist yet".
+   *
+   * Task 19, D1: this used to read `this.focusedOutput` for every unshown workspace, which dragged an
+   * *occupied* workspace's windows onto whichever display the user happened to be looking at and made a
+   * config pin a one-shot at birth. `outgoing` is returned because the resolved output is no longer
+   * necessarily the focused one, so the caller can no longer work out which workspace it displaced by
+   * reading `visible.get(focusedOutput)` before the call.
+   *
+   * Coverage needs no repair here: an unshown workspace's own output is by definition showing some
+   * *other* workspace of its own, so taking this one away never empties it.
    */
-  showWorkspace(index: number): {output: MonitorId; swap: boolean} {
+  showWorkspace(index: number): {output: MonitorId; swap: boolean; outgoing: number | undefined} {
     this.workspace(index);
     for (const [output, visible] of this.visible) {
       if (visible !== index) continue;
       this.focusedOutput = output;
-      return {output, swap: false};
+      return {output, swap: false, outgoing: undefined};
     }
-    const output = this.focusedOutput;
-    // Round 1, I3: this branch re-homes the workspace, and a deliberate re-home is newer and better
-    // evidence than a memory of where an unplug found it -- so the memory goes. Guarded on the output
-    // actually changing: `workspace N` onto a hidden workspace of the output it already lives on moves
-    // nothing, and merely looking at a workspace in exile must not cancel its homecoming.
-    if (this.workspace(index).output !== output) this._remembered.delete(index);
+    const output = resolveShowOutput({
+      occupied: this.occupied(index),
+      current: this.workspace(index).output,
+      pin: this._pinned.get(index),
+      remembered: this._remembered.get(index),
+      focused: this.focusedOutput,
+      live: new Set(this._ordered),
+    });
+    const outgoing = this.visible.get(output);
+    // Round 1, I3 as Task 19 leaves it: the memory is spent only when the workspace really is home
+    // again (rule 3 fired). A switch that merely lands it on a live output while its own is still away
+    // is a refuge, not a home -- erasing the memory there is what would stop the replug bringing it
+    // back. A deliberate `move workspace to output` still clears it; see `moveWorkspaceToOutput`.
+    if (this._remembered.get(index) === output) this._remembered.delete(index);
     this.workspace(index).output = output;
     this.visible.set(output, index);
-    return {output, swap: true};
+    this.focusedOutput = output;
+    return {output, swap: true, outgoing};
   }
 
   /**
@@ -386,6 +434,8 @@ export class Tree {
     const live = new Set(outputs.map(output => output.id));
     const ordered = orderOutputs(outputs, primary);
     this._ordered = ordered;
+    // Refreshed here as well as at birth: a reload can change the pins, and `showWorkspace` reads them.
+    this._pinned = new Map(pinned);
 
     const lossAssignment = new Map<number, MonitorId>(
       [...this.workspaces].map(([index, workspace]) => [index, workspace.output]),

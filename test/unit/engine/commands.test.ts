@@ -710,3 +710,129 @@ describe('engine command dispatch', () => {
     });
   });
 });
+
+/**
+ * Task 19, the five live defects found on the user's own desk: a laptop panel (id 2, the primary) plus
+ * one external display (id 3), ten workspaces. Every test here uses that topology, because the defects
+ * are all about which of the two displays a command or a focus report acts on.
+ */
+describe('workspace and focus on two displays (Task 19)', () => {
+  const desk = {monitors: [{id: 2, index: 0}, {id: 3, index: 1}], primary: 2, workspaceCount: 10};
+  const number = (n: number) => ({kind: 'number' as const, number: n, name: String(n)});
+
+  // D1, the tree half: rule 1 of the precedence. A number key must never carry a window to another
+  // display -- it takes the user to the window.
+  it('takes focus to an occupied workspace’s own display instead of dragging its windows', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.add(7, {monitor: 3});
+    f.flush();
+    expect(f.tree().location(7)).toEqual({workspace: 1, output: 3, floating: false});
+    f.engine.run([{type: 'focus_output', target: 'right'}], 1);
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);   // the external looks elsewhere
+    expect([...f.tree().visible]).toEqual([[2, 0], [3, 5]]);
+    f.engine.run([{type: 'focus_output', target: 'left'}], 3);
+    expect(f.engine.state().focusedOutput).toBe(2);
+
+    expect(f.engine.run([{type: 'workspace', target: number(2)}], 4)).toBe('workspace 2');
+    expect(f.tree().location(7)).toEqual({workspace: 1, output: 3, floating: false});
+    expect([...f.tree().visible]).toEqual([[2, 0], [3, 1]]);
+    expect(f.engine.state().focusedOutput).toBe(3);
+  });
+
+  // D1, the engine half: the park/show must follow the output `showWorkspace` resolved, not the output
+  // the user was standing on. Window 8 sits on the workspace being displaced (on the external) and
+  // window 9 on the laptop's own visible workspace, which nothing in this switch touches -- reading the
+  // outgoing workspace off the focused output parks 9 (which stays on screen) and leaves 8 on screen
+  // (which is now hidden), i.e. exactly the "windows carry over and I cannot type into them" report.
+  it('parks and shows on the display the switch actually lands on', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.add(7, {monitor: 3});                                      // workspace 1, on the external
+    f.add(9, {monitor: 2});                                      // workspace 0, on the laptop
+    f.flush();
+    f.engine.run([{type: 'focus_output', target: 'right'}], 1);
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);   // the external shows workspace 5
+    f.add(8, {monitor: 3});                                      // workspace 5, on the external
+    f.flush();
+    f.engine.run([{type: 'focus_output', target: 'left'}], 3);
+    f.calls.length = 0;
+
+    expect(f.engine.run([{type: 'workspace', target: number(2)}], 4)).toBe('workspace 2');
+    expect(f.windows.get(7)!.workspace).toBe(LIVE_WORKSPACE);    // came out of the attic
+    expect(f.windows.get(8)!.workspace).toBe(1);                 // the displaced workspace was parked
+    expect(f.windows.get(9)!.workspace).toBe(LIVE_WORKSPACE);    // the laptop still shows its own
+    expect(f.calls.filter(call => call.startsWith('focus:'))).toEqual(['focus:7']);
+  });
+
+  // D1/D4 together: a switch that crosses displays has to take the pointer with it, or the very next
+  // pointer motion gives the focused output back to the display the user left (see
+  // `_warpToFocusedOutput`). A switch that stays on one display must not warp anything.
+  it('warps the pointer only when the switch crosses to another display', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.add(7, {monitor: 3});
+    f.flush();
+    f.engine.run([{type: 'focus_output', target: 'right'}], 1);
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);
+    f.engine.run([{type: 'focus_output', target: 'left'}], 3);
+    f.calls.length = 0;
+
+    f.engine.run([{type: 'workspace', target: number(4)}], 4);   // empty, materialises on the laptop
+    expect(f.calls.filter(call => call === 'pointer.warp')).toEqual([]);
+    f.engine.run([{type: 'workspace', target: number(2)}], 5);   // occupied, lands on the external
+    expect(f.calls.filter(call => call === 'pointer.warp')).toEqual(['pointer.warp']);
+  });
+
+  // D3: the early return skipped the commit, so `$mod+N` for the workspace you are already on did
+  // nothing at all -- and under sloppy focus (i3's default, mapped to GNOME's sloppy mode) that is
+  // exactly the key the user reaches for when the pointer has given keyboard focus away.
+  it('re-activates the focused workspace’s selection when it is already active', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.add(9, {monitor: 2});
+    f.flush();
+    f.focus(null);                                               // the compositor's focus wandered off
+    f.calls.length = 0;
+
+    expect(f.engine.run([{type: 'workspace', target: number(1)}], 1)).toBe('workspace: already active');
+    // 'decorations' trails every commit; nothing else does, so no relayout and no park/show ran.
+    expect(f.calls.filter(call => call !== 'decorations')).toEqual(['focus:9']);
+  });
+
+  // D5: accepting the compositor's focus for a window has to move the focused output to that window's
+  // display. Without it every workspace-scoped command acts on the display the user left, and the one
+  // the user actually hit -- `move container to workspace N` -- reports "no focused window" because the
+  // stale focused output shows an empty workspace.
+  it('follows the compositor’s focus onto the other display', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.add(7, {monitor: 3});
+    f.flush();
+    f.engine.run([{type: 'focus_output', target: 'left'}], 1);
+    expect(f.engine.state().focusedOutput).toBe(2);              // the laptop, showing an empty workspace
+
+    f.focus(7);                                                  // a click on the window, or sloppy focus
+    expect(f.engine.state().focusedOutput).toBe(3);
+    expect(f.engine.state().activeWorkspace).toBe(1);
+    expect(f.engine.run([{type: 'move_to_workspace', target: number(4)}], 2)).toBe('moved to workspace 4');
+    expect(f.tree().location(7)?.workspace).toBe(3);
+  });
+
+  // D5, the other half of "must remain a valid live output": a parked window's focus report has no
+  // output showing it, so there is nothing to move the focused output to and it must stay put.
+  it('leaves the focused output alone for a focus report from a workspace nothing is showing', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.add(7, {monitor: 3});
+    f.flush();
+    f.engine.run([{type: 'focus_output', target: 'right'}], 1);
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);   // workspace 1 is parked now
+    f.engine.run([{type: 'focus_output', target: 'left'}], 3);
+    expect(f.engine.state().focusedOutput).toBe(2);
+
+    f.focus(7);
+    expect(f.engine.state().focusedOutput).toBe(2);
+    expect(f.engine.state().activeWorkspace).toBe(0);
+  });
+});

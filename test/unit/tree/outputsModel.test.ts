@@ -252,7 +252,9 @@ describe('showWorkspace', () => {
 
   it('brings an unshown workspace to the focused output', () => {
     const t = new Tree(10, outputs, 3);
-    expect(t.showWorkspace(4)).toEqual({output: 3, swap: true});
+    // `outgoing` is the workspace the resolved output stops showing -- Task 19, D1: the engine can no
+    // longer derive it from the focused output, because the resolved output need not be the focused one.
+    expect(t.showWorkspace(4)).toEqual({output: 3, swap: true, outgoing: 0});
     expect(t.outputOf(4)).toBe(3);
     expect(t.focusedOutput).toBe(3);
   });
@@ -260,7 +262,7 @@ describe('showWorkspace', () => {
   it('brings an unshown workspace to whichever output is focused', () => {
     const t = new Tree(10, outputs, 3);
     t.focusedOutput = 2;
-    expect(t.showWorkspace(4)).toEqual({output: 2, swap: true});
+    expect(t.showWorkspace(4)).toEqual({output: 2, swap: true, outgoing: 1});
     expect(t.outputOf(4)).toBe(2);
   });
 
@@ -469,5 +471,100 @@ describe('reconfigure across outputs', () => {
     expect(t.outputOf(5)).toBe(9);
     expect(t.visible.get(9)).toBe(5);
     expect(t.outputOf(1)).toBe(3);   // the lowest-free rule did not fire as well
+  });
+});
+
+/**
+ * Task 19, D1: `workspace N` resolves the output it materialises on at switch time, by the controller's
+ * precedence -- occupied, then a config pin, then Task 16's memory, then the focused output. The desk
+ * here is the user's own: the laptop panel (id 2, the primary) plus one external display (id 3), ten
+ * workspaces, so eight of the ten are *stored* on the primary by the birth spread's surplus rule. That
+ * stored output is bookkeeping for coverage and the bars; it is not an affinity, and none of these
+ * tests may let it behave like one.
+ */
+describe('showWorkspace precedence (Task 19, D1)', () => {
+  /** The user's desk: laptop panel 2 (primary, Mutter index 0), external display 3 (index 1). */
+  const desk = [{id: 2, index: 0}, {id: 3, index: 1}];
+
+  it('still spreads the first K workspaces one per output at birth', () => {
+    // The feature the user asked for in the first place: "primary is workspace 1, external is
+    // workspace 2". Fixing D1 must not quietly undo it, so this pins the whole visible map at birth.
+    const t = new Tree(10, desk, 2);
+    expect([...t.visible]).toEqual([[2, 0], [3, 1]]);
+    expect(t.outputOf(0)).toBe(2);
+    expect(t.outputOf(1)).toBe(3);
+    expect(t.focusedOutput).toBe(2);
+  });
+
+  it('materialises an empty high-numbered workspace on the focused output', () => {
+    // Rule 4, on the user's own topology: workspace 9 is *stored* on the primary (the surplus rule),
+    // and switching to it from the external display must not drag the user's focus to the primary.
+    const t = new Tree(10, desk, 2);
+    t.focusedOutput = 3;
+    expect(t.showWorkspace(8)).toEqual({output: 3, swap: true, outgoing: 1});
+    expect([...t.visible]).toEqual([[2, 0], [3, 8]]);
+    expect(t.outputOf(8)).toBe(3);
+    expect(t.focusedOutput).toBe(3);
+  });
+
+  it('shows an occupied workspace on its own output instead of dragging its windows to the focused one', () => {
+    // Rule 1, and the whole reason the precedence exists: a number key must never move a window
+    // between displays. Workspace 1 holds a window on the external display and is hidden there (the
+    // external is showing an empty workspace 5); pressing Mod+2 from the laptop must take the user to
+    // the external display, not fetch the window onto the laptop.
+    const t = new Tree(10, desk, 2);
+    t.insert(7, 1);
+    t.focusedOutput = 3;
+    t.showWorkspace(5);
+    expect([...t.visible]).toEqual([[2, 0], [3, 5]]);
+
+    t.focusedOutput = 2;
+    expect(t.showWorkspace(1)).toEqual({output: 3, swap: true, outgoing: 5});
+    expect(t.outputOf(1)).toBe(3);
+    expect([...t.visible]).toEqual([[2, 0], [3, 1]]);
+    expect(t.focusedOutput).toBe(3);
+    t.check(new Set([7]));
+  });
+
+  it('honours a config pin at switch time for an empty workspace, not only at birth', () => {
+    // Rule 2. `workspace 9 output <external>`: i3 honours that every time workspace 9 comes into
+    // existence, not once at startup. Without it the first Mod+9 from the laptop re-homes workspace 9
+    // onto the laptop and the pin never applies again for the rest of the session.
+    const t = new Tree(10, desk, 2, new Map([[8, 3]]));
+    expect(t.outputOf(8)).toBe(3);
+    t.focusedOutput = 2;
+    expect(t.showWorkspace(8)).toEqual({output: 3, swap: true, outgoing: 1});
+    expect([...t.visible]).toEqual([[2, 0], [3, 8]]);
+    expect(t.focusedOutput).toBe(3);
+  });
+
+  it('lets a pin lose to a workspace that holds windows', () => {
+    // Rule 1 outranks rule 2: an occupied workspace the user moved off its pinned output stays where
+    // its windows are. Only an empty workspace has nothing to lose by honouring the pin.
+    const t = new Tree(10, desk, 2, new Map([[8, 3]]));
+    t.focusedOutput = 2;
+    t.showWorkspace(8);          // on the external, by the pin
+    t.insert(7, 8);
+    t.moveWorkspaceToOutput(2);  // the user moves it to the laptop on purpose
+    expect(t.outputOf(8)).toBe(2);
+    t.showWorkspace(0);          // the laptop looks elsewhere, so 9 is hidden but still occupied
+    expect([...t.visible]).toEqual([[2, 0], [3, 1]]);
+
+    t.focusedOutput = 3;
+    expect(t.showWorkspace(8)).toEqual({output: 2, swap: true, outgoing: 0});
+    expect(t.outputOf(8)).toBe(2);
+    t.check(new Set([7]));
+  });
+
+  it('keeps a displaced workspace’s memory when a switch only gives it a refuge', () => {
+    // Task 16 must survive D1: while the external is unplugged, Mod+2 shows workspace 1 on whatever is
+    // live -- a refuge, not a home -- and the replug must still bring it back.
+    const t = new Tree(10, desk, 2);
+    t.reconfigure(10, [{id: 2, index: 0}], 2);
+    expect([...t.remembered()]).toEqual([[1, 3]]);
+    t.showWorkspace(1);
+    expect([...t.remembered()]).toEqual([[1, 3]]);
+    t.reconfigure(10, desk, 2);
+    expect(t.outputOf(1)).toBe(3);
   });
 });

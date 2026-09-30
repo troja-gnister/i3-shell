@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import {
   adoptOutput, birthAssignment, coverOutputs, effectiveWorkspaceCount, orderOutputs, reassignLost,
-  resolveOutputArg,
+  resolveOutputArg, resolveShowOutput,
 } from '../../../src/tree/outputs';
 import type {MonitorId, Rect} from '../../../src/tree/node';
 
@@ -147,5 +147,39 @@ describe('adoptOutput', () => {
 
   it('ignores a remembered workspace that no longer exists', () => {
     expect(adoptOutput(new Map([[7, 2]]), 2, new Map([[0, 3]]))).toBeNull();
+  });
+});
+
+/**
+ * Task 19, D1: the controller's precedence, as a table. Each row differs from the one above it in
+ * exactly the tier under test, so no row can pass by accident of a lower tier agreeing with it -- the
+ * laptop 10 is the focused output throughout, and every other tier names 20 or 30 instead.
+ */
+describe('resolveShowOutput', () => {
+  const live = new Set<MonitorId>([10, 20, 30]);
+  const base = {occupied: false, current: 20, pin: undefined, remembered: undefined, focused: 10, live};
+
+  it('rule 1: an occupied workspace keeps the output it is on', () => {
+    expect(resolveShowOutput({...base, occupied: true, pin: 30, remembered: 30})).toBe(20);
+  });
+
+  it('rule 2: a config pin wins for an empty workspace', () => {
+    expect(resolveShowOutput({...base, pin: 30, remembered: 20})).toBe(30);
+  });
+
+  it('rule 3: the memory wins for an empty, unpinned workspace whose output has come back', () => {
+    expect(resolveShowOutput({...base, remembered: 30})).toBe(30);
+  });
+
+  it('rule 4: an empty, unpinned, unremembered workspace materialises on the focused output', () => {
+    // And not on `current` (20), which is what the birth spread's surplus rule stored for it.
+    expect(resolveShowOutput(base)).toBe(10);
+  });
+
+  it('falls through a tier naming an output that is not attached', () => {
+    const away = new Set<MonitorId>([10]);
+    expect(resolveShowOutput({...base, occupied: true, live: away})).toBe(10);
+    expect(resolveShowOutput({...base, pin: 30, live: away})).toBe(10);
+    expect(resolveShowOutput({...base, remembered: 30, live: away})).toBe(10);
   });
 });
