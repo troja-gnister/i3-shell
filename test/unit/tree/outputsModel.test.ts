@@ -559,12 +559,26 @@ describe('showWorkspace precedence (Task 19, D1)', () => {
   it('keeps a displaced workspace’s memory when a switch only gives it a refuge', () => {
     // Task 16 must survive D1: while the external is unplugged, Mod+2 shows workspace 1 on whatever is
     // live -- a refuge, not a home -- and the replug must still bring it back.
-    const t = new Tree(10, desk, 2);
-    t.reconfigure(10, [{id: 2, index: 0}], 2);
+    //
+    // Round 1, I3: this needs a THIRD display to discriminate anything. With two, an unplug reassigns the
+    // workspace to the primary and the primary is also the only output left to take refuge on, so
+    // `9612ba6`'s guard (`workspace.output !== output`) and this one (`_remembered.get(index) === output`)
+    // agree and the fixture cannot see the change it exists to pin. Standing on a third display, where
+    // the refuge is neither the remembered home nor the output the unplug left it on, splits them: the
+    // old guard reads "this is a re-home" and cancels the homecoming.
+    const desk3 = [{id: 2, index: 0}, {id: 3, index: 1}, {id: 4, index: 2}];
+    const t = new Tree(10, desk3, 2);
+    t.reconfigure(10, [{id: 2, index: 0}, {id: 4, index: 2}], 2);
     expect([...t.remembered()]).toEqual([[1, 3]]);
-    t.showWorkspace(1);
+    expect(t.outputOf(1)).toBe(2);              // the unplug left it on the primary
+
+    t.focusedOutput = 4;
+    t.showWorkspace(1);                          // Mod+2 from the third display: a refuge, not a home
+    expect(t.outputOf(1)).toBe(4);
     expect([...t.remembered()]).toEqual([[1, 3]]);
-    t.reconfigure(10, desk, 2);
+
+    t.reconfigure(10, desk3, 2);
     expect(t.outputOf(1)).toBe(3);
+    expect(t.visible.get(3)).toBe(1);
   });
 });

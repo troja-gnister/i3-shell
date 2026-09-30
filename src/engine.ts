@@ -1479,14 +1479,21 @@ export class Engine {
           // no longer necessarily the focused one -- an occupied workspace is shown on its own display,
           // a pinned one on its pin. Reading it off the focused output parked the wrong display's
           // windows and left the hidden ones on screen.
+          // No `outgoing !== undefined` guard: a `swap` resolved an output through `_ordered`, every
+          // ordered output has a `visible` entry, and `_parkAndShow` takes `number | undefined` anyway.
           const {swap, outgoing} = tree.showWorkspace(index);
-          if (swap && outgoing !== undefined) this._parkAndShow(outgoing, index);
+          if (swap) this._parkAndShow(outgoing, index);
           else this._activateSelection(0);
-          // The pointer follows a switch that crossed displays, for the exact reason
-          // `_warpToFocusedOutput` exists: it is stationary on the display the user just left, and rule
-          // 4 (D4, now that it claims a populated display too) would hand the focused output straight
-          // back to it on the next twitch. `workspace N` could always cross displays via the "already
-          // visible elsewhere" branch; D1's occupied and pinned rules make it routine.
+          // The pointer follows a switch that crossed displays, the same way `focus output` and `move
+          // workspace to output` below already make it follow, and for the same reason: with
+          // `focus_follows_mouse yes` the pointer is left standing on the display the user just left, so
+          // the next motion that carries it over a *window* there produces a GNOME focus report, and D5
+          // hands the focused output straight back. (Round 1, I4: an earlier version of this comment
+          // blamed rule 4 / `onPointerOutput` for that. It cannot do it -- `src/shell/pointer.ts`
+          // debounces on `_lastMonitor`, so motion within the display the pointer is already on never
+          // reaches the engine at all; only a real crossing does, and claiming the output the user has
+          // deliberately crossed onto is correct.) `workspace N` could always cross displays via the
+          // "already visible elsewhere" branch; D1's occupied and pinned rules make it routine.
           if (tree.focusedOutput !== before) this._warpToFocusedOutput();
           return true;
         });

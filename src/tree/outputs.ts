@@ -87,14 +87,20 @@ export function birthAssignment(
  *    merely at birth. An empty workspace has nothing to lose by honouring it, which is why rule 1
  *    outranks it: a pinned workspace the user has since moved, with windows on it, stays moved.
  * 3. **Memory** -- Task 16's record of where an unplug found a workspace, for one whose output has
- *    come back.
+ *    come back. **Unreachable through the `Tree` today**, and deliberately kept: `reconfigure` re-homes
+ *    every remembered workspace and clears its entry the moment its output returns, so a surviving entry
+ *    always names a *dead* output, which the `live` filter below rejects. It stays because this function
+ *    is the ruling's encoding -- a reader comparing it against the ruling should find all four tiers --
+ *    and it is covered at this function only, never through `Tree.showWorkspace`.
  * 4. **Focused output** -- an empty, unpinned, unremembered workspace materialises where the user is
  *    looking. This is the rule the defect was missing.
  *
  * Every tier is filtered through `live`, including the occupied workspace's own output: the result is
  * written straight into `Tree.visible`, and an output that is not attached has no work area to lay a
- * workspace out in. Coverage is not this function's business -- `coverOutputs` stays the single
- * authority for that.
+ * workspace out in. That first fall-through is unreachable through the `Tree` too -- `reassignLost`
+ * moves a workspace off a dying output before anything can switch to it -- and is kept for the same
+ * reason, so no caller of this function has to know which of its inputs the `Tree` happens to guarantee.
+ * Coverage is not this function's business -- `coverOutputs` stays the single authority for that.
  */
 export function resolveShowOutput(state: {
   /** Does the workspace hold any window, tiled or floating? */

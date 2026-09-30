@@ -301,6 +301,26 @@ describe('Engine', () => {
       expect(f.calls.filter(call => call === 'activate:0')).toEqual(['activate:0']);
     });
 
+    // Task 19 round 1, I1: the re-entrancy flag is set around a call that crosses the GJS boundary three
+    // times. Reset it sequentially instead of in a `finally` and one throw from Mutter latches it `true`
+    // for the rest of the session: `onWorkspacesChanged` goes permanently deaf, silently removing both
+    // the touchpad-gesture cover this guard exists to be and the `n-workspaces` re-apply beside it, with
+    // no warn to say so. The whole shipped suite was green against that.
+    it('does not go deaf for the session when Mutter throws out of activate', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      f.activateThrows = true;
+      f.setActiveIndex(1);
+      expect(() => e.onWorkspacesChanged()).toThrow(/GJS boundary/);
+
+      f.activateThrows = false;
+      f.calls.length = 0;
+      e.onWorkspacesChanged();
+
+      expect(f.calls.filter(call => call === 'activate:0')).toEqual(['activate:0']);
+    });
+
     it('warns again when the forced switch back to live itself is refused', () => {
       const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
       const e = f.engine;

@@ -90,6 +90,10 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
       get count() { return count; }, get activeIndex() { return active; },
       activate: index => {
         calls.push(`activate:${index}`);
+        // Task 19 round 1, I1: `Workspaces.activate` crosses the GJS boundary three times
+        // (`get_workspace_by_index`, `workspace.activate`, `global.get_current_time`), and any of them
+        // can throw. Modelled here so the engine's re-entrancy flag can be proved not to latch.
+        if (f.activateThrows) throw new Error('GJS boundary: workspace.activate failed');
         if (!f.staleActivate) { active = index; engine.onWorkspacesChanged(); return true; }
         // Task 19, D2: Mutter's own `workspace.activate()` emits `active-workspace-changed`
         // synchronously, BEFORE `get_active_workspace_index()` reports the new index -- and the switch
@@ -204,6 +208,8 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
      * Off by default, so every test written before Task 19 keeps the confirm-and-forget fake it had.
      */
     staleActivate: false,
+    /** Makes `workspaces.activate()` throw, the way a GJS boundary call can. */
+    activateThrows: false,
     onApply: null as ((id: WindowId) => void) | null,
     plan: null as DecorationPlan | null,
     launcherRequest: null as LauncherRequest | null,
