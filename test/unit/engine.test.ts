@@ -1,12 +1,17 @@
 import {describe, it, expect} from 'vitest';
 import {readFileSync} from 'node:fs';
 import type {Binding, Config} from '../../src/config/model';
+import {leaves, type WindowId} from '../../src/tree/node';
 import {fakeEngine as fakePorts, outputsTopology} from './engine/fakeEngine';
 
 const referenceText = readFileSync(new URL('./fixtures/reference.i3config', import.meta.url), 'utf8');
 
 const binding = (config: Config, mode: string, accel: string): Binding =>
   config.modes.get(mode)!.bindings.find(b => b.accel === accel)!;
+
+/** The window ids tiled on one i3 workspace, read from the tree rather than from a rendered plan. */
+const leafWindows = (f: ReturnType<typeof fakePorts>, workspace: number): WindowId[] =>
+  [...leaves(f.tree().root(workspace))].map(leaf => leaf.window);
 
 describe('Engine', () => {
   it('start() applies settings, grabs the default mode and sets colours', () => {
@@ -637,6 +642,127 @@ describe('Engine', () => {
       f.launcherClosedItself(); // a dismiss, a launch, a toggling second open -- the engine hears none of it
       e.warpToFocusedOutputForTest();
       expect(f.pointer.warps().length).toBe(1);
+    });
+  });
+
+  /**
+   * Task 20, D6. A floating window dragged onto another display belongs to that display's workspace,
+   * so `floating disable` tiles it there. Before this, `Tree.setFloating(false)` re-inserted into
+   * `location.workspace` -- the workspace the window came from, which lives on the output it came from
+   * -- so the native A23 walk saw the secondary output's root stay empty.
+   *
+   * Every fixture here gives the two outputs DIFFERENT visible workspaces (output 0 shows workspace 0,
+   * output 1 shows workspace 1) and asserts the window lands on the destination's, not its own: a
+   * topology where both outputs showed the same workspace would pass with or without the fix.
+   */
+  describe('Task 20, D6: a floating window’s workspace follows the output it sits on', () => {
+    /** Two outputs showing two different workspaces, one tiled window on the primary's. */
+    const twoOutputs = () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      // The fixture trap this guards against: if output 1 showed workspace 0 too, the re-home would be
+      // indistinguishable from the old "put it back where it was".
+      expect(f.tree().visible.get(0)).toBe(0);
+      expect(f.tree().visible.get(1)).toBe(1);
+      return f;
+    };
+
+    /** The drag itself: Mutter reports the floating frame on `monitor`, and a frame event follows. */
+    const dragTo = (f: ReturnType<typeof fakePorts>, id: number, monitor: number, x: number) => {
+      f.change(id, {monitor, rect: {x, y: 40, width: 400, height: 300}}, 'frame');
+      f.flush();
+    };
+
+    it('tiles a window dragged onto the secondary output into that output’s workspace', () => {
+      const f = twoOutputs();
+      f.add(1, {workspace: 0, monitor: 0});
+      f.focus(1);
+      expect(f.tree().location(1)).toEqual({workspace: 0, output: 0, floating: false});
+
+      f.engine.run([{type: 'floating', action: 'enable'}], 0);
+      dragTo(f, 1, 1, 1040);
+      // Continuous truth: GetTree already says output 1 while the window is still floating.
+      expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+
+      f.engine.run([{type: 'floating', action: 'disable'}], 0);
+      expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: false});
+      expect([...leafWindows(f, 1)]).toEqual([1]);
+      expect([...leafWindows(f, 0)]).toEqual([]);
+    });
+
+    it('survives the round trip back to the primary output', () => {
+      const f = twoOutputs();
+      f.add(1, {workspace: 0, monitor: 0});
+      f.focus(1);
+      f.engine.run([{type: 'floating', action: 'enable'}], 0);
+      dragTo(f, 1, 1, 1040);
+      f.engine.run([{type: 'floating', action: 'disable'}], 0);
+      expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: false});
+
+      f.engine.run([{type: 'floating', action: 'enable'}], 0);
+      dragTo(f, 1, 0, 40);
+      expect(f.tree().location(1)).toEqual({workspace: 0, output: 0, floating: true});
+      f.engine.run([{type: 'floating', action: 'disable'}], 0);
+      expect(f.tree().location(1)).toEqual({workspace: 0, output: 0, floating: false});
+      expect([...leafWindows(f, 0)]).toEqual([1]);
+      expect([...leafWindows(f, 1)]).toEqual([]);
+    });
+
+    it('moves the focused output with the window, so the next command acts on it', () => {
+      const f = twoOutputs();
+      f.add(1, {workspace: 0, monitor: 0});
+      f.focus(1);
+      f.engine.run([{type: 'floating', action: 'enable'}], 0);
+      dragTo(f, 1, 1, 1040);
+      // Without this, `activeWorkspace` still names workspace 0 and the `floating disable` above would
+      // find no selection at all -- which is how the native A23 walk reaches `floating disable`.
+      expect(f.tree().focusedOutput).toBe(1);
+      expect(f.tree().activeWorkspace).toBe(1);
+      expect(f.tree().selection()).toEqual({kind: 'floating', window: 1});
+    });
+
+    it('keeps a re-homed window on the live GNOME workspace, out of the attic', () => {
+      const f = twoOutputs();
+      f.add(1, {workspace: 0, monitor: 0});
+      f.focus(1);
+      f.engine.run([{type: 'floating', action: 'enable'}], 0);
+      // Mutter parked it for its own reasons while its i3 workspace was on screen; the re-home has to
+      // assert the native side rather than assume it.
+      f.windows.set(1, {...f.windows.get(1)!, workspace: 1});
+      dragTo(f, 1, 1, 1040);
+      expect(f.tree().location(1)).toMatchObject({workspace: 1, output: 1});
+      expect(f.windows.get(1)!.workspace).toBe(0);
+    });
+
+    it('lets the workspace an evicted window left outrank the output it comes back on', () => {
+      // `_adoptionWorkspace` deliberately prefers the workspace a minimised window left. The monitor it
+      // comes back on changed while it had no workspace at all, so that is not a drag, and reading it as
+      // one would delete the memory the eviction exists to keep.
+      const f = twoOutputs();
+      f.add(1, {kind: 'floating', workspace: 0, monitor: 0});
+      expect(f.tree().location(1)).toEqual({workspace: 0, output: 0, floating: true});
+      f.change(1, {minimized: true}, 'minimized');
+      expect(f.tree().location(1)).toBeNull();
+      f.change(1, {minimized: false, monitor: 1}, 'minimized');
+      expect(f.tree().location(1)).toEqual({workspace: 0, output: 0, floating: true});
+    });
+
+    it('leaves a floating window on a parked workspace alone when Mutter relocates it', () => {
+      // Task 16's remembering: an unplug relocates the lost output's windows, which changes their
+      // reported monitor without the user having dragged anything. A window the user cannot see has
+      // not been dragged, so its workspace must not follow the relocation -- otherwise the displaced
+      // workspace comes home on replug with its floating windows scattered onto the refuge.
+      const f = twoOutputs();
+      f.add(1, {workspace: 0, monitor: 0});
+      f.focus(1);
+      f.engine.run([{type: 'floating', action: 'enable'}], 0);
+      // Output 0 now shows workspace index 3; workspace 0 (with the floating window) is parked.
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: 4, name: '4'}}], 0);
+      expect(f.tree().visible.get(0)).toBe(3);
+      expect(f.tree().outputShowing(0)).toBeNull();
+
+      dragTo(f, 1, 1, 1040);
+      expect(f.tree().location(1)).toEqual({workspace: 0, output: 0, floating: true});
     });
   });
 });

@@ -633,6 +633,45 @@ export class Tree {
     ws.focusedFloating = window;
   }
 
+  /**
+   * Task 20, D6. A floating window's workspace follows the output its frame is actually on: `output` is
+   * where the engine observed the window, and the window joins whatever workspace that output is
+   * currently showing. Returns that workspace, or null when there is nothing to do.
+   *
+   * This is what makes `floating disable` tile a dragged window where the user dropped it. The defect
+   * it fixes was read as a bug in `setFloating(false)`, which re-inserts into `location.workspace` --
+   * but that line is right: the workspace membership reaching it was the lie. Real i3 re-homes a
+   * floating window to the output it is dragged onto, so the only cure that also makes `GetTree`
+   * truthful *while* the window floats is to correct membership at the moment the monitor changes, and
+   * then `setFloating` needs no special case at all.
+   *
+   * Structural only, like `select`/`selectFloating` and for the same reason (Task 19, D5): it moves
+   * membership and touches nothing else. Not `workspace.output`, not `visible` -- so `coverOutputs`
+   * remains the one authority on coverage and no output can be left owning nothing -- and not
+   * `focusedOutput`, which `Engine._selectWindow` owns. It does not take over the destination's
+   * `focusedFloating` either: the window goes to the back of that workspace's floating list, and the
+   * engine raises and selects it through `_selectWindow` when it was the window the user was dragging.
+   *
+   * The caller decides *when* this is legitimate; see `Engine._rehomeFloating` for the one guard that
+   * matters (a window on a parked workspace is in the attic, so a change in its reported monitor is the
+   * compositor relocating it, not the user moving it).
+   */
+  rehomeFloating(window: WindowId, output: MonitorId): number | null {
+    assertWindowId(window);
+    const location = this.location(window);
+    if (!location || !location.floating) return null;
+    const target = this.visible.get(output);
+    if (target === undefined || target === location.workspace) return null;
+    const source = this.workspace(location.workspace);
+    const index = source.floating.indexOf(window);
+    if (index === -1) throw new Error(`floating window ${window} is not owned by its workspace`);
+    source.floating.splice(index, 1);
+    if (source.focusedFloating === window) source.focusedFloating = source.floating[0] ?? null;
+    const destination = this.workspace(target);
+    destination.floating = [...destination.floating.filter(id => id !== window), window];
+    return target;
+  }
+
   setFloating(window: WindowId, enabled: boolean): void {
     assertWindowId(window);
     const location = this.location(window);

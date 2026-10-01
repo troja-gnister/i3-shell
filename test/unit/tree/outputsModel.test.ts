@@ -582,3 +582,93 @@ describe('showWorkspace precedence (Task 19, D1)', () => {
     expect(t.visible.get(3)).toBe(1);
   });
 });
+
+/**
+ * Task 20, D6's layer-0 half. The tree cannot see monitors, so the engine hands it the output a
+ * floating window's frame is actually on and this decides the workspace. Structural only: it moves
+ * membership and nothing else -- no `workspace.output`, no `visible`, no `focusedOutput` (D5 keeps that
+ * policy in `Engine._selectWindow`), so `coverOutputs` stays the sole authority on coverage.
+ *
+ * Every fixture below gives the two outputs different visible workspaces -- output 3 (primary) shows
+ * workspace 0, output 2 shows workspace 1 -- so "re-homed to the destination's workspace" and "left on
+ * its own" are distinguishable outcomes. With one output, or with both showing the same workspace, the
+ * pre-fix behaviour would pass unchanged.
+ */
+describe('rehomeFloating', () => {
+  const twoOutputs = (): Tree => {
+    const t = new Tree(10, outputs, 3);
+    expect(t.visible.get(3)).toBe(0);
+    expect(t.visible.get(2)).toBe(1);
+    return t;
+  };
+
+  it('moves a floating window to the workspace the output it sits on is showing', () => {
+    const t = twoOutputs();
+    t.addFloating(7, 0);
+    expect(t.rehomeFloating(7, 2)).toBe(1);
+    expect(t.location(7)).toEqual({workspace: 1, output: 2, floating: true});
+    expect(t.workspace(0).floating).toEqual([]);
+    expect(t.workspace(1).floating).toEqual([7]);
+    t.check(new Set([7]));
+  });
+
+  it('brings it home again on the trip back, so A23’s round trip holds', () => {
+    const t = twoOutputs();
+    t.addFloating(7, 0);
+    t.rehomeFloating(7, 2);
+    expect(t.rehomeFloating(7, 3)).toBe(0);
+    expect(t.location(7)).toEqual({workspace: 0, output: 3, floating: true});
+    expect(t.workspace(1).floating).toEqual([]);
+    t.setFloating(7, false);
+    expect(t.find(7)).not.toBeNull();
+    expect(t.outputOf(0)).toBe(3);
+    t.check(new Set([7]));
+  });
+
+  it('leaves the vacated workspace’s floating focus on a survivor, not on the window that left', () => {
+    const t = twoOutputs();
+    t.addFloating(7, 0);
+    t.addFloating(8, 0);
+    t.selectFloating(7);
+    expect(t.rehomeFloating(7, 2)).toBe(1);
+    expect(t.workspace(0).focusedFloating).toBe(8);
+    t.check(new Set([7, 8]));
+  });
+
+  it('does not take over the destination’s own floating focus, nor raise above its windows', () => {
+    // The engine calls `_selectWindow` for the dragged window itself; a window re-homed for any other
+    // reason must not steal the focus of a workspace on another screen.
+    const t = twoOutputs();
+    t.addFloating(7, 0);
+    t.addFloating(9, 1);
+    expect(t.rehomeFloating(7, 2)).toBe(1);
+    expect(t.workspace(1).floating).toEqual([9, 7]);
+    expect(t.workspace(1).focusedFloating).toBe(9);
+    t.check(new Set([7, 9]));
+  });
+
+  it('is a no-op for a window already on that output, for a tiled one, and for a dead output', () => {
+    const t = twoOutputs();
+    t.addFloating(7, 0);
+    const tiled = t.insert(8, 0);
+    expect(t.rehomeFloating(7, 3)).toBeNull();
+    expect(t.rehomeFloating(8, 2)).toBeNull();
+    expect(t.rehomeFloating(7, 99)).toBeNull();
+    expect(t.rehomeFloating(77, 2)).toBeNull();
+    expect(t.location(7)).toEqual({workspace: 0, output: 3, floating: true});
+    expect(t.find(8)).toBe(tiled);
+    t.check(new Set([7, 8]));
+  });
+
+  it('changes neither coverage nor the focused output', () => {
+    const t = twoOutputs();
+    t.addFloating(7, 0);
+    const visible = new Map(t.visible);
+    const owners = new Map([...t.workspaces].map(([index, ws]) => [index, ws.output]));
+    t.rehomeFloating(7, 2);
+    expect(t.visible).toEqual(visible);
+    expect(new Map([...t.workspaces].map(([index, ws]) => [index, ws.output]))).toEqual(owners);
+    expect(t.focusedOutput).toBe(3);
+    t.check(new Set([7]));
+  });
+});

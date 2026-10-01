@@ -270,7 +270,16 @@ export class Engine {
         // The commit publishes only when _observe queued something: relayout()
         // and unlock stay unconditional, because scenarios use their revision
         // bump as an ordering barrier.
-        if (read) this.commit(() => this._observe(event.id, read.generation));
+        //
+        // Task 20, D6: a floating window is exempt from reconciliation, so `_observe` returns false for
+        // every frame it reports and the commit used to publish nothing at all -- which meant
+        // `_syncWindow` never ran and the engine never learned that a *drag* had carried the window to
+        // another display. The second disjunct is that one fact, and nothing more; `_observe` still runs
+        // first, since it owns the corrective re-apply, and the re-home itself is `_syncWindow`'s.
+        if (read) this.commit(() => {
+          const reconciling = this._observe(event.id, read.generation);
+          return reconciling || this._crossedOutput(event.id);
+        });
       });
       this._frameReads.set(event.id, {token, generation});
       return;
@@ -884,6 +893,23 @@ export class Engine {
         this._parkOrShow(id, target);
         if (this._disposed) return;
       }
+      // Task 20, D6, and edge-triggered on purpose: only a monitor the compositor reports as having
+      // *changed* since the last observation says the window moved. A level-triggered comparison of
+      // `info.monitor` against `location.output` would fire on every commit and would therefore undo
+      // every deliberate cross-output move of a floating window -- `move container to output`,
+      // `move workspace to output`, `move to workspace N` where N lives elsewhere -- because none of
+      // those translates the window's frame onto the new display, so the monitor legitimately
+      // disagrees with the new workspace until the user drags it.
+      //
+      // `existing` too, not just `old`: a window that has only now (re-)entered the tree took its
+      // workspace from `_adoptionWorkspace` a few lines up, which already consulted `info.monitor` and
+      // deliberately lets the workspace an *evicted* window left outrank it. A monitor that changed
+      // while the window was minimised, sticky or skip-taskbar is measured against a time when it had no
+      // workspace at all, so reading it as a drag would quietly delete that memory.
+      if (existing && old && old.monitor !== info.monitor) {
+        this._rehomeFloating(tree, id, info);
+        if (this._disposed) return;
+      }
     }
     // The same predicate as tree membership, not `minimized` alone: a window
     // excluded for any reason is not ours, and is not in `expected` either, so
@@ -923,6 +949,54 @@ export class Engine {
   private _adoptionWorkspace(tree: Tree, info: WindowInfo, remembered?: number): number {
     if (remembered !== undefined && tree.workspaces.has(remembered)) return remembered;
     return tree.visible.get(info.monitor ?? tree.focusedOutput) ?? tree.activeWorkspace;
+  }
+
+  /**
+   * Task 20, D6: a floating window's workspace follows the output its frame is really on.
+   *
+   * A23 is a Phase 3B acceptance criterion -- a window on the secondary output is tracked and tiled
+   * there -- and the only way a client can change output here is the mouse workflow the user lives on:
+   * float it, drag it across, tile it again. Real i3 re-homes a floating window to the output it is
+   * dropped on, so `floating disable` tiles it there; before this it tiled back into the workspace it
+   * came from, which lives on the output it came from, and the secondary root stayed empty.
+   *
+   * Placed here rather than at `floating disable` because `_syncWindow` already runs for every live
+   * window on every commit and already holds both the previous and the current `WindowInfo`, so the
+   * monitor change costs no new signal and no per-motion work -- the re-home happens once per crossing.
+   * `GetTree`, the bars and `move`/`focus` therefore tell the truth while the window is still floating,
+   * instead of for the one instant `floating disable` corrected them.
+   *
+   * Two guards, and they carry the whole of the risk:
+   *
+   * - **The window must be on screen.** A floating window whose workspace no output is showing is in
+   *   the attic, where its frame is unobservable; a change in its reported monitor is the compositor
+   *   relocating it off a display that has just gone away, not the user dragging it. Without this,
+   *   unplugging an output would scatter the displaced workspace's floating windows onto whichever
+   *   workspace the surviving output happened to show, and Task 16's replug would bring the workspace
+   *   home without them.
+   * - **Only a floating window.** A tiled window's frame is the engine's own output; its monitor
+   *   changing is the engine's doing or a transient mid-relayout, never a statement of intent.
+   *
+   * The focus half is `_selectWindow`'s, per Task 19 D5: the window the user is dragging keeps the
+   * keyboard, so i3's focused output is now the one it landed on. Skipping that would leave the tree's
+   * selection stranded on the old display and make the very next `floating disable` a no-op, since the
+   * `floating` command reads the selection of `activeWorkspace`.
+   */
+  private _rehomeFloating(tree: Tree, id: WindowId, info: WindowInfo): void {
+    const monitor = info.monitor;
+    if (monitor === null) return;
+    const location = tree.location(id);
+    if (!location || !location.floating || monitor === location.output) return;
+    if (tree.outputShowing(location.workspace) === null) return;
+    const dragged = this._selectedWindow() === id;
+    const target = tree.rehomeFloating(id, monitor);
+    if (target === null) return;
+    if (dragged) this._selectWindow(id);
+    // Both workspaces are on screen, so this resolves to LIVE; it is here because every mover of a
+    // window's i3 workspace in this file asserts the native side rather than assuming it (_parkAndShow,
+    // _moveReconfigured, `move container to output`), and a window Mutter parked for its own reasons
+    // is put back on screen by it. One call per crossing, not per motion.
+    this._parkOrShow(id, target);
   }
 
   private _forget(id: WindowId): void {
@@ -1009,6 +1083,23 @@ export class Engine {
       this._unmaximizing.has(id)) return false;
     if (generation === undefined) return false;
     return this._reconciler.observe(id, info.rect, generation);
+  }
+
+  /**
+   * Does the port report this window on a different output than the one the engine last synced?
+   *
+   * Task 20, D6. Compared against `_windows`, which is the engine's last *synced* view, because the
+   * whole point is to tell a commit that the port has outrun it -- so that `_layoutAndPublish`'s sync
+   * loop runs and `_rehomeFloating` gets its chance. Deliberately not narrowed to floating windows: the
+   * narrowing would be a cost guard worth one extra publish at the end of a cross-output tile move, and
+   * `_rehomeFloating` already refuses anything but a floating window, so narrowing here would only add a
+   * second, untested copy of that rule. Terminating either way -- the sync loop writes the new monitor
+   * into `_windows`, so the next frame report sees no change.
+   */
+  private _crossedOutput(id: WindowId): boolean {
+    const info = this._ports.windows.get(id);
+    const old = this._windows.get(id);
+    return info !== undefined && old !== undefined && old.monitor !== info.monitor;
   }
 
   /**

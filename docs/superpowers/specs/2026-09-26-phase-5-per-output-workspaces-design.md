@@ -92,6 +92,23 @@ Pinned by `normalize()` and by property tests:
    if that workspace is visible; otherwise it is on the *attic* (§5). Windows `excludedFromTree`
    rejects — minimised, sticky, `skipTaskbar` — belong to no tree and are never parked; a sticky
    window showing on every output is GNOME's own behaviour and is left alone.
+5. A **floating** window's workspace follows the output its frame is actually on (D6). When the
+   compositor reports a floating window on an output other than the one its workspace belongs to, and
+   the window is on screen, it is re-homed to the workspace that output is currently showing — so
+   `floating disable` tiles it where the user dropped it, which is real i3's behaviour and the only way
+   the mouse can move a window between displays. The re-home happens at the moment the monitor changes
+   (`Engine._rehomeFloating`, driven from `_syncWindow`), not at `floating disable`, so `GetTree`, the
+   bars and `focus`/`move` are truthful while the window is still floating. It is edge-triggered on the
+   reported monitor *changing*: a level-triggered rule would undo every deliberate cross-output move of
+   a floating window, none of which translates the frame. A window whose workspace no output shows is in
+   the attic and is exempt — a change in its reported monitor is the compositor relocating it off a
+   display that has gone, not the user dragging it, and re-homing it would scatter an unplugged output's
+   floating windows and defeat §7's remembering. A window only now entering the tree is exempt for the
+   same reason: §2.6's adoption rule already read its monitor, and the workspace an *evicted* window left
+   outranks it. Membership is all that moves: `Tree.rehomeFloating`
+   writes neither `workspace.output`, `visible` nor `focusedOutput`, so invariants 2 and 3 are
+   untouched, and the focused output follows the *dragged* window through `Engine._selectWindow` alone
+   (Task 19, D5).
 
 ### 2.3 Birth assignment and `workspace N output`
 
