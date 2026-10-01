@@ -23,8 +23,9 @@ import {guard} from './signals';
  */
 export function samePills(current: readonly PillState[], next: readonly PillState[]): boolean {
   return current.length === next.length && current.every((pill, index) =>
-    pill.name === next[index].name && pill.active === next[index].active &&
-    pill.occupied === next[index].occupied);
+    pill.name === next[index].name && pill.focused === next[index].focused &&
+    pill.visible === next[index].visible && pill.occupied === next[index].occupied &&
+    pill.urgent === next[index].urgent);
 }
 
 /**
@@ -50,12 +51,25 @@ export function createModeLabel(): St.Label {
 export function stylePill(pill: St.Button, state: PillState, colors: Colors): void {
   // Plain text: a workspace name comes from the user's config, never markup.
   pill.label = state.name;
-  if (state.active) {
+  // `.i3-shell-ws-urgent` supplies only the border's width and style (the
+  // geometry half); its colour is `currentColor`, i.e. whatever `color:` is
+  // set to below -- so the ring never needs a colour of its own to track.
+  pill.style_class = state.urgent && !state.focused ? 'i3-shell-ws i3-shell-ws-urgent' : 'i3-shell-ws';
+  // Precedence: focused, then urgent, then visible on another output, then merely occupied.
+  if (state.focused) {
     pill.set_style(`background-color: ${colors.focused.background}; color: ${colors.focused.text};`);
     pill.opacity = 255;
+  } else if (state.urgent) {
+    pill.set_style(`background-color: ${colors.urgent.background}; color: ${colors.urgent.text};`);
+    pill.opacity = 255;
+  } else if (state.visible) {
+    // i3's client.focused_inactive: on screen, but not where the keyboard is.
+    pill.set_style(
+      `background-color: ${colors.focusedInactive.background}; color: ${colors.focusedInactive.text};`);
+    pill.opacity = 255;
   } else {
-    // Every inactive pill is transparent, which is also how a test tells the
-    // highlight apart without knowing the colours in force.
+    // Every unfocused, non-visible pill is transparent, which is also how a
+    // test tells the highlight apart without knowing the colours in force.
     pill.set_style(`background-color: transparent; color: ${colors.unfocused.text};`);
     pill.opacity = state.occupied ? 255 : 128;
   }

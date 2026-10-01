@@ -36,7 +36,14 @@ export type Con = LeafCon | SplitCon;
 
 export interface WorkspaceCon {
   index: number;
-  monitors: Map<MonitorId, SplitCon>;
+  /**
+   * The output this workspace lives on. Exactly one, always set — including for a workspace nobody
+   * has shown yet, which the birth assignment puts on the primary. Totality is what lets every
+   * caller skip a null check; `Tree.showWorkspace` is what moves it.
+   */
+  output: MonitorId;
+  /** The one root. Was a `Map<MonitorId, SplitCon>`; i3's level order is output → workspace. */
+  root: SplitCon;
   focusedCon: Con | null;
   floating: WindowId[];
   focusedFloating: WindowId | null;

@@ -41,9 +41,14 @@ def mode(name, count):
 
 NAMES = ['1:I', '2:II', '3:III', '4:IV', '5:V', '6:VI', '7:VII', '8:VIII', '9:IX', '10:X']
 
-def pills(active, occupied):
-    want = [dict(name=name, active=i == active, occupied=i in occupied) for i, name in enumerate(NAMES)]
-    wait_until(lambda: state()['pills'] == want, 'A2 pill names/active/occupied')
+def pills(focused, occupied):
+    # Phase 5 split i3bar's `active` into `focused` (visible on the FOCUSED output, at most one
+    # across all outputs) and `visible` (visible on some output, possibly another), and added
+    # `urgent`. This nested run has a single virtual monitor, so the focused workspace is the only
+    # visible one and the two coincide; a multi-output run could not assume that.
+    want = [dict(name=name, focused=i == focused, visible=i == focused,
+                 occupied=i in occupied, urgent=False) for i, name in enumerate(NAMES)]
+    wait_until(lambda: state()['pills'] == want, 'A2 pill names/focused/visible/occupied/urgent')
     check('A2 pills', state()['pills'], want)
 
 
@@ -83,8 +88,13 @@ try:
     by_title = {w['title']: w for w in windows()}
     monitor = by_title['Tile A']['monitor']
     check('same monitor', by_title['Tile B']['monitor'], monitor)
-    area = next(m['workArea'] for ws in tree()['workspaces'] if ws['index'] == 0
-                for m in ws['monitors'] if m['id'] == monitor)
+    # Phase 5 collapsed the per-workspace `monitors` list into a single `workArea`: a workspace
+    # belongs to exactly one output now, so there is nothing to search. Assert that output is the
+    # one the windows actually landed on rather than taking it on trust.
+    ws0 = next(ws for ws in tree()['workspaces'] if ws['index'] == 0)
+    check('workspace 1 owns the tiles\' output', ws0['output'], monitor)
+    area = ws0['workArea']
+    assert area is not None, 'workspace 1 has no work area'
     x, y, width, height = (area[k] for k in ['x', 'y', 'width', 'height'])
 
     def expected(left_width):
@@ -101,7 +111,7 @@ try:
     assert fixture('Action', '(ss)', ('Tile B', 'present'))[0]
     def second_selected():
         ws = next(ws for ws in tree()['workspaces'] if ws['index'] == 0)
-        root = next(m['root'] for m in ws['monitors'] if m['id'] == monitor)
+        root = ws['root']  # Phase 5: one root per workspace, not one per monitor.
         leaf = next(c for c in root['children'] if c.get('window') == by_title['Tile B']['id'])
         return ws['selected'] == {'kind': 'tiled', 'nodeId': leaf['id']}
     wait_until(second_selected, 'second tile selected')

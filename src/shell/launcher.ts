@@ -80,6 +80,19 @@ export class Launcher {
     if (this._actor) this._render();
   }
 
+  /**
+   * Fix round 1, C1: the engine cannot mirror this with a flag of its own. `close()` runs from seven
+   * sites this class reaches on its own (a toggling second `open()` just above, a dismiss, three launch
+   * paths, the deferred key-focus-out, and `destroy()`), and `_abandon()` never even sets `_actor` when
+   * a modal grab is refused -- an engine-side flag set on the `launcher` command and cleared only where
+   * the engine itself calls `close()` would latch `true` after the very first ordinary use. `_actor` is
+   * already this class's own authority on whether it is open (see `debugState()`), so the port asks it
+   * live instead of being told and hoping nothing forgets to tell it back.
+   */
+  isOpen(): boolean {
+    return this._actor !== null;
+  }
+
   open(request: LauncherRequest): void {
     // Toggle: the binding that opens it closes it. The grab below is taken in
     // POPUP mode, so a second `$mod+d` press never reaches the engine and

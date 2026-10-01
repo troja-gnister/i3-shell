@@ -65,6 +65,7 @@ export function resolve(parsed: ParseResult): ResolveResult {
   const colors: Colors = {...DEFAULT_COLORS};
   const specifiedColors = new Set<keyof Colors>();
   const workspaceNames = new Map<number, string>();
+  const workspaceOutputs = new Map<number, {names: string[]; line: number}>();
   const config: Config = {
     modes, rules, colors, specifiedColors, workspaceNames,
     defaultBorder: {style: 'normal', width: 2},
@@ -72,8 +73,11 @@ export function resolve(parsed: ParseResult): ResolveResult {
     floatingModifier: 'Mod4',
     focusWrapping: 'yes',
     workspaceAutoBackAndForth: false,
+    focusFollowsMouse: true,
+    mouseWarping: 'output',
     stripWorkspaceNumbers: false,
     workspaceCount: 0,
+    workspaceOutputs,
   };
 
   /** Validates a command string now (so typos surface at load) and records workspace numbers/names. */
@@ -137,8 +141,17 @@ export function resolve(parsed: ParseResult): ResolveResult {
       case 'workspace_auto_back_and_forth':
         config.workspaceAutoBackAndForth = d.value === 'yes';
         break;
+      case 'focus_follows_mouse':
+        config.focusFollowsMouse = d.value === 'yes';
+        break;
+      case 'mouse_warping':
+        config.mouseWarping = d.value as Config['mouseWarping'];
+        break;
       case 'strip_workspace_numbers':
         config.stripWorkspaceNumbers = d.value === 'yes';
+        break;
+      case 'workspace_output':
+        workspaceOutputs.set(d.index, {names: d.names, line: d.line});
         break;
       case 'client': {
         const key = d.which === 'focused_inactive' ? 'focusedInactive' : d.which;

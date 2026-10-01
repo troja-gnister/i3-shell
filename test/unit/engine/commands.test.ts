@@ -2,6 +2,7 @@ import {readFileSync} from 'node:fs';
 import {describe, expect, it} from 'vitest';
 import type {Binding, Config} from '../../../src/config/model';
 import type {NodeSnapshot} from '../../../src/runtime/snapshot';
+import {LIVE_WORKSPACE} from '../../../src/runtime/model';
 import {fakeEngine} from './fakeEngine';
 
 const referenceText = readFileSync(new URL('../fixtures/reference.i3config', import.meta.url), 'utf8');
@@ -59,7 +60,7 @@ describe('engine command dispatch', () => {
     f.flush();
     f.engine.run([{type: 'focus', target: 'parent'}], 2);
     const selectedId = f.engine.treeSnapshot().workspaces[0].selected;
-    const sourceBefore = f.engine.treeSnapshot().workspaces[0].monitors[0].root;
+    const sourceBefore = f.engine.treeSnapshot().workspaces[0].root;
     const selectedNodeId = selectedId?.kind === 'tiled' ? selectedId.nodeId : -1;
     const selectedNode = sourceBefore.kind === 'split'
       ? sourceBefore.children.find(child => child.id === selectedNodeId)
@@ -74,9 +75,9 @@ describe('engine command dispatch', () => {
     expect(f.calls.filter(call => call.startsWith('focus:'))).toEqual(['focus:1']);
     expect(f.engine.treeSnapshot().activeWorkspace).toBe(0);
     const snapshot = f.engine.treeSnapshot();
-    expect(windows(snapshot.workspaces[0].monitors[0].root)).toEqual([1]);
+    expect(windows(snapshot.workspaces[0].root)).toEqual([1]);
     expect(snapshot.workspaces[0].selected).toMatchObject({kind: 'tiled'});
-    const destination = snapshot.workspaces[1].monitors[0].root;
+    const destination = snapshot.workspaces[1].root;
     expect(windows(destination)).toEqual([2, 3]);
     expect(destination.kind === 'split' && destination.children[0]).toMatchObject({
       kind: 'split', layout: 'splitv', children: [{window: 2}, {window: 3}],
@@ -84,7 +85,7 @@ describe('engine command dispatch', () => {
 
     f.change(2, {workspace: 1}, 'workspace');
     f.change(3, {workspace: 1}, 'workspace');
-    expect(windows(f.engine.treeSnapshot().workspaces[1].monitors[0].root)).toEqual([2, 3]);
+    expect(windows(f.engine.treeSnapshot().workspaces[1].root)).toEqual([2, 3]);
   });
 
   it('validates a root move target before transferring root contents as one subtree', () => {
@@ -101,13 +102,13 @@ describe('engine command dispatch', () => {
     expect(f.calls.filter(call => call.startsWith('moveTo:'))).toEqual(['moveTo:1:1', 'moveTo:2:1']);
     const snapshot = f.engine.treeSnapshot();
     expect(snapshot.activeWorkspace).toBe(0);
-    expect(snapshot.workspaces[0].monitors[0].root).toMatchObject({children: []});
-    expect(snapshot.workspaces[1].monitors[0].root).toMatchObject({
+    expect(snapshot.workspaces[0].root).toMatchObject({children: []});
+    expect(snapshot.workspaces[1].root).toMatchObject({
       children: [{kind: 'split', layout: 'splith', children: [{window: 1}, {window: 2}]}],
     });
     f.change(1, {workspace: 1}, 'workspace');
     f.change(2, {workspace: 1}, 'workspace');
-    expect(windows(f.engine.treeSnapshot().workspaces[1].monitors[0].root)).toEqual([1, 2]);
+    expect(windows(f.engine.treeSnapshot().workspaces[1].root)).toEqual([1, 2]);
   });
 
   it('dispatches split, focus, move and ten-ppt resize through reference bindings', () => {
@@ -115,18 +116,18 @@ describe('engine command dispatch', () => {
     split.engine.start(); split.add(1); split.add(2); split.flush();
     split.engine.onBinding(binding(split.engine.config, 'default', '<Super>v'), 1);
     split.add(3); split.flush();
-    let root = split.engine.treeSnapshot().workspaces[0].monitors[0].root;
+    let root = split.engine.treeSnapshot().workspaces[0].root;
     expect(root).toMatchObject({children: [{window: 1}, {layout: 'splitv', children: [{window: 2}, {window: 3}]}]});
 
     split.engine.onBinding(binding(split.engine.config, 'default', '<Super>l'), 2);
     expect(split.calls).toContain('focus:2');
     split.engine.onBinding(binding(split.engine.config, 'default', '<Super><Shift>k'), 3);
-    root = split.engine.treeSnapshot().workspaces[0].monitors[0].root;
+    root = split.engine.treeSnapshot().workspaces[0].root;
     expect(root).toMatchObject({children: [{window: 1}, {layout: 'splitv', children: [{window: 3}, {window: 2}]}]});
 
     split.engine.onBinding(binding(split.engine.config, 'default', '<Super>r'), 4);
     split.engine.onBinding(binding(split.engine.config, 'resize', 'semicolon'), 5);
-    root = split.engine.treeSnapshot().workspaces[0].monitors[0].root;
+    root = split.engine.treeSnapshot().workspaces[0].root;
     expect(root.kind === 'split' ? root.percents : []).toEqual([0.4, 0.6]);
   });
 
@@ -151,7 +152,7 @@ describe('engine command dispatch', () => {
     const f = fakeEngine(); f.engine.start(); f.add(1); f.add(2); f.flush();
     f.calls.length = 0;
     f.engine.run([{type: 'layout', layout: 'tabbed'}], 1);
-    expect(f.engine.treeSnapshot().workspaces[0].monitors[0].root).toMatchObject({
+    expect(f.engine.treeSnapshot().workspaces[0].root).toMatchObject({
       children: [{layout: 'tabbed', children: [{window: 1}, {window: 2}]}],
     });
     expect(f.calls.filter(call => call.startsWith('raise:'))).toEqual(['raise:1', 'raise:2']);
@@ -161,7 +162,7 @@ describe('engine command dispatch', () => {
     expect(f.calls.filter(call => call.startsWith('raise:')).at(-2)).toBe('raise:2');
     expect(f.calls.filter(call => call.startsWith('raise:')).at(-1)).toBe('raise:1');
     f.engine.run([{type: 'layout_toggle', cycle: 'split'}], 3);
-    expect(f.engine.treeSnapshot().workspaces[0].monitors[0].root).toMatchObject({
+    expect(f.engine.treeSnapshot().workspaces[0].root).toMatchObject({
       children: [{layout: 'splith'}],
     });
   });
@@ -246,7 +247,7 @@ describe('engine command dispatch', () => {
     f.engine.run([{type: 'resize', action: 'grow', dimension: 'height', px: 10, ppt: 20}], 2);
     f.engine.run([{type: 'split', orientation: 'h'}], 3);
     const before = f.engine.treeSnapshot().workspaces;
-    expect(before[0].monitors[0].root).toMatchObject({
+    expect(before[0].root).toMatchObject({
       children: [
         {window: 1},
         {layout: 'splitv', percents: [0.3, 0.7], children: [{window: 2}, {layout: 'splith', children: [{window: 3}]}]},
@@ -265,26 +266,96 @@ describe('engine command dispatch', () => {
     expect(f.engine.run([{type: 'restart'}], 6)).toBe('restarted');
     const rebuilt = f.engine.treeSnapshot().workspaces;
     expect(rebuilt).not.toEqual(before);
-    expect(windows(rebuilt[0].monitors[0].root)).toEqual([1, 2, 3]);
+    expect(windows(rebuilt[0].root)).toEqual([1, 2, 3]);
   });
 
   it('resolves numeric strings and workspace names before moving the selection', () => {
+    // `workspace N` (Task 7) is what would let a second move act on window 1 again after switching to
+    // where it landed; until then, a second window on the (single, always-visible) active workspace
+    // exercises the same name/number resolution for the second move.
     const f = fakeEngine(referenceText); f.engine.start(); f.add(1); f.flush();
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'name', name: '2:II'}}], 1);
     expect(f.calls).toContain('moveTo:1:1');
-    f.ports.workspaces.activate(1, 2);
-    f.focus(1);
+    f.add(2); f.flush();
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'name', name: '3'}}], 3);
-    expect(f.calls).toContain('moveTo:1:2');
+    // i3 workspace 2 (0-indexed) is not visible on any output, so _moveReconfigured translates the
+    // move to the attic (1), not the raw i3 index.
+    expect(f.calls).toContain('moveTo:2:1');
   });
 
-  it('reports failed workspace activation and does not wrap at workspace zero', () => {
+  it('translates a move destination through visibility, not the raw i3 workspace index (F1)', () => {
+    // Before the attic, moveToWorkspace(id, N) meant GNOME's own workspace N. GNOME now has exactly
+    // two: whether some output currently shows the i3 workspace the window is moving to -- not the
+    // index itself -- decides whether the window lands on LIVE or the attic.
+    const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 10, index: 0}, {id: 11, index: 1}], primary: 10, workspaceCount: 3});
+    f.engine.start();
+    f.add(1); f.add(2); f.flush();   // both land on workspace 0, output 10 -- visible
+
+    f.calls.length = 0;
+    // Window 2 (added last, so it is the active workspace's own selection) moves first. Workspace 1
+    // (i3 "number 2") is visible on output 11: the window must land on LIVE, not on 1.
+    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 0);
+    expect(f.calls).toContain('moveTo:2:0');
+
+    f.calls.length = 0;
+    // Window 1 is still on workspace 0 (the active one), selected now that 2 has left it. Workspace 2
+    // (i3 "number 3") is not shown by either output: the window is parked, in the attic.
+    f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 3, name: '3'}}], 1);
+    expect(f.calls).toContain('moveTo:1:1');
+  });
+
+  it('warns and continues when Mutter refuses a reconfigured move (F1)', () => {
+    const f = fakeEngine('bindsym Mod4+q kill', {workspaceCount: 3});
+    f.engine.start(); f.add(1); f.flush();
+    f.ports.windows.moveToWorkspace = () => false;
+    expect(() => f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 0))
+      .not.toThrow();
+    expect(f.calls.join('\n')).toMatch(/could not move window 1 to workspace 2; leaving it where it was/);
+  });
+
+  it('does not wrap workspace prev below zero', () => {
+    // Before Task 7, `workspace N` moved only GNOME's raw active index (real switching came from this
+    // task), so this used to be exercised alongside a `ports.workspaces.activate` failure -- a failure
+    // mode `workspace N` no longer has: it drives the tree directly, and `_workspaceIndex` (this guard)
+    // gates an unknown target before any of that runs.
     const f = fakeEngine(); f.engine.start();
-    f.ports.workspaces.activate = () => false;
-    expect(f.engine.run([{type: 'workspace', target: {kind: 'number', number: 2, name: '2'}}], 1))
-      .toBe('workspace: activation failed');
-    expect(f.engine.treeSnapshot().activeWorkspace).toBe(0);
     expect(f.engine.run([{type: 'workspace', target: {kind: 'prev'}}], 2)).toBe('workspace: no such workspace');
+  });
+
+  it('workspace number moves focus to the output holding that workspace', () => {
+    const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+    f.engine.start();
+    f.engine.run([{type: 'workspace', target: {kind: 'number', number: 2, name: '2'}}], 1);
+    expect(f.engine.state().focusedOutput).toBe(1);
+    // This focus-only move (nothing visible changes, `swap: false`) still has to relayout: without it,
+    // the cached pills -- and the bar's focused-workspace highlight they drive -- would go stale.
+    expect(f.engine.state().pills[1]!.focused).toBe(true);
+    // Output 0's own workspace 0 is still on screen, just not where the keyboard is now -- i3bar's
+    // third state (Task 8), the whole reason `active` could not describe a two-output desktop.
+    expect(f.engine.state().pills[0]).toMatchObject({visible: true, focused: false});
+  });
+
+  it('workspaceIndexOn resolves a click position back to the real workspace index, per output', () => {
+    const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+    f.engine.start();
+    // Output 0 owns workspaces {0,2,3,...,9} (birthAssignment gives the primary every workspace beyond
+    // the one each other output takes), so position 1 in its own, compacted list is real workspace
+    // index 2, not 1 -- exactly the mismatch a pill click has to resolve through, not around.
+    expect(f.engine.workspaceIndexOn(0, 1)).toBe(2);
+    // Output 1 owns only workspace 1, at position 0.
+    expect(f.engine.workspaceIndexOn(1, 0)).toBe(1);
+    // An output nothing lives on, and a position past the end of a real output's own list, both null.
+    expect(f.engine.workspaceIndexOn(99, 0)).toBeNull();
+    expect(f.engine.workspaceIndexOn(0, 99)).toBeNull();
+  });
+
+  it('workspace number brings an unshown workspace to the focused output', () => {
+    const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+    f.engine.start();
+    f.engine.run([{type: 'workspace', target: {kind: 'number', number: 5, name: '5'}}], 1);
+    expect(f.engine.state().focusedOutput).toBe(0);
+    expect(f.tree().outputOf(4)).toBe(0);
+    expect(f.tree().visible.get(1)).toBe(1);   // the other output did not move
   });
 
   it('observes earlier mutations in a compound floating command chain', () => {
@@ -376,5 +447,416 @@ describe('engine command dispatch', () => {
     ], 3);
     expect(f.calls.filter(call => call.startsWith('fullscreen:'))).toEqual([]);
     expect(f.applied).toEqual([]);
+  });
+
+  // Task 13: `focus output <left|right|up|down|primary|name>` -- the first production caller of both
+  // `resolveOutputArg` (tree/outputs.ts) and `_warpToFocusedOutput` (Task 12).
+  describe('focus output', () => {
+    it('moves the focused output and the selection with it', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.mapOn(1, 2);   // output 1's own window
+      // Task 23, D7: `mapOn` leaves focus on the output it mapped onto, which is where the user who
+      // opened the window would be standing; this test needs them back on output 0 before crossing right.
+      expect(f.engine.run([{type: 'focus_output', target: 'left'}], 0)).toBe('focus output');
+      f.calls.length = 0;
+      expect(f.engine.run([{type: 'focus_output', target: 'right'}], 1)).toBe('focus output');
+      expect(f.engine.state().focusedOutput).toBe(1);
+      expect(f.calls).toContain('focus:2');
+    });
+
+    it('focuses an output whose visible workspace is empty', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      expect(f.engine.run([{type: 'focus_output', target: 'right'}], 1)).toBe('focus output');
+      expect(f.engine.state().focusedOutput).toBe(1);
+    });
+
+    it('is a no-op off the end and never wraps', () => {
+      // Outputs are physical; wrapping between them is never what a user means, and an edge is an
+      // ordinary thing to hit -- no warning either.
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      expect(f.engine.run([{type: 'focus_output', target: 'left'}], 1)).toBe('focus output: no such output');
+      expect(f.engine.state().focusedOutput).toBe(0);
+      expect(f.calls.filter(call => call.startsWith('warn:'))).toEqual([]);
+    });
+
+    it('warps the pointer when a command changes output, and not when mouse_warping is none', () => {
+      const warped = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      warped.engine.start();
+      warped.engine.run([{type: 'focus_output', target: 'right'}], 1);
+      expect(warped.pointer.warps().length).toBe(1);
+
+      const still = fakeEngine('mouse_warping none\n', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      still.engine.start();
+      still.engine.run([{type: 'focus_output', target: 'right'}], 1);
+      expect(still.pointer.warps()).toEqual([]);
+    });
+
+    it('does not warp while the launcher holds its grab', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.engine.run([{type: 'launcher', term: null}], 0);
+      f.engine.run([{type: 'focus_output', target: 'right'}], 1);
+      expect(f.pointer.warps()).toEqual([]);
+    });
+
+    it('is unchanged, and does not warp, when the target is already the focused output', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      expect(f.engine.run([{type: 'focus_output', target: 'primary'}], 1)).toBe('focus output: unchanged');
+      expect(f.engine.state().focusedOutput).toBe(0);
+      expect(f.pointer.warps()).toEqual([]);
+    });
+
+    it('resolves a connector name', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {
+        monitors: [{id: 0, index: 0, connectors: ['HDMI-1']}, {id: 1, index: 1, connectors: ['DP-1']}],
+        primary: 0, workspaceCount: 10,
+      });
+      f.engine.start();
+      expect(f.engine.run([{type: 'focus_output', target: {name: 'DP-1'}}], 1)).toBe('focus output');
+      expect(f.engine.state().focusedOutput).toBe(1);
+    });
+  });
+
+  // Task 14: the directional `focus`/`move` commands cross the output edge instead of wrapping. The
+  // config's effective focus_wrapping is `yes` (resolve.ts's default), so a fixture with only one
+  // window per output cannot tell "wrapped inside" apart from "crossed over" -- both land on the only
+  // other window there is. Every output below therefore carries at least two windows.
+  describe('focus and move across the output edge', () => {
+    it('focus right crosses to the neighbouring output at its edge rather than wrapping', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.mapOn(0, 1);
+      f.mapOn(0, 2);
+      f.mapOn(1, 3);
+      f.mapOn(1, 4);
+      f.focus(2); // rightmost/focused window on output 0, which brings the focused output back to 0
+      f.calls.length = 0;
+
+      expect(f.engine.run([{type: 'focus', target: 'right'}], 1)).toBe('focus right');
+      expect(f.engine.state().focusedOutput).toBe(1);
+      // Entering edge for `right` is output 1's left, its first child -- window 3, not window 4.
+      expect(f.calls).toContain('focus:3');
+    });
+
+    it('focus right still wraps inside one output when there is no neighbour', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1);
+      f.add(2);
+      f.focus(1); // leftmost child; moving further left has no sibling and no neighbouring output
+      f.calls.length = 0;
+
+      expect(f.engine.run([{type: 'focus', target: 'left'}], 1)).toBe('focus left');
+      expect(f.engine.state().focusedOutput).toBe(0);
+      // No neighbour exists, so the config's own focus_wrapping (`yes`) wraps to the far child.
+      expect(f.calls).toContain('focus:2');
+    });
+
+    it('move right at the edge inserts into the neighbouring output at its entering edge', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.mapOn(0, 1);
+      f.mapOn(1, 3);
+      f.mapOn(1, 4);
+      f.focus(1);
+      f.calls.length = 0;
+      // `mapOn` crosses outputs through the real `focus output`, which warps; the warp this test measures
+      // is the one the `move` below makes.
+      f.pointer.clear();
+
+      expect(f.engine.run([{type: 'move', direction: 'right'}], 1)).toBe('move right');
+      expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: false});
+      expect(f.engine.state().focusedOutput).toBe(1);
+      // Fix round 1, folded minor 2: `moveIntoOutput` changed `focusedOutput` exactly as
+      // `enterOutput`/`focus_output` do, so the pointer follows here too -- pinned, not left to
+      // inspection.
+      expect(f.pointer.warps().length).toBe(1);
+    });
+
+    it('move right is a no-op at the edge when there is no neighbour -- move never wraps', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1);
+      f.add(2);
+      f.focus(2);
+      f.calls.length = 0;
+
+      expect(f.engine.run([{type: 'move', direction: 'right'}], 1)).toBe('move right: no target');
+      expect(f.engine.state().focusedOutput).toBe(0);
+    });
+
+    // Fix round 1, folded minor 1: the engine path is where the user's actual case lives -- this whole
+    // phase exists because an empty display was otherwise unreachable by direction. Only the tree-level
+    // `enterOutput` test covered this before.
+    it('focus right crosses into an empty neighbouring output', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      f.add(2, {monitor: 0});
+      f.focus(2);
+      f.calls.length = 0;
+
+      expect(f.engine.run([{type: 'focus', target: 'right'}], 1)).toBe('focus right');
+      expect(f.engine.state().focusedOutput).toBe(1);
+      // Nothing on output 1 to activate, but the crossing itself still happened and the pointer follows.
+      expect(f.calls.filter(call => call.startsWith('focus:'))).toEqual([]);
+      expect(f.pointer.warps().length).toBe(1);
+    });
+  });
+
+  // Task 15: `move container to output` is the command this whole phase exists for -- before it, a
+  // window stranded on a display nobody was looking at could not be moved by any binding at all.
+  describe('move container/workspace to output', () => {
+    it('move container to output rescues a window stranded on another screen', () => {
+      // The defect this phase exists for: a window on the television with no command able to move it.
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.mapOn(1, 8);
+      expect(f.engine.state().focusedOutput).toBe(1);   // `mapOn` already took the user to the television
+      expect(f.engine.run([{type: 'move_container_to_output', target: 'left'}], 2)).toBe('move container to output');
+      expect(f.tree().location(8)).toEqual({workspace: 0, output: 0, floating: false});
+    });
+
+    it('move container to output does not follow the window', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1)).toBe('move container to output');
+      expect(f.engine.state().focusedOutput).toBe(0);
+    });
+
+    // Fix round 1, I1: "does not follow the window" has to mean the keyboard does not follow, not
+    // merely that focusedOutput is restored. Two windows on the source output so there is a
+    // distinguishable fallback -- window 1 should be activated, never window 2, which just left.
+    it('move container to output activates the window left behind, not the one that moved', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      f.add(2, {monitor: 0});
+      f.focus(2);
+      f.calls.length = 0;
+
+      expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1)).toBe('move container to output');
+      expect(f.tree().location(2)).toEqual({workspace: 1, output: 1, floating: false});
+      expect(f.calls.filter(call => call.startsWith('focus:'))).toEqual(['focus:1']);
+    });
+
+    // Fix round 1, folded item 1: the user's actual rescue binding is `move container to output
+    // primary`, not a direction -- covered only by the typechecker until now, since both tests above
+    // use `left`/`right`. `primary` also exercises the direction=null branch (normal insertion point
+    // rather than an entering edge) that neither of those does either.
+    it('move container to output accepts a primary target, at the normal insertion point rather than a forced edge', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.mapOn(0, 10);
+      f.mapOn(1, 9);
+      expect(f.engine.state().focusedOutput).toBe(1);
+      expect(f.engine.run([{type: 'move_container_to_output', target: 'primary'}], 2)).toBe('move container to output');
+      expect(f.tree().location(9)).toEqual({workspace: 0, output: 0, floating: false});
+      // `primary` is not a direction: a direction would reseat window 9 at a forced edge (index 0 for
+      // `right`), displacing window 10; the normal insertion point instead leaves window 10 in place.
+      expect(windows(f.engine.treeSnapshot().workspaces[0].root)).toEqual([10, 9]);
+    });
+
+    // Fix round 1, I2: every other moveToWorkspace call site in the engine (_parkAndShow, _parkOrShow)
+    // warns rather than throws on a refused native move; these three call sites now match.
+    it('move container to output warns rather than desyncing when the native move is refused', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      f.refuseMove(1);
+      expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1)).toBe('move container to output');
+      expect(f.calls).toContain('warn:could not show window 1; leaving it parked');
+    });
+
+    it('move workspace to output warns rather than desyncing when the native move is refused', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      f.refuseMove(1);
+      expect(f.engine.run([{type: 'move_workspace_to_output', target: 'right'}], 1)).toBe('move workspace to output');
+      expect(f.calls).toContain('warn:could not show window 1; leaving it parked');
+    });
+
+    // Fix round 2: the ATTIC-bound loop -- parking the windows of the workspace displaced off the
+    // target output -- fires on the ordinary case where that output already has windows on it, not an
+    // edge case. Distinguished from the LIVE-bound warn above by refusing a window that only the
+    // displaced (target-output) workspace owns, never the one arriving.
+    it('move workspace to output warns rather than desyncing when parking the displaced workspace is refused', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      // Mapped in this order on purpose: `mapOn` leaves focus where it mapped, and the command below
+      // moves the focused output's workspace to the right, so the user has to end on output 0.
+      f.mapOn(1, 2);
+      f.mapOn(0, 1);
+      f.refuseMove(2);
+      expect(f.engine.run([{type: 'move_workspace_to_output', target: 'right'}], 1)).toBe('move workspace to output');
+      expect(f.calls).toContain('warn:could not park window 2; leaving it on screen');
+    });
+
+    it('move workspace to output takes the windows with it and parks nothing', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      expect(f.engine.run([{type: 'move_workspace_to_output', target: 'right'}], 1)).toBe('move workspace to output');
+      expect(f.tree().outputOf(0)).toBe(1);
+      expect(f.windows.get(1)!.workspace).toBe(LIVE_WORKSPACE); // still LIVE: it moved output, not visibility
+    });
+
+    // The asymmetry's other direction: unlike the container move above, the workspace you were
+    // looking at went with it, so focus follows.
+    it('move workspace to output follows the workspace', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      f.engine.start();
+      f.add(1, {monitor: 0});
+      expect(f.engine.run([{type: 'move_workspace_to_output', target: 'right'}], 1)).toBe('move workspace to output');
+      expect(f.engine.state().focusedOutput).toBe(1);
+    });
+  });
+});
+
+/**
+ * Task 19, the five live defects found on the user's own desk: a laptop panel (id 2, the primary) plus
+ * one external display (id 3), ten workspaces. Every test here uses that topology, because the defects
+ * are all about which of the two displays a command or a focus report acts on.
+ */
+describe('workspace and focus on two displays (Task 19)', () => {
+  const desk = {monitors: [{id: 2, index: 0}, {id: 3, index: 1}], primary: 2, workspaceCount: 10};
+  const number = (n: number) => ({kind: 'number' as const, number: n, name: String(n)});
+
+  // D1, the tree half: rule 1 of the precedence. A number key must never carry a window to another
+  // display -- it takes the user to the window.
+  it('takes focus to an occupied workspace’s own display instead of dragging its windows', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);
+    f.flush();
+    expect(f.tree().location(7)).toEqual({workspace: 1, output: 3, floating: false});
+    expect(f.engine.state().focusedOutput).toBe(3);   // `mapOn` left the user on the external
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);   // the external looks elsewhere
+    expect([...f.tree().visible]).toEqual([[2, 0], [3, 5]]);
+    f.engine.run([{type: 'focus_output', target: 'left'}], 3);
+    expect(f.engine.state().focusedOutput).toBe(2);
+
+    expect(f.engine.run([{type: 'workspace', target: number(2)}], 4)).toBe('workspace 2');
+    expect(f.tree().location(7)).toEqual({workspace: 1, output: 3, floating: false});
+    expect([...f.tree().visible]).toEqual([[2, 0], [3, 1]]);
+    expect(f.engine.state().focusedOutput).toBe(3);
+  });
+
+  // D1, the engine half: the park/show must follow the output `showWorkspace` resolved, not the output
+  // the user was standing on. Window 8 sits on the workspace being displaced (on the external) and
+  // window 9 on the laptop's own visible workspace, which nothing in this switch touches -- reading the
+  // outgoing workspace off the focused output parks 9 (which stays on screen) and leaves 8 on screen
+  // (which is now hidden), i.e. exactly the "windows carry over and I cannot type into them" report.
+  it('parks and shows on the display the switch actually lands on', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);                                               // workspace 1, on the external
+    f.mapOn(2, 9);                                               // workspace 0, on the laptop
+    f.flush();
+    f.engine.run([{type: 'focus_output', target: 'right'}], 1);
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);   // the external shows workspace 5
+    f.mapOn(3, 8);                                               // workspace 5, on the external
+    f.flush();
+    f.engine.run([{type: 'focus_output', target: 'left'}], 3);
+    f.calls.length = 0;
+
+    expect(f.engine.run([{type: 'workspace', target: number(2)}], 4)).toBe('workspace 2');
+    expect(f.windows.get(7)!.workspace).toBe(LIVE_WORKSPACE);    // came out of the attic
+    expect(f.windows.get(8)!.workspace).toBe(1);                 // the displaced workspace was parked
+    expect(f.windows.get(9)!.workspace).toBe(LIVE_WORKSPACE);    // the laptop still shows its own
+    expect(f.calls.filter(call => call.startsWith('focus:'))).toEqual(['focus:7']);
+  });
+
+  // D1/D4 together: a switch that crosses displays has to take the pointer with it, or the very next
+  // pointer motion gives the focused output back to the display the user left (see
+  // `_warpToFocusedOutput`). A switch that stays on one display must not warp anything.
+  it('warps the pointer only when the switch crosses to another display', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);                                               // and the user is on the external
+    f.flush();
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);
+    f.engine.run([{type: 'focus_output', target: 'left'}], 3);
+    f.calls.length = 0;
+
+    f.engine.run([{type: 'workspace', target: number(4)}], 4);   // empty, materialises on the laptop
+    expect(f.calls.filter(call => call === 'pointer.warp')).toEqual([]);
+    f.engine.run([{type: 'workspace', target: number(2)}], 5);   // occupied, lands on the external
+    expect(f.calls.filter(call => call === 'pointer.warp')).toEqual(['pointer.warp']);
+  });
+
+  // D3: the early return skipped the commit, so `$mod+N` for the workspace you are already on did
+  // nothing at all -- and under sloppy focus (i3's default, mapped to GNOME's sloppy mode) that is
+  // exactly the key the user reaches for when the pointer has given keyboard focus away.
+  it('re-activates the focused workspace’s selection when it is already active', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.add(9, {monitor: 2});
+    f.flush();
+    f.focus(null);                                               // the compositor's focus wandered off
+    f.calls.length = 0;
+
+    expect(f.engine.run([{type: 'workspace', target: number(1)}], 1)).toBe('workspace: already active');
+    // 'decorations' trails every commit; nothing else does, so no relayout and no park/show ran.
+    expect(f.calls.filter(call => call !== 'decorations')).toEqual(['focus:9']);
+  });
+
+  // D5: accepting the compositor's focus for a window has to move the focused output to that window's
+  // display. Without it every workspace-scoped command acts on the display the user left, and the one
+  // the user actually hit -- `move container to workspace N` -- reports "no focused window" because the
+  // stale focused output shows an empty workspace.
+  it('follows the compositor’s focus onto the other display', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);
+    f.flush();
+    f.engine.run([{type: 'focus_output', target: 'left'}], 1);
+    expect(f.engine.state().focusedOutput).toBe(2);              // the laptop, showing an empty workspace
+
+    f.focus(7);                                                  // a click on the window, or sloppy focus
+    expect(f.engine.state().focusedOutput).toBe(3);
+    expect(f.engine.state().activeWorkspace).toBe(1);
+    expect(f.engine.run([{type: 'move_to_workspace', target: number(4)}], 2)).toBe('moved to workspace 4');
+    expect(f.tree().location(7)?.workspace).toBe(3);
+  });
+
+  // D5, the other half of "must remain a valid live output": a parked window's focus report has no
+  // output showing it, so there is nothing to move the focused output to and it must stay put.
+  //
+  // Final review, I1 -- this fixture was rebuilt because a LATER fix emptied it. It used to say
+  // `f.add(7, {monitor: 3})`, which before Task 23 (D7) adopted window 7 onto output 3's workspace 1;
+  // D7 changed live adoption to the FOCUSED output's visible workspace, so window 7 began landing on
+  // workspace 0 -- which the laptop *is* showing. `showing` then equalled `focusedOutput` and the
+  // correct and the wrong answers coincided, leaving the guard unprotected against
+  // `focusedOutput = showing ?? storedOutput`. `mapOn` is the replacement for `{monitor: N}`: it takes
+  // the user to the output first, so the window really does join that output's own workspace. Two
+  // windows, because the selection moving from 8 to 7 is what proves the focus report reached
+  // `_selectWindow` at all rather than being swallowed by `_acceptFocus`'s expected/duplicate guards --
+  // without that, "focused output unchanged" would also pass if nothing ran.
+  it('leaves the focused output alone for a focus report from a workspace nothing is showing', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);                                               // workspace 1, on the external
+    f.mapOn(3, 8);                                               // its neighbour, and the selection
+    f.flush();
+    expect(f.tree().location(7)).toEqual({workspace: 1, output: 3, floating: false});
+    expect(f.tree().selection(1)).not.toEqual({kind: 'tiled', con: f.tree().find(7)});
+
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);   // workspace 1 is parked now
+    expect(f.tree().outputShowing(1)).toBeNull();                // the precondition the name claims
+    expect(f.tree().outputOf(1)).toBe(3);                        // ... and it is NOT the focused output
+    f.engine.run([{type: 'focus_output', target: 'left'}], 3);
+    expect(f.engine.state().focusedOutput).toBe(2);
+
+    f.focus(7);
+    expect(f.tree().selection(1)).toEqual({kind: 'tiled', con: f.tree().find(7)});
+    expect(f.engine.state().focusedOutput).toBe(2);
+    expect(f.engine.state().activeWorkspace).toBe(0);
   });
 });

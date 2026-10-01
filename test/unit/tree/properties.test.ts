@@ -4,6 +4,7 @@ import type {Direction, Layout} from '../../../src/commands/model';
 import type {Wrapping} from '../../../src/tree/focus';
 import {layoutWithRects} from '../../../src/tree/layout';
 import {leaves, type Con, type Rect, type WindowId} from '../../../src/tree/node';
+import {effectiveWorkspaceCount} from '../../../src/tree/outputs';
 import {Tree} from '../../../src/tree/tree';
 
 function checkGeometry(con: Con, rects: ReadonlyMap<Con, Rect>): void {
@@ -72,7 +73,9 @@ interface GeneratedOperation {
 const operation = fc.record({
   kind: fc.constantFrom(...kinds),
   pick: fc.nat(11),
-  workspace: fc.integer({min: 0, max: 1}),
+  // Wide enough that the 'topology' op's requested count (workspace + 1) both shrinks below and
+  // grows above the tree's current size — 1 is too narrow to ever generate real growth.
+  workspace: fc.integer({min: 0, max: 4}),
   direction: fc.constantFrom<Direction>('left', 'right', 'up', 'down'),
   orientation: fc.constantFrom<'h' | 'v' | 'toggle'>('h', 'v', 'toggle'),
   layout: fc.constantFrom<Layout>('splith', 'splitv', 'tabbed', 'stacked'),
@@ -92,14 +95,13 @@ function applyGeneratedOperation(
   const ids = [...expected.keys()].sort((a, b) => a - b);
   const id = ids.length ? ids[op.pick % ids.length] : undefined;
   const workspace = op.workspace % tree.workspaces.size;
-  const monitor = tree.workspace(workspace).monitors.keys().next().value!;
 
   switch (op.kind) {
     case 'insert': {
       const free = Array.from({length: 12}, (_, index) => index + 1)
         .find(candidate => !expected.has(candidate));
       if (free !== undefined) {
-        tree.insert(free, workspace, monitor);
+        tree.insert(free, workspace);
         expected.set(free, workspace);
       }
       return;
@@ -112,7 +114,11 @@ function applyGeneratedOperation(
       return;
     case 'select':
       if (id !== undefined) {
-        tree.activateWorkspace(expected.get(id)!);
+        // was tree.activateWorkspace(...): the test then selects a member inside that workspace, so
+        // both focusedOutput and visible must move onto it, not just focusedOutput.
+        const owner = expected.get(id)!;
+        tree.focusedOutput = tree.outputOf(owner);
+        tree.visible.set(tree.outputOf(owner), owner);
         const con = tree.find(id);
         if (con) tree.select(con);
         else tree.selectFloating(id);
@@ -141,10 +147,8 @@ function applyGeneratedOperation(
       return;
     case 'resize': {
       const rects = new Map<Con, Rect>();
-      for (const root of tree.workspace(tree.activeWorkspace).monitors.values()) {
-        for (const [con, rect] of layoutWithRects(root, area).containers)
-          rects.set(con, rect);
-      }
+      const root = tree.workspace(tree.activeWorkspace).root;
+      for (const [con, rect] of layoutWithRects(root, area).containers) rects.set(con, rect);
       tree.resize({
         action: op.grow ? 'grow' : 'shrink',
         dimension: op.width ? 'width' : 'height',
@@ -155,16 +159,17 @@ function applyGeneratedOperation(
     }
     case 'floating':
       if (id !== undefined) {
-        const owner = expected.get(id)!;
-        const ownerMonitor = tree.workspace(owner).monitors.keys().next().value!;
-        tree.setFloating(id, !tree.location(id)!.floating, ownerMonitor);
+        tree.setFloating(id, !tree.location(id)!.floating);
       }
       return;
     case 'modeToggle':
       tree.focusModeToggle();
       return;
     case 'workspace':
-      tree.activateWorkspace(workspace);
+      // was tree.activateWorkspace(workspace): later operations in the sequence keep reading
+      // activeWorkspace, so both focusedOutput and visible must move, not just be read once.
+      tree.focusedOutput = tree.outputOf(workspace);
+      tree.visible.set(tree.outputOf(workspace), workspace);
       return;
     case 'transfer': {
       const selection = tree.selection();
@@ -174,21 +179,28 @@ function applyGeneratedOperation(
           ? [...leaves(selection.con)].map(con => con.window)
           : [];
       const want = workspace === tree.activeWorkspace ? [] : candidates;
-      const moved = tree.moveToWorkspace(workspace, monitor);
+      const moved = tree.moveToWorkspace(workspace);
       expect(moved).toEqual(want);
       for (const movedId of moved) expected.set(movedId, workspace);
       return;
     }
     case 'topology': {
-      const count = op.workspace + 1;
-      const monitors = op.grow ? [1, 0] : [0];
+      // grow also drops to a single output, so losing one — and regaining one that currently owns no
+      // workspace, on a later op — is exercised here, not just deterministically in topology.test.ts.
+      const requested = op.workspace + 1;
+      const outputs = op.grow
+        ? [{id: 0, index: 0}, {id: 1, index: 1}]
+        : [{id: 0, index: 0}];
+      // reconfigure raises a request below the live output count to match — predicting the same
+      // clamped count is what keeps `want` accurate instead of vacuous.
+      const count = effectiveWorkspaceCount(requested, outputs.length);
       const want = new Map<WindowId, number>();
       for (const [window, owner] of expected) {
         if (owner < count) continue;
         want.set(window, count - 1);
         expected.set(window, count - 1);
       }
-      expect(tree.reconfigure(count, monitors, monitors[0])).toEqual(want);
+      expect(tree.reconfigure(requested, outputs, outputs[0]!.id)).toEqual(want);
       return;
     }
     default: {
@@ -206,7 +218,7 @@ it.each([20260921, 8675309])(
       fc.constantFrom(1, 17, 1919, 1920),
       fc.constantFrom(1, 19, 1049, 1080),
       (operations, width, height) => {
-        const tree = new Tree(2, [0, 1]);
+        const tree = new Tree(2, [{id: 0, index: 0}, {id: 1, index: 1}], 0);
         const expected = new Map<WindowId, number>();
         const area = {x: -13, y: 27, width, height};
 
@@ -219,13 +231,11 @@ it.each([20260921, 8675309])(
 
           const actual = new Map<WindowId, number>();
           for (const workspace of tree.workspaces.values()) {
-            for (const root of workspace.monitors.values()) {
-              const result = layoutWithRects(root, area);
-              checkGeometry(root, result.containers);
-              for (const id of result.windows.keys()) {
-                expect(actual.has(id)).toBe(false);
-                actual.set(id, workspace.index);
-              }
+            const result = layoutWithRects(workspace.root, area);
+            checkGeometry(workspace.root, result.containers);
+            for (const id of result.windows.keys()) {
+              expect(actual.has(id)).toBe(false);
+              actual.set(id, workspace.index);
             }
             for (const id of workspace.floating) {
               expect(actual.has(id)).toBe(false);

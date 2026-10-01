@@ -6,6 +6,7 @@
  * any property on it` and carries on. These doubles record exactly those
  * accesses instead, so a test can assert that nothing reached a disposed actor.
  */
+import type {Colors} from '../../../../src/config/model';
 
 export const criticals: string[] = [];
 
@@ -365,12 +366,13 @@ export function labelsOf(root: FakeActor): string[] {
 }
 
 /**
- * Which pill reads as active. Both renderings paint every inactive pill
- * `background-color: transparent`, so "the one with a background" is the
- * highlight, whatever colours are in force.
+ * Which pill reads as focused. Keyed on `colors.focused.background` specifically, not merely "has a
+ * background" -- since Task 8, a pill that is merely `visible` (on screen, on another output) or
+ * `urgent` also paints a non-transparent background, so "not transparent" alone would answer the
+ * wrong question once a fixture ever renders those states with a different focused pill in the mix.
  */
-export function activeIndexOf(root: FakeActor): number {
-  return pillsOf(root).findIndex(pill => !String(pill.props.style ?? '').includes('transparent'));
+export function activeIndexOf(root: FakeActor, colors: Colors): number {
+  return pillsOf(root).findIndex(pill => String(pill.props.style ?? '').includes(colors.focused.background));
 }
 
 /** The binding-mode label under `root`, if it has been built. */

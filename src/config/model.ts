@@ -73,12 +73,31 @@ export interface Config {
   floatingModifier: 'Mod4' | 'Mod1' | 'none';
   focusWrapping: 'yes' | 'no' | 'force' | 'workspace';
   workspaceAutoBackAndForth: boolean;
+  /**
+   * i3's default is yes, so a config that never mentions it still wants it. Maps to
+   * org.gnome.desktop.wm.preferences focus-mode = sloppy, which is Mutter's own focus-follows-mouse and
+   * has i3's semantics: the window under the pointer takes focus, empty desktop changes nothing.
+   */
+  focusFollowsMouse: boolean;
+  /**
+   * i3's default is `output`: when focus moves to another output the pointer follows.
+   *
+   * Not cosmetic. With focus-mode sloppy and no warp, the stationary pointer's window would take focus
+   * straight back and every keyboard output command would fight the mouse. The two are a pair.
+   */
+  mouseWarping: 'output' | 'none';
   /** bar { strip_workspace_numbers }: render pills without the leading number. */
   stripWorkspaceNumbers: boolean;
   /** Workspace number → full configured name, e.g. 1 → "1:I". */
   workspaceNames: Map<number, string>;
   /** Largest workspace number the config references (1..36); 0 when it references none. */
   workspaceCount: number;
+  /**
+   * `workspace N output <names>`: zero-based workspace index → the outputs it prefers, in order, with
+   * the config line that said so. Names are resolved against the live connector list by the engine,
+   * not here: at parse time no display is known, and a config written on another machine must load.
+   */
+  workspaceOutputs: Map<number, {names: string[]; line: number}>;
 }
 
 /** i3's default colours (client.* directives override them). */

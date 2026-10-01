@@ -101,6 +101,7 @@ interface LauncherLike {
   destroy(): void;
   setColors(colors: Colors): void;
   debugState(): {open: boolean; x: number; y: number; width: number; height: number; selected: string | null};
+  isOpen(): boolean;
 }
 
 // The adapter's GNOME globals belong to the native TS program, so it is loaded
@@ -367,6 +368,24 @@ describe('Launcher: the grab and its teardown', () => {
 
     expect(launcher.debugState().open).toBe(true);
     expect(boxInStage()).toBeDefined();
+  });
+
+  // Fix round 1, C1: `isOpen()` is the engine's whole substitute for a mirrored flag it cannot keep in
+  // sync with this class (see src/engine.ts's EnginePorts.launcher.isOpen doc comment). It has to agree
+  // with `debugState().open` through a normal open/close AND through a refused grab, where `_abandon`
+  // never sets `_actor` at all -- a version that just returned "was `open()` ever called" would answer
+  // `true` here and be exactly the C1 bug moved one file over.
+  it('isOpen() tracks whether the launcher is actually open, not merely opened once', () => {
+    const launcher = build();
+    expect(launcher.isOpen()).toBe(false);
+    launcher.open({area: AREA, term: 'kitty'});
+    expect(launcher.isOpen()).toBe(true);
+    launcher.close();
+    expect(launcher.isOpen()).toBe(false);
+
+    modal.outcome = 'revoke';
+    launcher.open({area: AREA, term: 'kitty'});
+    expect(launcher.isOpen()).toBe(false);
   });
 
   it('is safe to close twice', () => {

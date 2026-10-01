@@ -1,5 +1,9 @@
 import type {Direction, Layout} from '../commands/model';
-import {nextFocus, type Wrapping} from './focus';
+import {descendDirection, nextFocus, type Wrapping} from './focus';
+import {
+  adoptOutput, birthAssignment, coverOutputs, effectiveWorkspaceCount, orderOutputs, reassignLost,
+  resolveShowOutput, type OutputRef,
+} from './outputs';
 import {resizeCon, type ResizeRequest} from './resize';
 import {moveCon, setLayout, splitCon, toggleLayout} from './operations';
 import {
@@ -7,6 +11,7 @@ import {
   descendFocused,
   detach,
   focusChain,
+  isForward,
   leaves,
   replace,
   type AllocateSplit,
@@ -25,8 +30,34 @@ const layouts = new Set<Layout>(['splith', 'splitv', 'tabbed', 'stacked']);
 
 export class Tree {
   readonly workspaces: Map<number, WorkspaceCon>;
-  activeWorkspace: number;
+  /** Which workspace each live output currently shows. Exactly one entry per live output. */
+  readonly visible: Map<MonitorId, number>;
+  focusedOutput: MonitorId;
   private nextNodeId = 1;
+  /**
+   * The live outputs in `orderOutputs`' order (primary first, then the rest by Mutter index):
+   * `coverOutputs` needs them in this order to pick a donor deterministically, and `[...this.visible.keys()]`
+   * is not it -- `reconfigure` deletes dead keys and re-sets survivors, and re-setting an existing `Map`
+   * key leaves it where it was while a newly attached output is appended, so after a replug the key
+   * order diverges from the real one. Assigned from `orderOutputs(...)` here and again in `reconfigure`.
+   */
+  private _ordered: readonly MonitorId[];
+  /**
+   * Where a workspace lived before its output went away, so a replug puts it back.
+   *
+   * Meaningful only because MonitorIds derives a stable id from the sorted connector list: an output
+   * that comes back is recognised as the same one rather than as a new one. Written only for a
+   * workspace an unplug actually displaced, and erased the moment that workspace is home again.
+   */
+  private _remembered = new Map<number, MonitorId>();
+  /**
+   * The config's `workspace N output X` pins, as the last construction or reconfigure resolved them.
+   *
+   * Held rather than passed per call because `showWorkspace` needs them too (Task 19, D1 rule 2: a pin
+   * wins for an empty workspace on every switch, not only at birth), and the `workspace` command has no
+   * business threading config through the tree's own switch path.
+   */
+  private _pinned: ReadonlyMap<number, MonitorId>;
 
   allocateSplit: AllocateSplit = (layout, root = false) => {
     if (!layouts.has(layout)) throw new Error(`invalid layout: ${String(layout)}`);
@@ -43,31 +74,197 @@ export class Tree {
     };
   };
 
-  constructor(workspaceCount: number, monitors: readonly MonitorId[]) {
-    assertInteger(workspaceCount, 'workspace count');
+  constructor(
+    requestedWorkspaceCount: number,
+    outputs: readonly OutputRef[],
+    primary: MonitorId,
+    pinned: ReadonlyMap<number, MonitorId> = new Map(),
+  ) {
+    assertInteger(requestedWorkspaceCount, 'workspace count');
+    // Rejected explicitly, before the clamp: only a request that is merely low, not negative, is
+    // meant to be widened. Math.max would otherwise absorb a negative count silently.
+    if (requestedWorkspaceCount < 0) throw new Error('workspace count must be nonnegative');
+    if (outputs.length === 0) throw new Error('at least one monitor is required');
+    const seen = new Set<MonitorId>();
+    for (const output of outputs) {
+      assertNonnegativeInteger(output.id, 'monitor id');
+      if (seen.has(output.id)) throw new Error(`duplicate monitor id ${output.id}`);
+      seen.add(output.id);
+    }
+    assertNonnegativeInteger(primary, 'primary monitor id');
+
+    // i3 creates one workspace per output at startup whatever the config names; raising a request
+    // that falls short keeps invariant 2 (every output shows one of its own) total.
+    const workspaceCount = effectiveWorkspaceCount(requestedWorkspaceCount, outputs.length);
     if (workspaceCount < 1 || workspaceCount > 36)
       throw new Error('workspace count must be between 1 and 36');
-    if (monitors.length === 0) throw new Error('at least one monitor is required');
-    const uniqueMonitors = new Set<MonitorId>();
-    for (const monitor of monitors) {
-      assertNonnegativeInteger(monitor, 'monitor id');
-      if (uniqueMonitors.has(monitor)) throw new Error(`duplicate monitor id ${monitor}`);
-      uniqueMonitors.add(monitor);
-    }
 
+    const ordered = orderOutputs(outputs, primary);
+    this._ordered = ordered;
+    this._pinned = new Map(pinned);
+    // The clamp guarantees enough workspaces exist; it does not guarantee birthAssignment's pins
+    // distributed them so every output has one — coverOutputs repairs that. Nothing is shown yet, so
+    // there is no "currently displayed" workspace for it to avoid taking.
+    const assignment = coverOutputs(birthAssignment(ordered, workspaceCount, pinned), ordered, new Map());
     this.workspaces = new Map();
-    this.activeWorkspace = 0;
     for (let index = 0; index < workspaceCount; index++) {
-      const roots = new Map<MonitorId, SplitCon>();
-      for (const monitor of monitors) roots.set(monitor, this.allocateSplit('splith', true));
       this.workspaces.set(index, {
         index,
-        monitors: roots,
-        focusedCon: roots.values().next().value ?? null,
+        output: assignment.get(index)!,
+        root: this.allocateSplit('splith', true),
+        focusedCon: null,
         floating: [],
         focusedFloating: null,
       });
     }
+    // focusedCon starts at the workspace's own root, as it did when the first monitor's root was taken.
+    for (const workspace of this.workspaces.values()) workspace.focusedCon = workspace.root;
+
+    this.visible = new Map();
+    for (const output of ordered) {
+      const own = [...this.workspaces.values()].filter(w => w.output === output).map(w => w.index);
+      // Invariant 2: every output shows one of its own — sound because coverOutputs guarantees every
+      // output above owns at least one workspace, not merely because workspaceCount is large enough.
+      this.visible.set(output, own[0]!);
+    }
+    this.focusedOutput = primary;
+  }
+
+  /**
+   * Where each displaced workspace is waiting to go home. Empty while nothing is unplugged.
+   *
+   * A copy: `ReadonlyMap` is a compile-time fiction over the real object, and handing out the live map
+   * would let a caller keep a view that mutates under it -- or write through it with one cast.
+   */
+  remembered(): ReadonlyMap<number, MonitorId> {
+    return new Map(this._remembered);
+  }
+
+  /**
+   * Which live output is showing a workspace, or null when nothing is -- a parked workspace.
+   *
+   * Task 19, D5: the engine needs this to move `focusedOutput` when the compositor focuses a window on
+   * another display. `outputOf` is not the same question: a workspace's stored output is where it would
+   * appear, this is where it actually is, and only the latter keeps `activeWorkspace`
+   * (`visible.get(focusedOutput)`) naming the workspace the newly focused window is really on.
+   */
+  outputShowing(workspace: number): MonitorId | null {
+    this.workspace(workspace);
+    for (const [output, visible] of this.visible) if (visible === workspace) return output;
+    return null;
+  }
+
+  /** The output a workspace lives on. */
+  outputOf(workspace: number): MonitorId {
+    return this.workspace(workspace).output;
+  }
+
+  /** An output's workspaces, ascending. Each bar is drawn from this. */
+  workspacesOn(output: MonitorId): number[] {
+    return [...this.workspaces.values()]
+      .filter(workspace => workspace.output === output)
+      .map(workspace => workspace.index)
+      .sort((a, b) => a - b);
+  }
+
+  /** The workspace the user is on. Derived — GNOME's active workspace is a constant now. */
+  get activeWorkspace(): number {
+    const workspace = this.visible.get(this.focusedOutput);
+    if (workspace === undefined)
+      throw new Error(`focused output ${this.focusedOutput} shows no workspace`);
+    return workspace;
+  }
+
+  /**
+   * The live output set, as a stable string, so the engine can tell a real monitor change from a no-op.
+   * Task 5's `_layoutAndPublish` compares it against the topology's sorted ids.
+   */
+  outputSignature(): string {
+    return [...this.visible.keys()].sort((a, b) => a - b).join(',');
+  }
+
+  /** Does a workspace hold any window at all? An empty workspace is the one with no output affinity. */
+  occupied(index: number): boolean {
+    const workspace = this.workspace(index);
+    return workspace.floating.length > 0 || !leaves(workspace.root).next().done;
+  }
+
+  /**
+   * i3's `workspace N`. Two cases, and only two.
+   *
+   * Visible somewhere already: move the focused output to it, changing no window's workspace — this is
+   * i3's "go to where that workspace is", and it is why a keypress can move you to another screen.
+   * Not visible: materialise it, on the output `resolveShowOutput` picks by the controller's precedence
+   * — occupied, then a config pin, then Task 16's memory, then the focused output. With the fixed set of
+   * workspaces this design keeps, "not yet placed" plays the role of i3's "does not exist yet".
+   *
+   * Task 19, D1: this used to read `this.focusedOutput` for every unshown workspace, which dragged an
+   * *occupied* workspace's windows onto whichever display the user happened to be looking at and made a
+   * config pin a one-shot at birth. `outgoing` is returned because the resolved output is no longer
+   * necessarily the focused one, so the caller can no longer work out which workspace it displaced by
+   * reading `visible.get(focusedOutput)` before the call.
+   *
+   * Coverage needs no repair here: an unshown workspace's own output is by definition showing some
+   * *other* workspace of its own, so taking this one away never empties it.
+   */
+  showWorkspace(index: number): {output: MonitorId; swap: boolean; outgoing: number | undefined} {
+    this.workspace(index);
+    for (const [output, visible] of this.visible) {
+      if (visible !== index) continue;
+      this.focusedOutput = output;
+      return {output, swap: false, outgoing: undefined};
+    }
+    const output = resolveShowOutput({
+      occupied: this.occupied(index),
+      current: this.workspace(index).output,
+      pin: this._pinned.get(index),
+      remembered: this._remembered.get(index),
+      focused: this.focusedOutput,
+      live: new Set(this._ordered),
+    });
+    const outgoing = this.visible.get(output);
+    // Round 1, I3 as Task 19 leaves it: the memory is spent only when the workspace really is home
+    // again (rule 3 fired). A switch that merely lands it on a live output while its own is still away
+    // is a refuge, not a home -- erasing the memory there is what would stop the replug bringing it
+    // back. A deliberate `move workspace to output` still clears it; see `moveWorkspaceToOutput`.
+    if (this._remembered.get(index) === output) this._remembered.delete(index);
+    this.workspace(index).output = output;
+    this.visible.set(output, index);
+    this.focusedOutput = output;
+    return {output, swap: true, outgoing};
+  }
+
+  /**
+   * Reassign the focused workspace to `output` and show it there. The vacated output falls back to its
+   * lowest-numbered remaining workspace, or — owning none — one that `coverOutputs` takes from whichever
+   * output holds the most, because invariant 2 forbids an output showing nothing.
+   *
+   * **Do not hand-roll donor selection here.** `coverOutputs` in `src/tree/outputs.ts` is the single place
+   * that decides which output gives one up, it carries the pigeonhole argument for why a donor always
+   * exists, and `reconfigure` already applies it in exactly this shape — build a `preRepair` map of
+   * `index → output`, pass it through `coverOutputs`, write the result back.
+   *
+   * `coverOutputs` needs the outputs in order, and `[...this.visible.keys()]` is not that order (see
+   * `_ordered`'s own comment) — `this._ordered` is read here instead.
+   */
+  moveWorkspaceToOutput(output: MonitorId): {vacated: MonitorId; nowVisible: number} | null {
+    if (!this.visible.has(output)) return null;
+    const index = this.activeWorkspace;
+    const vacated = this.workspace(index).output;
+    if (vacated === output) return null;
+    // Round 1, I3: an explicit move outranks the memory (see `showWorkspace`). Without this, a move
+    // made while the workspace's home output is asleep is silently undone the moment it wakes.
+    this._remembered.delete(index);
+    this.workspace(index).output = output;
+    this.visible.set(output, index);
+    this.focusedOutput = output;
+    // The vacated output may now own nothing; coverOutputs repairs exactly that and nothing else.
+    const preRepair = new Map([...this.workspaces.values()].map(w => [w.index, w.output]));
+    for (const [i, out] of coverOutputs(preRepair, this._ordered, this.visible))
+      this.workspace(i).output = out;
+    const own = this.workspacesOn(vacated);
+    this.visible.set(vacated, own[0]!);
+    return {vacated, nowVisible: own[0]!};
   }
 
   workspace(index: number): WorkspaceCon {
@@ -77,41 +274,35 @@ export class Tree {
     return workspace;
   }
 
-  root(workspace: number, monitor: MonitorId): SplitCon {
-    assertNonnegativeInteger(monitor, 'monitor id');
-    const root = this.workspace(workspace).monitors.get(monitor);
-    if (!root) throw new Error(`unknown monitor ${monitor} on workspace ${workspace}`);
-    return root;
+  // was root(workspace, monitor)
+  root(workspace: number): SplitCon {
+    return this.workspace(workspace).root;
   }
 
+  // was: for (const root of workspace.monitors.values())
   find(window: WindowId): LeafCon | null {
     assertWindowId(window);
     for (const workspace of this.workspaces.values()) {
-      for (const root of workspace.monitors.values()) {
-        const found = findLeaf(root, window);
-        if (found) return found;
-      }
+      const found = findLeaf(workspace.root, window);
+      if (found) return found;
     }
     return null;
   }
 
   owner(con: Con): WorkspaceCon {
-    for (const workspace of this.workspaces.values()) {
-      for (const root of workspace.monitors.values()) {
-        if (contains(root, con)) return workspace;
-      }
-    }
+    for (const workspace of this.workspaces.values())
+      if (contains(workspace.root, con)) return workspace;
     throw new Error(`container ${con.id} is not owned by this tree`);
   }
 
-  location(window: WindowId): {workspace: number; monitor: MonitorId | null; floating: boolean} | null {
+  // `monitor` becomes `output`, and is never null: a floating window's output is its workspace's.
+  location(window: WindowId): {workspace: number; output: MonitorId; floating: boolean} | null {
     assertWindowId(window);
-    for (const [workspaceIndex, workspace] of this.workspaces) {
-      for (const [monitor, root] of workspace.monitors) {
-        if (findLeaf(root, window)) return {workspace: workspaceIndex, monitor, floating: false};
-      }
+    for (const [index, workspace] of this.workspaces) {
+      if (findLeaf(workspace.root, window))
+        return {workspace: index, output: workspace.output, floating: false};
       if (workspace.floating.includes(window))
-        return {workspace: workspaceIndex, monitor: null, floating: true};
+        return {workspace: index, output: workspace.output, floating: true};
     }
     return null;
   }
@@ -210,83 +401,110 @@ export class Tree {
     throw new Error(`floating window ${window} is not owned by this tree`);
   }
 
-  activateWorkspace(index: number): void {
-    this.workspace(index);
-    this.activeWorkspace = index;
-  }
-
   reconfigure(
-    workspaceCount: number,
-    monitors: readonly MonitorId[],
+    requestedWorkspaceCount: number,
+    outputs: readonly OutputRef[],
     primary: MonitorId,
+    pinned: ReadonlyMap<number, MonitorId> = new Map(),
   ): Map<WindowId, number> {
-    assertInteger(workspaceCount, 'workspace count');
-    if (workspaceCount < 1 || workspaceCount > 36)
-      throw new Error('workspace count must be between 1 and 36');
-    if (monitors.length === 0) throw new Error('at least one monitor is required');
-    const targetMonitors = new Set<MonitorId>();
-    for (const monitor of monitors) {
-      assertNonnegativeInteger(monitor, 'monitor id');
-      if (targetMonitors.has(monitor)) throw new Error(`duplicate monitor id ${monitor}`);
-      targetMonitors.add(monitor);
+    assertInteger(requestedWorkspaceCount, 'workspace count');
+    // Rejected explicitly, before the clamp: only a request that is merely low, not negative, is
+    // meant to be widened. Math.max would otherwise absorb a negative count silently.
+    if (requestedWorkspaceCount < 0) throw new Error('workspace count must be nonnegative');
+    if (outputs.length === 0) throw new Error('at least one monitor is required');
+    const targetOutputs = new Set<MonitorId>();
+    for (const output of outputs) {
+      assertNonnegativeInteger(output.id, 'monitor id');
+      if (targetOutputs.has(output.id)) throw new Error(`duplicate monitor id ${output.id}`);
+      targetOutputs.add(output.id);
     }
     assertNonnegativeInteger(primary, 'primary monitor id');
-    if (!targetMonitors.has(primary)) throw new Error(`primary monitor ${primary} is absent`);
+    if (!targetOutputs.has(primary)) throw new Error(`primary monitor ${primary} is absent`);
 
-    for (const workspace of this.workspaces.values()) {
-      const roots = new Map<MonitorId, SplitCon>();
-      for (const monitor of monitors)
-        roots.set(monitor, workspace.monitors.get(monitor) ?? this.allocateSplit('splith', true));
-      const primaryRoot = roots.get(primary)!;
-      for (const [monitor, root] of workspace.monitors) {
-        if (targetMonitors.has(monitor)) continue;
-        const selectedRoot = workspace.focusedCon === root;
-        const hadContents = root.children.length > 0;
-        appendRootContents(root, primaryRoot, this.allocateSplit);
-        if (selectedRoot)
-          workspace.focusedCon = hadContents ? primaryRoot.children.at(-1)! : primaryRoot;
-      }
-      workspace.monitors = roots;
-      this.normalizeWorkspace(workspace, undefined, []);
-    }
+    // i3 creates one workspace per output whatever the config names; raising a request that falls
+    // short of the live output count keeps invariant 2 (every output shows one of its own) total.
+    const workspaceCount = effectiveWorkspaceCount(requestedWorkspaceCount, outputs.length);
+    if (workspaceCount < 1 || workspaceCount > 36)
+      throw new Error('workspace count must be between 1 and 36');
 
+    // Captured before anything below mutates this.visible, so the shrink block still knows which
+    // workspace the user was actually on when this call started.
+    const activeBefore = this.visible.get(this.focusedOutput);
+
+    const live = new Set(outputs.map(output => output.id));
+    const ordered = orderOutputs(outputs, primary);
+    this._ordered = ordered;
+    // Refreshed here as well as at birth: a reload can change the pins, and `showWorkspace` reads them.
+    this._pinned = new Map(pinned);
+
+    const lossAssignment = new Map<number, MonitorId>(
+      [...this.workspaces].map(([index, workspace]) => [index, workspace.output]),
+    );
+    // Remembered before reassigning, and only for a workspace this call actually displaces: recording
+    // every workspace would let an unrelated unplug rewrite a home that never changed, and the next
+    // replug would then drag a workspace the user had since moved back to a stale output.
+    //
+    // Round 1, I4: never overwrite an entry either. A workspace already in exile is sitting on a refuge,
+    // not a home, so a chained unplug (the television sleeps, then the laptop it took refuge on is
+    // undocked) would replace its true home with that refuge and the re-dock would drag it off the
+    // television. The first displacement holds the truth; the entry is cleared when the workspace really
+    // comes home, or when the user re-homes it deliberately.
+    for (const workspace of this.workspaces.values())
+      if (!live.has(workspace.output) && !this._remembered.has(workspace.index))
+        this._remembered.set(workspace.index, workspace.output);
+    for (const [index, output] of reassignLost(lossAssignment, live, primary))
+      this.workspace(index).output = output;
+
+    // `pinned` is consulted only here, for the indices this loop is creating — never for a workspace
+    // that already existed (those are `reassignLost`'s concern above, never a pin's). §2.3: a pin says
+    // where a workspace is born, not where it stays forever; `move workspace to output` must still be
+    // able to move an existing one, so re-reading the pin on every reconfigure would silently undo that.
+    // Memory (`adoptOutput`) is about where a workspace already was, a pin about where one that has
+    // never existed yet should start, so the two do not compete in this loop. They do meet in
+    // `_claimForGained` below, which places an *existing* workspace on an output this call gained --
+    // the one moment outside birth when a workspace is placed on an output for the first time, and the
+    // one place a pin is read for a workspace that already existed. Memory wins there. A pin naming an
+    // output that is not live (or gone missing from `outputs` since it was resolved) is ignored, exactly
+    // as at birth in the constructor.
     for (let index = this.workspaces.size; index < workspaceCount; index++) {
-      const roots = new Map<MonitorId, SplitCon>();
-      for (const monitor of monitors) roots.set(monitor, this.allocateSplit('splith', true));
+      const root = this.allocateSplit('splith', true);
+      const pin = pinned.get(index);
       this.workspaces.set(index, {
         index,
-        monitors: roots,
-        focusedCon: roots.values().next().value ?? null,
+        output: pin !== undefined && targetOutputs.has(pin) ? pin : primary,
+        root,
+        focusedCon: root,
         floating: [],
         focusedFloating: null,
       });
     }
 
+    // Set only when the shrink below runs, so the rebuild after it can prefer "wherever the content
+    // just merged to" over an unrelated lowest-numbered workspace when an output owns both.
+    let destinationIndex: number | undefined;
+
     const moves = new Map<WindowId, number>();
     if (workspaceCount < this.workspaces.size) {
       const destination = this.workspace(workspaceCount - 1);
+      destinationIndex = destination.index;
       let movedActiveCon: Con | null = null;
       let movedActiveFloating: WindowId | null = null;
 
       for (let index = workspaceCount; index < this.workspaces.size; index++) {
         const source = this.workspace(index);
         let selectedCon = source.focusedCon;
-        for (const monitor of monitors) {
-          const sourceRoot = source.monitors.get(monitor)!;
-          for (const leaf of leaves(sourceRoot)) moves.set(leaf.window, destination.index);
-          const selectedRoot = selectedCon === sourceRoot;
-          const hadContents = sourceRoot.children.length > 0;
-          appendRootContents(sourceRoot, destination.monitors.get(monitor)!, this.allocateSplit);
-          if (selectedRoot)
-            selectedCon = hadContents
-              ? destination.monitors.get(monitor)!.children.at(-1)!
-              : null;
-        }
+        const sourceRoot = source.root;
+        for (const leaf of leaves(sourceRoot)) moves.set(leaf.window, destination.index);
+        const selectedRoot = selectedCon === sourceRoot;
+        const hadContents = sourceRoot.children.length > 0;
+        appendRootContents(sourceRoot, destination.root, this.allocateSplit);
+        if (selectedRoot) selectedCon = hadContents ? destination.root.children.at(-1)! : null;
+
         for (const window of source.floating) {
           moves.set(window, destination.index);
           if (!destination.floating.includes(window)) destination.floating.push(window);
         }
-        if (index === this.activeWorkspace) {
+        if (index === activeBefore) {
           if (source.focusedFloating !== null) movedActiveFloating = source.focusedFloating;
           else movedActiveCon = selectedCon;
         }
@@ -294,8 +512,8 @@ export class Tree {
 
       for (let index = this.workspaces.size - 1; index >= workspaceCount; index--)
         this.workspaces.delete(index);
-      if (this.activeWorkspace >= workspaceCount) {
-        this.activeWorkspace = workspaceCount - 1;
+
+      if (activeBefore !== undefined && activeBefore >= workspaceCount) {
         if (movedActiveFloating !== null) {
           destination.focusedFloating = movedActiveFloating;
         } else if (movedActiveCon !== null) {
@@ -306,9 +524,116 @@ export class Tree {
       this.normalizeWorkspace(destination, undefined, []);
     }
 
-    this.activeWorkspace = Math.min(this.activeWorkspace, workspaceCount - 1);
+    // A gained output takes what it is owed before coverOutputs can hand it something arbitrary.
+    // `this.visible` still holds this call's incoming entries here -- dead outputs are pruned only in
+    // the rebuild below -- so an output of `ordered` missing from it is exactly one this call gained,
+    // whether newly attached or back from an unplug. `spokenFor` records what each live output is
+    // currently showing, and the two LOWER tiers of `_claimForGained` -- the pin scan and the
+    // lowest-free scan -- refuse those indices, which is what keeps this pass from starving an existing
+    // output.
+    //
+    // Final review, M2: the MEMORY tier does not. `adoptOutput` consults `_remembered` alone and never
+    // `spokenFor`, so a returning output *does* reclaim a workspace another live output is currently
+    // showing, and that output is pulled off what the user was watching (the rebuild below hands it its
+    // lowest-numbered remaining workspace instead). Reproduced: two outputs, unplug the second,
+    // `showWorkspace(1)` so the primary shows workspace 1, replug -- workspace 1 goes back to the
+    // second output. That is spec §7's ruling, not a bug: a replug restores the desk, and memory
+    // outranks whatever the displaced desk happened to be showing. `coverOutputs` keeps invariant 2
+    // either way. The blanket claim this comment used to make -- "a workspace some live output is
+    // currently showing is never taken" -- was false; do not restore it.
+    const spokenFor = new Set<number>();
+    for (const output of ordered) {
+      const shown = this.visible.get(output);
+      if (shown !== undefined) spokenFor.add(shown);
+    }
+    for (const output of ordered) {
+      if (this.visible.has(output)) continue;
+      const claimed = this._claimForGained(output, pinned, spokenFor, live);
+      if (claimed === null) continue;
+      this.workspace(claimed).output = output;
+      this._remembered.delete(claimed);
+      spokenFor.add(claimed);
+    }
+    // Every other workspace the returning output used to hold comes home too, so a replug restores the
+    // whole desk rather than just the one workspace it shows. A remembered index the shrink above
+    // deleted is dropped instead: there is nothing left to bring home, and keeping it would let a much
+    // later growth resurrect that index straight onto a stale home.
+    for (const [index, output] of [...this._remembered]) {
+      if (!this.workspaces.has(index)) { this._remembered.delete(index); continue; }
+      if (!live.has(output)) continue;
+      this.workspace(index).output = output;
+      this._remembered.delete(index);
+    }
+
+    // Coverage repair: reassignment, growth and the shrink above only move content and existence
+    // around by index, never by ownership, so any of them can still leave a live output owning
+    // nothing (see coverOutputs). This runs after the shrink, not just after growth, because shrink
+    // does not consult ownership either — repairing only beforehand would let it delete the very
+    // workspace just given to a needy output and re-orphan it in the same call.
+    const preRepair = new Map<number, MonitorId>(
+      [...this.workspaces].map(([index, workspace]) => [index, workspace.output]),
+    );
+    for (const [index, output] of coverOutputs(preRepair, ordered, this.visible))
+      this.workspace(index).output = output;
+
+    // Rebuild visibility from scratch, now that ownership is final: an output keeps showing its
+    // workspace if it still owns it; failing that, it prefers wherever the shrink above just merged
+    // content to if it owns that (so the active output keeps watching what it was watching, rather
+    // than jumping to an unrelated workspace merely because it is numbered lowest); failing that, it
+    // takes its lowest-numbered. Roots are never merged, so no layout is lost.
+    for (const output of [...this.visible.keys()]) if (!live.has(output)) this.visible.delete(output);
+    for (const output of ordered) {
+      const own = this.workspacesOn(output);
+      const current = this.visible.get(output);
+      if (current !== undefined && own.includes(current)) continue;
+      this.visible.set(
+        output,
+        destinationIndex !== undefined && own.includes(destinationIndex) ? destinationIndex : own[0]!,
+      );
+    }
+    if (!live.has(this.focusedOutput)) this.focusedOutput = primary;
+
     this.normalize();
     return moves;
+  }
+
+  /**
+   * Which workspace an output this reconfigure gained should take, or null if there is nothing free and
+   * `coverOutputs` must repair the coverage instead.
+   *
+   * Precedence, per the controller's ruling: memory, then a pin, then the lowest-numbered workspace
+   * nothing is spoken for. Memory beats a pin because a pin says where a workspace is *born* and
+   * memory says where one already *was* -- letting a pin win would undo `move workspace to output` on
+   * every replug, the same way re-reading a pin for an existing workspace would (see the growth loop
+   * above). A pin is honoured here and only here for an existing workspace, because this is the one
+   * moment a workspace is placed on an output for the first time outside birth.
+   */
+  private _claimForGained(
+    output: MonitorId,
+    pinned: ReadonlyMap<number, MonitorId>,
+    spokenFor: ReadonlySet<number>,
+    live: ReadonlySet<MonitorId>,
+  ): number | null {
+    const existing = new Map<number, MonitorId>(
+      [...this.workspaces].map(([index, workspace]) => [index, workspace.output]),
+    );
+    const reclaimed = adoptOutput(this._remembered, output, existing);
+    if (reclaimed !== null) return reclaimed;
+    // A workspace another live output is about to reclaim below is not free either, or this output
+    // would be handed something that is taken away again in the same call.
+    const free = (index: number): boolean => {
+      if (spokenFor.has(index)) return false;
+      const home = this._remembered.get(index);
+      return home === undefined || !live.has(home);
+    };
+    const candidates = [...this.workspaces.keys()].filter(free).sort((a, b) => a - b);
+    const pinnedHere = candidates.filter(index => pinned.get(index) === output);
+    if (pinnedHere.length > 0) return pinnedHere[0]!;
+    // A workspace displaced by an unplug in this very call is taken only as a last resort: it still has
+    // a home to go back to, and claiming it erases that memory. An output lost and another gained in
+    // one event (undock, plug a television in) is exactly that case, and the displaced workspace waits
+    // in the attic for its own output instead -- the same place a plain unplug leaves it.
+    return candidates.find(index => !this._remembered.has(index)) ?? candidates[0] ?? null;
   }
 
   addFloating(window: WindowId, workspace: number): void {
@@ -319,7 +644,46 @@ export class Tree {
     ws.focusedFloating = window;
   }
 
-  setFloating(window: WindowId, enabled: boolean, monitor: MonitorId): void {
+  /**
+   * Task 20, D6. A floating window's workspace follows the output its frame is actually on: `output` is
+   * where the engine observed the window, and the window joins whatever workspace that output is
+   * currently showing. Returns that workspace, or null when there is nothing to do.
+   *
+   * This is what makes `floating disable` tile a dragged window where the user dropped it. The defect
+   * it fixes was read as a bug in `setFloating(false)`, which re-inserts into `location.workspace` --
+   * but that line is right: the workspace membership reaching it was the lie. Real i3 re-homes a
+   * floating window to the output it is dragged onto, so the only cure that also makes `GetTree`
+   * truthful *while* the window floats is to correct membership at the moment the monitor changes, and
+   * then `setFloating` needs no special case at all.
+   *
+   * Structural only, like `select`/`selectFloating` and for the same reason (Task 19, D5): it moves
+   * membership and touches nothing else. Not `workspace.output`, not `visible` -- so `coverOutputs`
+   * remains the one authority on coverage and no output can be left owning nothing -- and not
+   * `focusedOutput`, which `Engine._selectWindow` owns. It does not take over the destination's
+   * `focusedFloating` either: the window goes to the back of that workspace's floating list, and the
+   * engine raises and selects it through `_selectWindow` when it was the window the user was dragging.
+   *
+   * The caller decides *when* this is legitimate; see `Engine._rehomeFloating` for the one guard that
+   * matters (a window on a parked workspace is in the attic, so a change in its reported monitor is the
+   * compositor relocating it, not the user moving it).
+   */
+  rehomeFloating(window: WindowId, output: MonitorId): number | null {
+    assertWindowId(window);
+    const location = this.location(window);
+    if (!location || !location.floating) return null;
+    const target = this.visible.get(output);
+    if (target === undefined || target === location.workspace) return null;
+    const source = this.workspace(location.workspace);
+    const index = source.floating.indexOf(window);
+    if (index === -1) throw new Error(`floating window ${window} is not owned by its workspace`);
+    source.floating.splice(index, 1);
+    if (source.focusedFloating === window) source.focusedFloating = source.floating[0] ?? null;
+    const destination = this.workspace(target);
+    destination.floating = [...destination.floating.filter(id => id !== window), window];
+    return target;
+  }
+
+  setFloating(window: WindowId, enabled: boolean): void {
     assertWindowId(window);
     const location = this.location(window);
     if (!location) throw new Error(`window ${window} is not tracked`);
@@ -338,13 +702,12 @@ export class Tree {
       return;
     }
 
-    this.root(location.workspace, monitor);
     const index = workspace.floating.indexOf(window);
     if (index === -1) throw new Error(`floating window ${window} is not owned by its workspace`);
     workspace.floating.splice(index, 1);
     if (workspace.focusedFloating === window)
       workspace.focusedFloating = workspace.floating[0] ?? null;
-    this.insert(window, location.workspace, monitor);
+    this.insert(window, location.workspace);
   }
 
   focusModeToggle(): WindowId | null {
@@ -367,9 +730,10 @@ export class Tree {
     return tiled.window;
   }
 
-  moveToWorkspace(target: number, monitor: MonitorId): WindowId[] {
+  // The target workspace's root is the only candidate now — it has exactly one.
+  moveToWorkspace(target: number): WindowId[] {
     const targetWorkspace = this.workspace(target);
-    const targetRoot = this.root(target, monitor);
+    const targetRoot = targetWorkspace.root;
     const selection = this.selection();
     if (!selection) return [];
 
@@ -426,13 +790,47 @@ export class Tree {
     return windows;
   }
 
-  insert(window: WindowId, workspace: number, monitor: MonitorId): LeafCon {
+  /**
+   * Enter an output's visible workspace from the edge nearest the output being left: moving `right`
+   * enters at its left. Returns the leaf focused, or null when that workspace is empty — in which case
+   * its root is selected, because focus is output-level and an empty output is still focusable.
+   */
+  enterOutput(output: MonitorId, direction: Direction): LeafCon | null {
+    const index = this.visible.get(output);
+    if (index === undefined) return null;
+    this.focusedOutput = output;
+    const root = this.workspace(index).root;
+    const target = descendDirection(root, direction);
+    if (!target) {
+      this.select(root);
+      return null;
+    }
+    this.select(target);
+    return target;
+  }
+
+  /**
+   * Move the selection into an output's visible workspace. `direction` null means the workspace's normal
+   * insertion point (a named or `primary` target); a direction means the entering edge.
+   */
+  moveIntoOutput(output: MonitorId, direction: Direction | null): WindowId[] {
+    const index = this.visible.get(output);
+    if (index === undefined) return [];
+    if (index === this.activeWorkspace) return [];
+    // moveToWorkspace already preserves a moved subtree's structure, layout, percentages and focused
+    // child, including the root-contents case, so the cross-output move is that plus an edge choice.
+    const moved = this.moveToWorkspace(index);
+    if (moved.length > 0 && direction !== null) this._reseatAtEdge(index, direction);
+    if (moved.length > 0) this.focusedOutput = output;
+    return moved;
+  }
+
+  insert(window: WindowId, workspace: number): LeafCon {
     assertWindowId(window);
     const ws = this.workspace(workspace);
-    const root = this.root(workspace, monitor);
     if (this.location(window)) throw new Error(`window ${window} is already tracked`);
 
-    const insertion = this.insertionPoint(ws, root);
+    const insertion = this.insertionPoint(ws, ws.root);
     const leaf: LeafCon = {
       kind: 'leaf',
       id: this.nextNodeId++,
@@ -457,15 +855,13 @@ export class Tree {
         return;
       }
 
-      for (const root of workspace.monitors.values()) {
-        const leaf = findLeaf(root, window);
-        if (!leaf) continue;
-        const fallback = workspace.focusedCon === leaf ? ancestorChain(leaf.parent) : [];
-        if (workspace.focusedCon === leaf) workspace.focusedCon = null;
-        detach(leaf);
-        this.normalizeWorkspace(workspace, undefined, fallback);
-        return;
-      }
+      const leaf = findLeaf(workspace.root, window);
+      if (!leaf) continue;
+      const fallback = workspace.focusedCon === leaf ? ancestorChain(leaf.parent) : [];
+      if (workspace.focusedCon === leaf) workspace.focusedCon = null;
+      detach(leaf);
+      this.normalizeWorkspace(workspace, undefined, fallback);
+      return;
     }
   }
 
@@ -475,6 +871,8 @@ export class Tree {
   }
 
   check(live?: ReadonlySet<WindowId>): void {
+    // this.activeWorkspace itself throws if focusedOutput has no visible entry, so that case never
+    // reaches the "does not exist" check below.
     if (!this.workspaces.has(this.activeWorkspace))
       throw new Error(`active workspace ${this.activeWorkspace} does not exist`);
     if (this.workspaces.size < 1 || this.workspaces.size > 36)
@@ -488,18 +886,25 @@ export class Tree {
       assertNonnegativeInteger(workspaceIndex, 'workspace index');
       if (workspace.index !== workspaceIndex)
         throw new Error(`workspace ${workspaceIndex} has mismatched index ${workspace.index}`);
-      if (workspace.monitors.size === 0)
-        throw new Error(`workspace ${workspaceIndex} has no monitor roots`);
+      assertNonnegativeInteger(workspace.output, 'monitor id');
       const owned = new Set<Con>();
-
-      for (const [monitor, root] of workspace.monitors) {
-        assertNonnegativeInteger(monitor, 'monitor id');
-        inspectCon(root, null, true, seenCons, nodeIds, windowIds, owned);
-      }
+      inspectCon(workspace.root, null, true, seenCons, nodeIds, windowIds, owned);
 
       if (workspace.focusedCon !== null && !owned.has(workspace.focusedCon))
         throw new Error(
           `workspace ${workspaceIndex} tiled selection container ${workspace.focusedCon.id} is outside its workspace`,
+        );
+    }
+
+    // Invariant 2: every output shows a workspace it owns. The constructor and reconfigure both run
+    // coverOutputs so every live output owns at least one — no output should ever have to share — so
+    // a violation here is a real bug, not a degraded-but-acceptable state, and must throw.
+    for (const [output, shown] of this.visible) {
+      const workspace = this.workspaces.get(shown);
+      if (!workspace) throw new Error(`output ${output} shows unknown workspace ${shown}`);
+      if (workspace.output !== output)
+        throw new Error(
+          `output ${output} shows workspace ${shown}, which belongs to output ${workspace.output}`,
         );
     }
 
@@ -532,7 +937,7 @@ export class Tree {
     let fallback = initialFallback;
     if (live) {
       const deadLeaves: LeafCon[] = [];
-      for (const root of workspace.monitors.values()) collectDeadLeaves(root, live, deadLeaves);
+      collectDeadLeaves(workspace.root, live, deadLeaves);
       for (const leaf of deadLeaves) {
         if (!leaf.parent) continue;
         if (workspace.focusedCon === leaf) {
@@ -550,7 +955,7 @@ export class Tree {
     while (changed) {
       changed = false;
       const splits: SplitCon[] = [];
-      for (const root of workspace.monitors.values()) collectSplitsPostorder(root, splits);
+      collectSplitsPostorder(workspace.root, splits);
       for (const con of splits) {
         if (con.root || con.parent === null || !con.parent.children.includes(con)) continue;
         if (con.children.length === 0) {
@@ -595,6 +1000,42 @@ export class Tree {
         ? parent.children.indexOf(selected) + 1
         : parent.children.length,
     };
+  }
+
+  /**
+   * Moves the child `moveToWorkspace` just attached (`workspace.focusedCon`, which `moveToWorkspace`
+   * has already set) directly to the front of the target root's children for a forward direction, or
+   * the back for a backward one — the entering edge.
+   *
+   * Lifts the moved child *out* of whatever pre-existing nested split `insertionPoint` happened to
+   * attach it inside, rather than relocating that split (and every unrelated child it already held) to
+   * the edge. There is no ancestor walk here on purpose: climbing to "the nearest ancestor that is a
+   * direct child of root" would grab a split that was already there before this move and drag its own
+   * other children along with it, and would still leave the moved window nested inside a multi-child
+   * split rather than standing alone at the edge, which is exactly what this method promises.
+   *
+   * Reuses `detach`/`attach` (the same pair `moveCon` uses to relocate a child across a non-adjacent
+   * split) rather than splicing `percents` by hand a second time: detaching renormalizes what remains,
+   * and attaching at the edge index redistributes evenly over the same count, exactly as if the child
+   * had been inserted there to begin with. The follow-up `normalizeWorkspace`, seeded with the old
+   * parent's own ancestor chain, is what lets a split left holding too few -- or a flattenable one --
+   * children collapse, the same as any other mutation in this file.
+   */
+  private _reseatAtEdge(workspaceIndex: number, direction: Direction): void {
+    const workspace = this.workspace(workspaceIndex);
+    const root = workspace.root;
+    const moved = workspace.focusedCon;
+    if (!moved || !moved.parent) return;
+    const to = isForward(direction) ? 0 : root.children.length - 1;
+    // Parentage first, deliberately: once the child is lifted out of a nested split it is nowhere in
+    // `root.children`, so `indexOf` would return -1 -- checking `moved.parent === root` first, with
+    // `&&` short-circuiting, keeps that -1 from ever being compared against `to`.
+    if (moved.parent === root && root.children.indexOf(moved) === to) return;
+    const oldParent = moved.parent;
+    detach(moved);
+    attach(root, moved, isForward(direction) ? 0 : root.children.length);
+    this.select(moved);
+    this.normalizeWorkspace(workspace, undefined, ancestorChain(oldParent));
   }
 }
 
@@ -739,14 +1180,12 @@ function collectSplitsPostorder(con: Con, result: SplitCon[]): void {
 }
 
 function repairWorkspace(workspace: WorkspaceCon, fallback: readonly Con[]): void {
-  for (const root of workspace.monitors.values()) repairFocusedChildren(root);
+  repairFocusedChildren(workspace.root);
   if (workspace.focusedCon === null || !workspaceContains(workspace, workspace.focusedCon)) {
     const ancestor = fallback.find(con => workspaceContains(workspace, con));
-    if (ancestor) workspace.focusedCon = descendFocused(ancestor) ?? ancestor;
-    else {
-      const root = workspace.monitors.values().next().value as SplitCon | undefined;
-      workspace.focusedCon = root ? descendFocused(root) ?? root : null;
-    }
+    workspace.focusedCon = ancestor
+      ? descendFocused(ancestor) ?? ancestor
+      : descendFocused(workspace.root) ?? workspace.root;
   }
   if (workspace.focusedCon) focusChain(workspace.focusedCon);
   if (workspace.focusedFloating !== null && !workspace.floating.includes(workspace.focusedFloating))
@@ -761,10 +1200,7 @@ function repairFocusedChildren(con: Con): void {
 }
 
 function workspaceContains(workspace: WorkspaceCon, target: Con): boolean {
-  for (const root of workspace.monitors.values()) {
-    if (contains(root, target)) return true;
-  }
-  return false;
+  return contains(workspace.root, target);
 }
 
 function assertInteger(value: number, label: string): void {

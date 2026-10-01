@@ -82,7 +82,26 @@ cat > "$SANDBOX/config/glib-2.0/settings/keyfile" <<SETTINGS
 enabled-extensions=$ENABLED
 disable-user-extensions=false
 welcome-dialog-last-shown-version='999.0'
+
+[org/gnome/desktop/interface]
+enable-hot-corners=false
 SETTINGS
+# Hot corners off, for the same reason the ibus stub exists: determinism.
+# This session boots the pointer at (0, 0) -- exactly GNOME's top-left hot corner
+# -- and `mouse_warping output` (i3 behaviour this suite exercises on purpose,
+# `Engine._warpToFocusedOutput`) warps the pointer from there with one call. Mutter
+# applies the hot corner's pressure barrier to that warp: the pointer is CLAMPED on
+# the barrier instead of reaching its destination, the accumulated pressure trips
+# `HotCorner._toggleOverview`, and the session is left in the overview for the rest
+# of the run. In the overview GNOME Shell holds a modal grab and unmaps every client
+# actor, so no bare keystroke can reach a window and every keyboard-focus proof in
+# this suite becomes unprovable -- which is exactly how Task 21's launcher
+# focus-return failure presented. The warp is i3's; the corner is GNOME's desktop
+# furniture and nothing in this project claims anything about it.
+# **Automated coverage therefore excludes the hot-corner interaction**, the same way
+# --no-x11 excludes Xwayland clients: whether i3-shell should disable hot corners
+# itself (it owns `workspaces-only-on-primary` already, spec 9) is a product
+# question for the live walk, not something this harness should decide by accident.
 # No [org/gnome/mutter] group is seeded. Until phase 3B the multi-output run
 # needed workspaces-only-on-primary=false here, because Mutter marks every
 # window on a secondary output sticky while it is true and sticky windows were

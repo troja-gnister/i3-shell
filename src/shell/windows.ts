@@ -150,6 +150,11 @@ function windowInfo(
     rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
     title: window.get_title(),
     wmClass: window.get_wm_class(),
+    instance: window.get_wm_class_instance(),
+    appId: window.get_gtk_application_id(),
+    role: window.get_role(),
+    // A client may raise either hint; i3 treats both as urgency.
+    urgent: window.urgent || window.demands_attention,
     minimized: window.minimized,
     fullscreen: window.is_fullscreen(),
     maximizedH: window.maximized_horizontally,
@@ -181,6 +186,9 @@ function watchWindow(
   connectWindow('notify::on-all-workspaces', 'membership');
   connectWindow('notify::skip-taskbar', 'membership');
   connectWindow('notify::appears-focused', 'focused');
+  connectWindow('notify::title', 'title');
+  connectWindow('notify::urgent', 'urgent');
+  connectWindow('notify::demands-attention', 'urgent');
   const focusId = global.display.connect('notify::focus-window',
     guard('notify::focus-window', () => callback('focused')));
   dispose.push(disconnectOnce(global.display, focusId));

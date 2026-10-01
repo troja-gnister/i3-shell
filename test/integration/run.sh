@@ -21,3 +21,8 @@ bash test/integration/nested.sh --monitor 1920x1080 --monitor 1280x720 -- \
   python3 test/integration/phase2-checks.py --monitors
 bash test/integration/nested.sh --disabled -- python3 test/integration/phase2-checks.py --settings
 bash test/integration/nested.sh --disabled -- python3 test/integration/phase2-checks.py --name-conflict
+bash test/integration/nested.sh --monitor 1920x1080 --monitor 1280x720 -- \
+  python3 test/integration/phase5-checks.py
+bash test/integration/nested.sh --monitor 1920x1080 --monitor 1280x720 -- \
+  python3 test/integration/phase5-checks.py --hotplug
+bash test/integration/nested.sh --disabled -- python3 test/integration/phase5-checks.py --settings

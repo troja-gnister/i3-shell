@@ -112,15 +112,45 @@ describe('readTopology', () => {
         {id: mirrored, index: 1, connectors: ['DP-1', 'DP-2']},
       ],
       workAreas: new Map([
-        [0, new Map([
-          [internal, {x: 0, y: 24, width: 1200, height: 776}],
-          [mirrored, {x: 1200, y: 24, width: 1600, height: 876}],
-        ])],
-        [1, new Map([
-          [internal, {x: 0, y: 0, width: 1200, height: 800}],
-          [mirrored, {x: 1200, y: 0, width: 1600, height: 900}],
-        ])],
+        [internal, {x: 0, y: 24, width: 1200, height: 776}],
+        [mirrored, {x: 1200, y: 24, width: 1600, height: 876}],
       ]),
     });
+  });
+
+  it('yields one work area per output, keyed by MonitorId', () => {
+    // Two outputs, ten GNOME workspaces: the old shape produced ten maps of two entries.
+    const ids = new MonitorIds();
+    const topology = readTopology(ids, source(
+      [{active: true, connector: 'HDMI-1'}, {active: true, connector: 'DP-1'}],
+      new Map([['HDMI-1', 0], ['DP-1', 1]]),
+      0,
+      Array.from({length: 10}, () => ({areas: new Map([
+        [0, {x: 0, y: 32, width: 3840, height: 1048}],
+        [1, {x: 3840, y: 28, width: 1920, height: 1052}],
+      ])})),
+    ));
+
+    expect(topology).not.toBeNull();
+    expect([...topology!.workAreas.keys()].sort()).toEqual([...topology!.monitors.map(m => m.id)].sort());
+    expect(topology!.workAreas.get(topology!.monitors[0]!.id)).toEqual({x: 0, y: 32, width: 3840, height: 1048});
+  });
+
+  it('reads the work area from workspace 0 only, so GNOME having fewer workspaces cannot shrink it', () => {
+    // The attic leaves GNOME with two workspaces (and eventually the live one alone). Every output
+    // must still have a work area, and workspace 1 -- absent here -- must never be consulted.
+    const ids = new MonitorIds();
+    const topology = readTopology(ids, source(
+      [{active: true, connector: 'HDMI-1'}, {active: true, connector: 'DP-1'}],
+      new Map([['HDMI-1', 0], ['DP-1', 1]]),
+      0,
+      [{areas: new Map([
+        [0, {x: 0, y: 32, width: 3840, height: 1048}],
+        [1, {x: 3840, y: 28, width: 1920, height: 1052}],
+      ])}],
+    ));
+
+    expect(topology).not.toBeNull();
+    expect(topology!.workAreas.size).toBe(2);
   });
 });

@@ -25,7 +25,7 @@ describe('ControlObject', () => {
     const tree = JSON.parse(control.GetTree());
     const windows = JSON.parse(control.GetWindows());
 
-    expect(tree.workspaces[0].monitors[0].root.children[0]).toMatchObject({
+    expect(tree.workspaces[0].root.children[0]).toMatchObject({
       window: 1,
       title: 'Terminal',
       wmClass: 'org.example.Terminal',
@@ -47,13 +47,12 @@ describe('ControlObject', () => {
 
     const unavailable = JSON.parse(control.GetState());
     expect(unavailable).toMatchObject({actionMode: 2, ready: false});
-    expect(unavailable.pills[0]).toEqual({name: '1', active: true, occupied: false});
+    expect(unavailable.pills[0]).toEqual({name: '1', focused: true, visible: true, occupied: false, urgent: false});
 
     f.setTopology({
       primary: 10,
       monitors: [{id: 10, index: 0, connectors: ['fixture']}],
-      workAreas: new Map(Array.from({length: 10}, (_, index) =>
-        [index, new Map([[10, {x: 0, y: 30, width: 1000, height: 700}]])])),
+      workAreas: new Map([[10, {x: 0, y: 30, width: 1000, height: 700}]]),
     });
     f.engine.relayout();
     shellReady = false;
@@ -71,7 +70,7 @@ describe('ControlObject', () => {
 
     const state = JSON.parse(control.GetState());
     state.pills[0].name = 'changed by caller';
-    expect(JSON.parse(control.GetState()).pills[0]).toEqual({name: '1', active: true, occupied: true});
+    expect(JSON.parse(control.GetState()).pills[0]).toEqual({name: '1', focused: true, visible: true, occupied: true, urgent: false});
     expect(JSON.parse(control.GetConfigStatus())).toMatchObject({
       path: '/fake/config', source: 'file', loadTime: 123456789, errors: 0, warnings: 0, diagnostics: [],
     });

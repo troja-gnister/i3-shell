@@ -8,15 +8,28 @@ import {SmoothScroll} from '../util/smoothScroll';
 import {applyMode, createModeLabel, createPill, samePills, stylePill, styleModeLabel} from './util/pills';
 import {guard} from './util/signals';
 
-export interface IndicatorPort {
+/**
+ * `Indicator`'s own surface: a flat, single-output pill list, never the engine's per-output map. Named
+ * apart from `EnginePorts.indicator` (`src/engine.ts`) on purpose -- that port takes
+ * `ReadonlyMap<MonitorId, readonly PillState[]>` since Task 8, and this one still takes a plain
+ * `PillState[]`, because the panel only ever renders one output's own list at a time (see below). The
+ * two used to share both the name and the shape; sharing just the name now would be misleading.
+ */
+export interface PanelPillPort {
   setMode(name: string | null): void;
   setColors(colors: Colors): void;
   setPills(pills: PillState[]): void;
   setVisible(visible: boolean): void;
 }
 
-/** One pill per workspace in the left panel box, plus a binding-mode label (i3bar look). */
-export class Indicator implements IndicatorPort {
+/**
+ * One pill per workspace in the left panel box, plus a binding-mode label (i3bar look).
+ *
+ * GNOME's one panel lives on the primary monitor, so `setPills` is always given the primary output's
+ * own list (Task 8) -- src/extension.ts picks that list out of the engine's per-output map before
+ * calling here; every other output gets its own bar instead (src/shell/bars.ts).
+ */
+export class Indicator implements PanelPillPort {
   private readonly _button: PanelMenu.Button;
   private readonly _box: St.BoxLayout;
   private readonly _modeLabel: St.Label;

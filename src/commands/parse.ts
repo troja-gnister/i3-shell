@@ -1,5 +1,6 @@
 import {tokenize, unquote} from '../util/text';
 import type {Command, CommandParseResult, Direction, Layout, WorkspaceTarget} from './model';
+import type {OutputArg} from '../tree/outputs';
 
 /** Splits a command chain on ';' and ',' that are outside double quotes (i3 semantics). */
 export function splitChain(text: string): string[] {
@@ -22,7 +23,10 @@ export function splitChain(text: string): string[] {
 }
 
 const DIRECTIONS: readonly string[] = ['left', 'right', 'up', 'down'];
-const isDirection = (s: string | undefined): s is Direction => s !== undefined && DIRECTIONS.includes(s);
+// Exported for the engine: both the focus/move crossing logic and `move container to output` need this
+// same membership test, and the engine already imports `parseCommands` from this module, so this adds
+// no new dependency edge.
+export const isDirection = (s: string | undefined): s is Direction => s !== undefined && DIRECTIONS.includes(s);
 
 function normalizeLayout(s: string): Layout | null {
   if (s === 'splith' || s === 'splitv' || s === 'tabbed')
@@ -30,6 +34,29 @@ function normalizeLayout(s: string): Layout | null {
   if (s === 'stacking' || s === 'stacked')
     return 'stacked';
   return null;
+}
+
+/**
+ * i3's output argument: a direction, `primary`, or a connector name. Shared by `focus output`, `move
+ * container to output` (Task 14) and `move workspace to output` (Task 15) — one grammar, read once.
+ */
+function outputArg(args: readonly string[]): OutputArg | null {
+  const first = args[0];
+  if (first === undefined) return null;
+  if (isDirection(first) || first === 'primary') return first;
+  return {name: first};
+}
+
+/**
+ * The leading-digits rule behind `workspace number <name>`: "3:III" is workspace 3. Shared with the
+ * config's `workspace <n> output <name...>` directive, which names a workspace the same way — one
+ * grammar, read in one place.
+ */
+export function workspaceNumber(word: string | undefined): number | null {
+  if (word === undefined)
+    return null;
+  const m = /^(\d+)/.exec(unquote(word));
+  return m ? parseInt(m[1], 10) : null;
 }
 
 function workspaceTarget(args: string[]): WorkspaceTarget | null {
@@ -43,10 +70,10 @@ function workspaceTarget(args: string[]): WorkspaceTarget | null {
     return {kind: 'back_and_forth'};
   if (args[0] === 'number') {
     const name = unquote(args.slice(1).join(' '));
-    const m = /^(\d+)/.exec(name);
-    if (!m)
+    const number = workspaceNumber(name);
+    if (number === null)
       return null;
-    return {kind: 'number', number: parseInt(m[1], 10), name};
+    return {kind: 'number', number, name};
   }
   return {kind: 'name', name: unquote(args.join(' '))};
 }
@@ -71,6 +98,10 @@ function parseOne(segment: string): Command | string {
     case 'kill':
       return {type: 'kill'};
     case 'focus': {
+      if (args[0] === 'output') {
+        const target = outputArg(args.slice(1));
+        return target ? {type: 'focus_output', target} : 'focus output: expected left|right|up|down|primary|<name>';
+      }
       const a = args[0];
       if (isDirection(a) || a === 'parent' || a === 'child' || a === 'mode_toggle')
         return {type: 'focus', target: a};
@@ -79,6 +110,18 @@ function parseOne(segment: string): Command | string {
     case 'move': {
       if (isDirection(args[0]))
         return {type: 'move', direction: args[0]};
+      if (args[0] === 'container' && args[1] === 'to' && args[2] === 'output') {
+        const target = outputArg(args.slice(3));
+        return target
+          ? {type: 'move_container_to_output', target}
+          : 'move container to output: expected left|right|up|down|primary|<name>';
+      }
+      if (args[0] === 'workspace' && args[1] === 'to' && args[2] === 'output') {
+        const target = outputArg(args.slice(3));
+        return target
+          ? {type: 'move_workspace_to_output', target}
+          : 'move workspace to output: expected left|right|up|down|primary|<name>';
+      }
       if (args[0] === 'container' && args[1] === 'to' && args[2] === 'workspace') {
         const target = workspaceTarget(args.slice(3));
         return target ? {type: 'move_to_workspace', target} : 'move container to workspace: missing target';

@@ -10,6 +10,7 @@ import {planOverrides} from './config/overridePlan';
 import {Engine} from './engine';
 import type {LoadedConfig} from './engine';
 import type {PillState} from './runtime/model';
+import type {MonitorId} from './tree/node';
 import {AppCatalogue} from './shell/appCatalogue';
 import {MonitorBars} from './shell/bars';
 import {ConfigLoader} from './shell/configLoader';
@@ -21,6 +22,7 @@ import {Indicator} from './shell/indicator';
 import {KeyBinder} from './shell/keys';
 import {Launcher} from './shell/launcher';
 import type {RecencyStore} from './shell/launcher';
+import {Pointer} from './shell/pointer';
 import {SettingsRecency} from './shell/recency';
 import {log} from './shell/log';
 import {notify} from './shell/notify';
@@ -100,22 +102,62 @@ export default class I3ShellExtension extends Extension {
     const runNow = (command: Command): void => {
       this._engine?.run([command], global.get_current_time());
     };
-    const activateWorkspace = (index: number): void => {
+    const switchToWorkspace = (index: number): void => {
       runNow({type: 'workspace', target: {kind: 'number', number: index + 1, name: String(index + 1)}});
     };
-    const indicator = new Indicator(DEFAULT_COLORS, activateWorkspace,
+    // Mutter's own monitor index -> this project's stable output id; the same lookup ManagedWindows
+    // uses above, needed here because a pill click reports Mutter's index (the primary's, or a bar's
+    // own), never the id directly.
+    const monitorIdOf = (index: number): MonitorId | undefined => geometry.monitorId(index);
+    const indicator = new Indicator(DEFAULT_COLORS,
+      // The panel always shows the primary's own pills, so a click's position is resolved against it.
+      // Task 8: once a bar shows only its own output's workspaces, a pill's position in that list is no
+      // longer its workspace's own index -- Engine.workspaceIndexOn is the inverse of the grouping the
+      // engine published pills with, turning the click back into the workspace it was built for.
+      position => {
+        const primaryId = monitorIdOf(Main.layoutManager.primaryIndex);
+        if (primaryId === undefined) {
+          // Distinguishable on purpose from the "no workspace at that position" warning below: this
+          // one means the geometry backend has no id for the primary monitor yet, not that the click
+          // itself was stale.
+          log.warn(`pill click: no output id yet for the primary monitor (position ${position})`);
+          return;
+        }
+        const index = this._engine?.workspaceIndexOn(primaryId, position);
+        if (index === null || index === undefined) {
+          log.warn(`pill click: no workspace at position ${position} on output ${primaryId}`);
+          return;
+        }
+        switchToWorkspace(index);
+      },
       direction => runNow({type: 'workspace', target: {kind: direction}}));
     this._indicator = indicator;
-    // GNOME has exactly one panel and it lives on the primary monitor, so the
-    // other monitors get their own copy of the same pills (spec 4.3).
-    const bars = new MonitorBars(activateWorkspace);
+    // GNOME has exactly one panel and it lives on the primary monitor, so the other monitors get their
+    // own bar; each now shows only its own output's workspaces (spec 4.3, Task 8), never every
+    // output's pills mirrored everywhere.
+    const bars = new MonitorBars(
+      (output, position) => {
+        const index = this._engine?.workspaceIndexOn(output, position);
+        if (index === null || index === undefined) {
+          log.warn(`pill click: no workspace at position ${position} on output ${output}`);
+          return;
+        }
+        switchToWorkspace(index);
+      },
+      monitorIdOf);
     this._bars = bars;
     // The engine has one indicator port and two things that render it: every
     // call has to reach both, or the bars are built and stay blank forever.
     const chrome = {
       setMode: (name: string | null): void => { indicator.setMode(name); bars.setMode(name); },
       setColors: (colors: Colors): void => { indicator.setColors(colors); bars.setColors(colors); },
-      setPills: (pills: PillState[]): void => { indicator.setPills(pills); bars.setPills(pills); },
+      setPills: (byOutput: ReadonlyMap<MonitorId, readonly PillState[]>): void => {
+        // The panel renders the primary's own list; every other output's bar renders its own
+        // (see the class doc comment on MonitorBars in src/shell/bars.ts).
+        const primaryId = monitorIdOf(Main.layoutManager.primaryIndex);
+        indicator.setPills(primaryId !== undefined ? [...(byOutput.get(primaryId) ?? [])] : []);
+        bars.setPills(byOutput);
+      },
       setVisible: (visible: boolean): void => { indicator.setVisible(visible); bars.setVisible(visible); },
     };
 
@@ -158,6 +200,11 @@ export default class I3ShellExtension extends Extension {
     const keys = new KeyBinder(tracker, (binding, timestamp) => this._engine?.onBinding(binding, timestamp));
     this._keys = keys;
 
+    // `mouse_warping output`'s other half: a real pointer crossing an output boundary reaches the
+    // engine as rule 4's evidence that an empty output is where the user now is. The engine, not this
+    // file, owns Mutter-index -> MonitorId (onPointerMonitorIndex), so only the raw index crosses here.
+    const pointer = new Pointer(tracker, closing.unlessClosing(index => { this._engine?.onPointerMonitorIndex(index); }));
+
     const engine = new Engine({
       keys,
       workspaces,
@@ -176,6 +223,7 @@ export default class I3ShellExtension extends Extension {
       accent,
       decorations,
       launcher,
+      pointer,
       exec: spawnShell,
       notify,
       log,

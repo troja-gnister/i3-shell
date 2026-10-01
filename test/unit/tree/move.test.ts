@@ -84,11 +84,11 @@ describe('directional container movement', () => {
 
 describe('Tree move facade', () => {
   it('normalizes after moving a selected split and keeps its surviving replacement selected', () => {
-    const t = new Tree(1, [0]);
-    const a = t.insert(1, 0, 0);
-    const b = t.insert(2, 0, 0);
-    const d = t.insert(3, 0, 0);
-    const root = t.root(0, 0);
+    const t = new Tree(1, [{id: 0, index: 0}], 0);
+    const a = t.insert(1, 0);
+    const b = t.insert(2, 0);
+    const d = t.insert(3, 0);
+    const root = t.root(0);
     const branch = t.allocateSplit('splitv');
     const selected = t.allocateSplit('splitv');
     const replacement = t.allocateSplit('splith');
@@ -108,9 +108,9 @@ describe('Tree move facade', () => {
   });
 
   it('does not change selection or percentages when movement is blocked', () => {
-    const t = new Tree(1, [0]);
-    const leaf = t.insert(1, 0, 0);
-    const root = t.root(0, 0);
+    const t = new Tree(1, [{id: 0, index: 0}], 0);
+    const leaf = t.insert(1, 0);
+    const root = t.root(0);
     const before = [...root.percents];
 
     expect(t.move('left')).toBe(false);
@@ -121,8 +121,8 @@ describe('Tree move facade', () => {
   });
 
   it('does nothing for a floating selection', () => {
-    const t = new Tree(1, [0]);
-    const tiled = t.insert(1, 0, 0);
+    const t = new Tree(1, [{id: 0, index: 0}], 0);
+    const tiled = t.insert(1, 0);
     const workspace = t.workspace(0);
     workspace.floating = [2];
     t.selectFloating(2);

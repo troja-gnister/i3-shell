@@ -4,13 +4,13 @@ import {Tree} from '../../../src/tree/tree';
 
 describe('Tree ownership and selection', () => {
   it('inserts after a selected leaf and keeps inactive workspace focus local', () => {
-    const t = new Tree(2, [0]);
-    const a = t.insert(1, 0, 0);
-    const b = t.insert(2, 0, 0);
+    const t = new Tree(2, [{id: 0, index: 0}], 0);
+    const a = t.insert(1, 0);
+    const b = t.insert(2, 0);
     t.select(a);
-    const c = t.insert(3, 0, 0);
-    expect(t.root(0, 0).children).toEqual([a, c, b]);
-    t.insert(4, 1, 0);
+    const c = t.insert(3, 0);
+    expect(t.root(0).children).toEqual([a, c, b]);
+    t.insert(4, 1);
     expect(t.activeWorkspace).toBe(0);
     expect(t.selection()).toEqual({kind: 'tiled', con: c});
     expect(t.selection(1)).toEqual({kind: 'tiled', con: t.find(4)});
@@ -18,31 +18,35 @@ describe('Tree ownership and selection', () => {
   });
 
   it('rejects duplicate ids without changing membership', () => {
-    const t = new Tree(1, [0]);
-    const a = t.insert(1, 0, 0);
-    expect(() => t.insert(1, 0, 0)).toThrow();
-    expect(t.root(0, 0).children).toEqual([a]);
+    const t = new Tree(1, [{id: 0, index: 0}], 0);
+    const a = t.insert(1, 0);
+    expect(() => t.insert(1, 0)).toThrow();
+    expect(t.root(0).children).toEqual([a]);
     t.check(new Set([1]));
   });
 
   it('removes the last window but keeps its monitor root', () => {
-    const t = new Tree(1, [0]);
-    const root = t.root(0, 0);
-    t.insert(1, 0, 0);
+    const t = new Tree(1, [{id: 0, index: 0}], 0);
+    const root = t.root(0);
+    t.insert(1, 0);
     t.remove(1);
     t.remove(1);
-    expect(t.root(0, 0)).toBe(root);
+    expect(t.root(0)).toBe(root);
     expect(root.children).toEqual([]);
     expect(root.percents).toEqual([]);
     t.check(new Set());
   });
 
-  it('owns every requested workspace and monitor in supplied order', () => {
-    const t = new Tree(2, [2, 0]);
+  it('assigns each workspace its own output and root in supplied order', () => {
+    // Rewritten from the old spanning model: `new Tree(2, [2, 0])` used to give workspace 0 a root
+    // per monitor. Now each workspace has exactly one output and one root, so this asserts the birth
+    // assignment instead — primary 2 first, then 0 — and that separate workspaces never share a root.
+    const t = new Tree(2, [{id: 2, index: 0}, {id: 0, index: 1}], 2);
     expect([...t.workspaces.keys()]).toEqual([0, 1]);
-    expect([...t.workspace(0).monitors.keys()]).toEqual([2, 0]);
-    expect(t.workspace(0).focusedCon).toBe(t.root(0, 2));
-    expect(t.root(0, 2)).toMatchObject({
+    expect(t.outputOf(0)).toBe(2);
+    expect(t.outputOf(1)).toBe(0);
+    expect(t.workspace(0).focusedCon).toBe(t.root(0));
+    expect(t.root(0)).toMatchObject({
       root: true,
       parent: null,
       layout: 'splith',
@@ -51,31 +55,34 @@ describe('Tree ownership and selection', () => {
       percents: [],
       focusedChild: null,
     });
-    expect(t.root(0, 2)).not.toBe(t.root(1, 2));
+    expect(t.root(0)).not.toBe(t.root(1));
     t.check();
   });
 
-  it('keeps insertion and remembered focus within the addressed monitor root', () => {
-    const t = new Tree(2, [0, 2]);
-    const left = t.insert(1, 0, 0);
-    const firstRight = t.insert(2, 0, 2);
-    const secondRight = t.insert(3, 0, 2);
+  it('keeps insertion and remembered focus within the addressed workspace', () => {
+    // Rewritten: the old test addressed two monitors within a single workspace to show insertion
+    // stays local. Each workspace now owns one root, so the same property is shown across two
+    // workspaces (each on its own output) instead of two monitor roots within one.
+    const t = new Tree(2, [{id: 0, index: 0}, {id: 2, index: 1}], 0);
+    const left = t.insert(1, 0);
+    const firstRight = t.insert(2, 1);
+    const secondRight = t.insert(3, 1);
     t.select(left);
-    const leftBefore = [...t.root(0, 0).children];
+    const leftBefore = [...t.root(0).children];
 
-    const thirdRight = t.insert(4, 0, 2);
+    const thirdRight = t.insert(4, 1);
 
-    expect(t.root(0, 0).children).toEqual(leftBefore);
-    expect(t.root(0, 2).children).toEqual([firstRight, secondRight, thirdRight]);
-    expect(t.selection()).toEqual({kind: 'tiled', con: thirdRight});
+    expect(t.root(0).children).toEqual(leftBefore);
+    expect(t.root(1).children).toEqual([firstRight, secondRight, thirdRight]);
+    expect(t.selection(1)).toEqual({kind: 'tiled', con: thirdRight});
     t.check(new Set([1, 2, 3, 4]));
   });
 
   it('appends after a selected split and updates its local focus chain', () => {
-    const t = new Tree(1, [0]);
-    const a = t.insert(1, 0, 0);
+    const t = new Tree(1, [{id: 0, index: 0}], 0);
+    const a = t.insert(1, 0);
     const nested = t.allocateSplit('splitv');
-    const root = t.root(0, 0);
+    const root = t.root(0);
     root.children = [nested];
     root.percents = [1];
     root.focusedChild = nested;
@@ -86,7 +93,7 @@ describe('Tree ownership and selection', () => {
     a.parent = nested;
     t.select(nested);
 
-    const b = t.insert(2, 0, 0);
+    const b = t.insert(2, 0);
 
     expect(nested.children).toEqual([a, b]);
     expect(nested.focusedChild).toBe(b);
@@ -95,8 +102,8 @@ describe('Tree ownership and selection', () => {
   });
 
   it('selects tiled and floating members without activating their workspace', () => {
-    const t = new Tree(2, [0]);
-    const tiled = t.insert(1, 1, 0);
+    const t = new Tree(2, [{id: 0, index: 0}], 0);
+    const tiled = t.insert(1, 1);
     const ws = t.workspace(1);
     ws.floating = [3, 2];
 
@@ -109,44 +116,49 @@ describe('Tree ownership and selection', () => {
     t.select(tiled);
     expect(t.activeWorkspace).toBe(0);
     expect(t.selection(1)).toEqual({kind: 'tiled', con: tiled});
-    t.activateWorkspace(1);
+    // was t.activateWorkspace(1): the test then reads t.selection() for the now-active workspace, so
+    // both focusedOutput and visible must move (a read-only rewatch would leave the test on workspace 0).
+    t.focusedOutput = t.outputOf(1);
+    t.visible.set(t.outputOf(1), 1);
     expect(t.selection()).toEqual({kind: 'tiled', con: tiled});
     t.check(new Set([1, 2, 3]));
   });
 
   it('reports tiled and floating locations and rejects duplicate windows globally', () => {
-    const t = new Tree(2, [0, 2]);
-    const tiled = t.insert(1, 1, 2);
+    const t = new Tree(2, [{id: 0, index: 0}, {id: 2, index: 1}], 0);
+    const tiled = t.insert(1, 1);
     t.workspace(0).floating.push(2);
     expect(t.find(1)).toBe(tiled);
     expect(t.find(2)).toBeNull();
-    expect(t.location(1)).toEqual({workspace: 1, monitor: 2, floating: false});
-    expect(t.location(2)).toEqual({workspace: 0, monitor: null, floating: true});
+    expect(t.location(1)).toEqual({workspace: 1, output: 2, floating: false});
+    expect(t.location(2)).toEqual({workspace: 0, output: 0, floating: true});
     expect(t.location(9)).toBeNull();
-    expect(() => t.insert(1, 0, 0)).toThrow(/tracked|duplicate/i);
-    expect(() => t.insert(2, 1, 0)).toThrow(/tracked|duplicate/i);
-    expect(t.root(0, 0).children).toEqual([]);
-    expect(t.root(1, 0).children).toEqual([]);
+    expect(() => t.insert(1, 0)).toThrow(/tracked|duplicate/i);
+    expect(() => t.insert(2, 1)).toThrow(/tracked|duplicate/i);
+    // The old two assertions here checked that the *other* monitor's root within each workspace
+    // stayed empty; with one root per workspace there is no other root to check, so only the
+    // untouched workspace 0's root remains meaningful.
+    expect(t.root(0).children).toEqual([]);
   });
 
   it('rejects foreign, detached and forged-parent selections', () => {
-    const t = new Tree(1, [0]);
-    const foreignTree = new Tree(1, [0]);
-    const foreign = foreignTree.insert(1, 0, 0);
+    const t = new Tree(1, [{id: 0, index: 0}], 0);
+    const foreignTree = new Tree(1, [{id: 0, index: 0}], 0);
+    const foreign = foreignTree.insert(1, 0);
     const detached = t.allocateSplit('splitv');
-    const forged: LeafCon = {kind: 'leaf', id: 500, parent: t.root(0, 0), window: 500};
+    const forged: LeafCon = {kind: 'leaf', id: 500, parent: t.root(0), window: 500};
 
     expect(() => t.owner(foreign)).toThrow(/own/i);
     expect(() => t.select(foreign)).toThrow(/own/i);
     expect(() => t.select(detached)).toThrow(/own/i);
     expect(() => t.owner(forged)).toThrow(/own/i);
     expect(() => t.select(forged)).toThrow(/own/i);
-    expect(t.selection()).toEqual({kind: 'tiled', con: t.root(0, 0)});
+    expect(t.selection()).toEqual({kind: 'tiled', con: t.root(0)});
   });
 
   it('removes selected and unselected floating windows with MRU fallback', () => {
-    const t = new Tree(1, [0]);
-    const tiled = t.insert(1, 0, 0);
+    const t = new Tree(1, [{id: 0, index: 0}], 0);
+    const tiled = t.insert(1, 0);
     const ws = t.workspace(0);
     ws.floating = [4, 3, 2];
     t.selectFloating(3);
@@ -160,40 +172,41 @@ describe('Tree ownership and selection', () => {
   });
 
   it.each([
-    [0, [0]],
-    [37, [0]],
-    [1.5, [0]],
-    [1, []],
-    [1, [-1]],
-    [1, [0.5]],
-    [1, [0, 0]],
-  ])('rejects invalid constructor input (%s, %j)', (count, monitors) => {
-    expect(() => new Tree(count, monitors)).toThrow();
+    // A nonnegative requested count below the output count is no longer invalid on its own: it is
+    // raised to cover every output instead (see outputsModel.test.ts). A negative count is rejected
+    // explicitly rather than silently absorbed by that clamp, so it remains invalid here alongside a
+    // count too high to fix by raising it further, and otherwise-malformed input.
+    [-1, [{id: 0, index: 0}], 0],
+    [37, [{id: 0, index: 0}], 0],
+    [1.5, [{id: 0, index: 0}], 0],
+    [1, [], 0],
+    [1, [{id: -1, index: 0}], -1],
+    [1, [{id: 0.5, index: 0}], 0.5],
+    [1, [{id: 0, index: 0}, {id: 0, index: 1}], 0],
+  ])('rejects invalid constructor input (%s, %j, %s)', (count, outputs, primary) => {
+    expect(() => new Tree(count, outputs, primary)).toThrow();
   });
 
   it.each([
-    [-1, 0, 0],
-    [0, 0, 0],
-    [1.5, 0, 0],
-    [1, -1, 0],
-    [1, 0.5, 0],
-    [1, 0, -1],
-    [1, 0, 1],
-    [1, 0, 0.5],
-  ])('rejects invalid insertion (%s, %s, %s) without consuming a node id', (window, workspace, monitor) => {
-    const t = new Tree(1, [0]);
-    const control = new Tree(1, [0]);
-    expect(() => t.insert(window, workspace, monitor)).toThrow();
-    expect(t.insert(10, 0, 0).id).toBe(control.insert(10, 0, 0).id);
+    [-1, 0],
+    [0, 0],
+    [1.5, 0],
+    [1, -1],
+    [1, 0.5],
+  ])('rejects invalid insertion (%s, %s) without consuming a node id', (window, workspace) => {
+    const t = new Tree(1, [{id: 0, index: 0}], 0);
+    const control = new Tree(1, [{id: 0, index: 0}], 0);
+    expect(() => t.insert(window, workspace)).toThrow();
+    expect(t.insert(10, 0).id).toBe(control.insert(10, 0).id);
   });
 
   it('rejects invalid workspace operations and unknown floating selection', () => {
-    const t = new Tree(1, [0]);
+    const t = new Tree(1, [{id: 0, index: 0}], 0);
     expect(() => t.workspace(-1)).toThrow();
     expect(() => t.workspace(1)).toThrow();
-    expect(() => t.root(0, -1)).toThrow();
-    expect(() => t.root(0, 2)).toThrow();
-    expect(() => t.activateWorkspace(1)).toThrow();
+    // was t.root(0, -1) / t.root(0, 2): root() no longer takes a monitor to validate.
+    // was t.activateWorkspace(1): the method is deleted; outputOf(1) covers "no such workspace".
+    expect(() => t.outputOf(1)).toThrow();
     expect(() => t.selectFloating(99)).toThrow();
     expect(t.activeWorkspace).toBe(0);
   });

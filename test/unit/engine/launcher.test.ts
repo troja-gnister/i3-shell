@@ -20,11 +20,14 @@ describe('engine launcher command', () => {
     expect(f.launcherRequest).toEqual({area: PRIMARY_AREA, term: 'kitty'});
   });
 
-  it('uses the second monitor when focus is there, not the primary', () => {
+  it('opens on the output the tree considers focused, not the primary', () => {
+    // The launcher reads `tree.focusedOutput` directly (Task 5). `workspace N` (Task 7) is the real way
+    // to move it: output 11 already shows one of its own workspaces from birth, so switching to it is
+    // a pure focus move (`swap: false`) that changes no window's workspace.
     const f = twoMonitors();
     f.engine.start();
-    f.add(1, {monitor: 11});
-    f.flush();
+    const other = f.tree().workspacesOn(11)[0]!;
+    f.engine.run([{type: 'workspace', target: {kind: 'number', number: other + 1, name: String(other + 1)}}], 0);
     f.engine.run(parseCommands('launcher').commands, 0);
     expect(f.launcherRequest!.area).toEqual(SECOND_AREA);
     expect(f.launcherRequest!.area).not.toEqual(PRIMARY_AREA);
@@ -99,7 +102,7 @@ describe('engine launcher command', () => {
     // binding is dead and there is nothing on screen to explain it.
     const f = twoMonitors();
     f.engine.start();
-    f.add(1, {monitor: 11});
+    f.mapOn(11, 1);
     f.flush();
     f.engine.run(parseCommands('launcher').commands, 0);
     f.calls.length = 0;
@@ -112,7 +115,7 @@ describe('engine launcher command', () => {
     // compositor's signal and the next geometry read.
     const f = twoMonitors();
     f.engine.start();
-    f.add(1, {monitor: 11});
+    f.mapOn(11, 1);
     f.flush();
     f.engine.run(parseCommands('launcher').commands, 0);
     f.setTopology(null);
@@ -121,38 +124,24 @@ describe('engine launcher command', () => {
     expect(f.calls).toContain('launcher.close');
   });
 
-  it('warns rather than silently opening on the primary when focus names no monitor', () => {
-    // M1: the silent primary fallback is the exact symptom this feature
-    // removes -- "it opened on the laptop again" -- so it never happens
-    // without a line in the journal saying so.
+  it('falls back to the primary silently when the focused output has no work area', () => {
+    // The launcher no longer walks a window's selection to find a monitor (Task 5), so a window's own
+    // monitor -- unknown or stale -- no longer bears on where it opens; only `tree.focusedOutput` does.
+    // Both of the old fallback warnings go with that walk: falling back is no longer the symptom of a
+    // missed cross-monitor case ("it opened on the laptop again") that it once was, so it is silent.
     const f = twoMonitors();
     f.engine.start();
-    // A floating window whose monitor the engine does not know: the shape a
-    // mid-flight monitor change leaves behind.
-    f.add(1, {monitor: undefined as unknown as number, kind: 'floating'});
-    f.flush();
+    // This is unreachable by construction in production: `Tree.reconfigure` resets `focusedOutput` to
+    // the primary the moment its output goes (src/tree/tree.ts:389), and the readiness check means
+    // `_topology` is only ever the last topology a live tree was built or reconfigured against -- so
+    // `focusedOutput` is always one of `topology.workAreas`'s keys. Reached here only by this poke, to
+    // exercise the defensive fallback anyway.
+    f.tree().focusedOutput = 99;
     f.calls.length = 0;
     f.engine.run(parseCommands('launcher').commands, 0);
 
     expect(f.launcherRequest!.area).toEqual(PRIMARY_AREA);
-    expect(f.calls.some(call => call.startsWith('warn:launcher:') && call.includes('primary output'))).toBe(true);
-  });
-
-  it('warns when the focused window sits on a monitor the topology does not have', () => {
-    // The engine refuses a topology in which any monitor lacks a work area
-    // (_layoutAndPublish's readiness test), so the reachable shape of this is
-    // the other way round: a window whose recorded monitor is an output that
-    // has already gone, in the window between the compositor's event and the
-    // topology commit that follows it.
-    const f = twoMonitors();
-    f.engine.start();
-    f.add(1, {monitor: 99, kind: 'floating'});
-    f.flush();
-    f.calls.length = 0;
-    f.engine.run(parseCommands('launcher').commands, 0);
-
-    expect(f.launcherRequest!.area).toEqual(PRIMARY_AREA);
-    expect(f.calls.some(call => call.includes('no work area for monitor 99'))).toBe(true);
+    expect(f.calls.filter(call => call.startsWith('warn:launcher:'))).toEqual([]);
   });
 
   it('says nothing when there is simply nothing focused to follow', () => {

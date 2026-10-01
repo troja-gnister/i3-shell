@@ -36,9 +36,10 @@ const {Indicator} = await vi.importActual<{
   ) => IndicatorLike;
 }>('../../../src/shell/indicator');
 
-const pills = (count: number, active = 0): PillState[] =>
+const pills = (count: number, focused = 0): PillState[] =>
   Array.from({length: count}, (_, index) => ({
-    name: String(index + 1), active: index === active, occupied: index === 0,
+    name: String(index + 1), focused: index === focused, visible: index === focused,
+    occupied: index === 0, urgent: false,
   }));
 
 function indicator(): IndicatorLike {
@@ -55,7 +56,7 @@ describe('panel indicator lifetime', () => {
     const button = panel.button;
     expect(button).not.toBeNull();
     expect(labelsOf(button!)).toEqual(['1', '2', '3']);
-    expect(activeIndexOf(button!)).toBe(1);
+    expect(activeIndexOf(button!, DEFAULT_COLORS)).toBe(1);
   });
 
   it('touches nothing once the shell destroys the panel button under it', () => {

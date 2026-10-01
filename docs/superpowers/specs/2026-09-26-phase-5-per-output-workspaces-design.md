@@ -1,0 +1,660 @@
+# Phase 5 — Per-output workspaces design
+
+**Status:** approved design, not yet planned.
+**Main spec:** `docs/superpowers/specs/2026-09-20-i3-shell-design.md`. §9 amends it substantially; see §9 of this document.
+**Supersedes:** Phase 4 Tasks 6–7 (`docs/superpowers/plans/2026-09-24-phase-4-fidelity.md`). Task 5's `neighbourMonitor` is absorbed here unchanged. Tasks 1–4 stand and are a prerequisite.
+
+---
+
+## 1. Brief
+
+i3-shell hands workspace identity to GNOME. Mutter has exactly one global active workspace index, so
+a workspace here spans every output: `Tree.workspaces` maps an index to a `WorkspaceCon` holding
+`monitors: Map<MonitorId, SplitCon>`, and ten workspaces own twenty live roots that all switch at
+once. i3 and sway invert this — each output owns an ordered set of workspaces and exactly one is
+visible per output — and the difference is not cosmetic. It is the reason for two defects observed on
+real hardware on 2026-09-26.
+
+The session ran two outputs: `HDMI-1` (Samsung Odyssey G93SC, 3840×1080 at x=0, primary) and `DP-1`
+(a television, 1920×1080 at x=3840). `eDP-1`, the laptop panel, was not driven.
+
+- **Steam was unreachable.** Its window was tiled as node 37 on `DP-1` — the television — while the
+  user worked on the Samsung. Nothing had failed: the process was running and the window was mapped
+  and tiled. But `grep -rn "output" src/commands/ src/config/ src/tree/` matches nothing, and
+  `src/tree/focus.ts` and `src/tree/operations.ts` never mention monitors, so **no command in the
+  program could move it.** A window on the wrong output is permanently stranded there.
+- **`$mod+d` opened on the wrong output.** `_launcherArea()` (`engine.ts:921`) resolves the monitor
+  from the tree's selection, deliberately refusing `Main.layoutManager.currentMonitor` because that
+  is the pointer's monitor (`engine.ts:74-78`, `launcher.ts:35-38`). That was right for the defect it
+  was written for and leaves two holes. `focus_follows_mouse` is unimplemented — it sits in
+  `parser.ts:30`'s `UNSUPPORTED` set — and i3's default is `yes`, so moving to the television focuses
+  nothing there and the launcher faithfully opens where focus still is. And an output whose visible
+  workspace is empty has **no selection to read at all**, so `_launcherArea()` falls through to
+  `topology.primary`: on the unoccupied workspaces the launcher could not open anywhere else.
+
+Both reduce to one absence. **i3-shell has no concept of the focused output.** It infers an output
+from the focused *window*, so when there is no window — or when attention moved without a click — the
+inference has nothing to work from. That concept is also the keystone of per-output workspaces: in
+i3 the focused output is what `workspace N` acts on, what a new window attaches to, and what a
+launcher opens on. Building it fixes both defects as by-products.
+
+**Goal.** Each output owns its workspaces; exactly one is visible per output; switching a workspace
+affects only the focused output. One global set of workspaces, as in i3, so `$mod+3` means "show
+workspace III" and not "show this output's third workspace".
+
+---
+
+## 2. The workspace model
+
+### 2.1 Structure
+
+Layer 0, in `src/tree/tree.ts`:
+
+```ts
+// A workspace lives on exactly one output and owns exactly one root.
+Tree.workspaces:     Map<number, {output: MonitorId; root: SplitCon; floating: WindowId[]}>
+// Each output shows exactly one of its own workspaces.
+Tree.visible:        Map<MonitorId, number>
+// First-class state; the absence of this is the whole of §1.
+Tree.focusedOutput:  MonitorId
+```
+
+`activeWorkspace` survives as a **derived getter**, `visible.get(focusedOutput)`. It keeps meaning
+"the workspace the user is on", which is what its nineteen call sites already assume, so most of them
+neither change nor need to.
+
+`MonitorCon` ceases to be a per-workspace child. A workspace's single root *is* what `MonitorCon`
+was; which output it belongs to is the workspace's `output` field. `root.root === true` still marks
+it, so §7.2's invariants and every `parent.root` test in the main spec are unaffected.
+
+### 2.2 Invariants
+
+Pinned by `normalize()` and by property tests:
+
+1. Every workspace has exactly one output, and that output is live.
+2. Every live output **owns** at least one workspace, and shows exactly one workspace it owns.
+
+   Ownership is the load-bearing half and does not hold by construction. Two things break it: a
+   workspace moved to the primary when its output vanished does not return on replug, and a
+   `workspace N output …` pin can concentrate several workspaces on one output. Either leaves an output
+   owning nothing, and an output owning nothing cannot show one of its own. A count large enough is
+   **not** sufficient — this was asserted twice during implementation and was false both times.
+
+   It is therefore enforced, not assumed, by a repair pass (`coverOutputs` in `src/tree/outputs.ts`)
+   run after every assignment change, in the constructor and in `reconfigure`. The pass always
+   succeeds: with K live outputs and W ≥ K workspaces (guaranteed by §2.3's clamp), if one output owns
+   none then the other ≤ K−1 own all W > K−1, so some output owns ≥ 2 and can spare one; taking from an
+   owner of ≥ 2 leaves it ≥ 1, so the pass is monotone and terminates. The donor is the output owning
+   the most, ties by lowest `MonitorId`, and it gives up a workspace it is not currently showing where
+   it can, since taking the shown one would move what the user is looking at.
+3. `focusedOutput` always names a live output.
+4. A window **in a workspace's tree** (tiled or floating) is on GNOME's *live* workspace if and only
+   if that workspace is visible; otherwise it is on the *attic* (§5). Windows `excludedFromTree`
+   rejects — minimised, sticky, `skipTaskbar` — belong to no tree and are never parked; a sticky
+   window showing on every output is GNOME's own behaviour and is left alone.
+5. A **floating** window's workspace follows the output its frame is actually on (D6). When the
+   compositor reports a floating window on an output other than the one its workspace belongs to, and
+   the window is on screen, it is re-homed to the workspace that output is currently showing — so
+   `floating disable` tiles it where the user dropped it, which is real i3's behaviour and the only way
+   the mouse can move a window between displays. The re-home happens at the moment the monitor changes
+   (`Engine._rehomeFloating`, driven from `_syncWindow`), not at `floating disable`, so `GetTree`, the
+   bars and `focus`/`move` are truthful while the window is still floating. It is edge-triggered on the
+   reported monitor *changing*: a level-triggered rule would undo every deliberate cross-output move of
+   a floating window, none of which translates the frame. A window whose workspace no output shows is in
+   the attic and is exempt — a change in its reported monitor is the compositor relocating it off a
+   display that has gone, not the user dragging it, and re-homing it would scatter an unplugged output's
+   floating windows and defeat §7's remembering. A window only now entering the tree is exempt, and Task 23
+   (D7) strengthened rather than weakened that: §2.6's adoption rule no longer reads the monitor for a
+   live map, so a re-home here would *overrule* adoption instead of echoing it and hand the window back
+   to the monitor Mutter chose; and the workspace an *evicted* window left outranks both. Membership is all that moves: `Tree.rehomeFloating`
+   writes neither `workspace.output`, `visible` nor `focusedOutput`, so invariants 2 and 3 are
+   untouched, and the focused output follows the *dragged* window through `Engine._selectWindow` alone
+   (Task 19, D5).
+
+### 2.3 Birth assignment and `workspace N output`
+
+At startup workspace *N* is assigned to output *N* for as many outputs as exist — i3's own rule, and
+the one a user describes as "primary is workspace one, external is workspace two". Outputs are ordered **primary
+first**, then the remainder by ascending Mutter monitor index. The primary must come first because
+"primary is workspace one" is the behaviour being asked for; `geometryTopology.ts:55` sorts monitors by
+index and tracks the primary separately, so the primary is not index 0 in general and sorting by index
+alone would hand workspace I to whichever output Mutter happened to enumerate first. The requested count is first clamped to
+`max(requested, live output count)` — i3 creates one workspace per output at startup whatever the config
+names, and the clamp is what makes §2.2's coverage repair always able to find a donor. Workspaces beyond
+the output count are assigned to the **primary**, which keeps invariant 1 total; §2.4 resolves its output the first time it is
+shown — which for an *empty, unpinned* workspace is the focused output (amended by Task 19 defect D1;
+it originally said §2.4 moves one to the focused output, full stop). i3 instead hides a never-visited workspace from every bar, so its output is unobservable; with
+the fixed set of §2.5 this design shows all *N* pills, and a workspace therefore always belongs to
+exactly one output's bar. A third divergence, recorded for the same reason as §2.5's.
+
+`workspace <number|name> output <name…>` graduates from `UNSUPPORTED` to implemented. It accepts
+i3's list form, first live output wins, with `primary` valid as a name. A configured assignment
+overrides the default and is authoritative at birth **and on every later switch for as long as the
+workspace is empty** (amended by Task 19 defect D1; it originally said "authoritative at birth" only,
+which made the pin a one-shot — the first `$mod+N` pressed from another display re-homed the workspace
+to that display and the pin never applied again for the rest of the session). It still does not pin the
+workspace forever: rule 1 of §2.4's precedence outranks it, so an *occupied* workspace the user moved
+with `move workspace to output` stays moved (§4.3).
+
+An output name that matches no connector is a warning on the directive's line, and the workspace
+falls back to the default rule. This is the ordinary case of a config written for a machine with
+different displays and must not reject the config.
+
+### 2.4 What `workspace N` does
+
+- If **N is visible** on some output: move `focusedOutput` to that output. Nothing is parked or
+  un-parked; the screen does not change. This is i3's "go to where that workspace is".
+- Otherwise: resolve the output at **switch time**, show N there, and park whatever *that* output was
+  showing (amended by Task 19 defect D1; it originally read "assign N to the focused output, show it
+  there", which dragged an **occupied** workspace's windows onto whichever display the user happened to
+  be standing on, and made a `workspace N output` pin a one-shot at birth). The precedence, implemented
+  as `resolveShowOutput` in `src/tree/outputs.ts`, is:
+
+  1. **Occupied** — a workspace holding windows (tiled **or** floating) keeps the output it is on. A
+     number key never moves a window between displays.
+  2. **Config pin** — `workspace N output X` wins for an empty workspace, on every switch (§2.3).
+  3. **Memory** — §7's record of where an unplug found the workspace. Unreachable through the `Tree`
+     today, and documented as such at the function: a replug re-homes and clears the entry, so no
+     surviving entry ever names a live output.
+  4. **Focused output** — an empty, unpinned, unremembered workspace materialises where the user is.
+
+  Every tier is filtered through the live output set. Only the **resolved** output's outgoing workspace
+  is parked, and the other output still does not change.
+
+This is i3's behaviour exactly, rule 1 included: in i3 workspaces 3–10 do not exist until visited, and
+a visited workspace is created on the focused output — but a workspace that *holds windows* already
+exists somewhere, so i3 takes you to it rather than fetching it. Here "does not exist yet" is replaced
+by "has not been placed yet", which is the same thing observed from the keyboard.
+
+`workspace next|prev` keeps the main spec's global numeric order, unwrapped. Per-output cycling
+(`next_on_output`) is not in scope: no known config binds it.
+
+### 2.5 A fixed set of workspaces — a divergence, stated
+
+i3 creates a workspace on first visit and destroys it when it empties and stops being visible. This
+design keeps the main spec's fixed set of *N* workspaces (§9: N = 10 for the reference config), each
+named and bound. For a config that names and binds every workspace the observable behaviour is
+identical, and a fixed set is simpler to model and to test. The divergence is recorded rather than
+hidden: a config relying on i3's dynamic workspace lifecycle is out of scope for v1.
+
+### 2.6 The tree is the authority for workspace membership
+
+Today the engine *learns* a window's workspace from Mutter. `WindowInfo.workspace` is a GNOME
+workspace index, and three places read it as if it were an i3 workspace:
+
+- `engine.ts:471` derives every pill's `occupied` and `urgent` from `w.workspace === index`.
+- `_pills`' `active` and `_layoutAndPublish`'s `tree.activateWorkspace(...)` both read
+  `this._ports.workspaces.activeIndex`.
+- adoption on enable (`isNew`) groups windows by `info.workspace`.
+
+Under the attic every window's GNOME workspace is 0 or 1 and the active index is always 0, so all
+three would silently compute nonsense — pills for workspaces II–X would read empty however many
+windows they held. The inversion is therefore part of this phase, not a consequence of it:
+
+- **`WindowInfo.workspace` stops being an input to placement.** A new window is inserted into the
+  focused output's visible workspace (§3.1); thereafter the tree is the sole authority and
+  `moveToWorkspace` *drives* Mutter rather than reading from it. The field stays on `WindowInfo` —
+  reconciliation still needs to know where Mutter actually put a window, which is how a parked window
+  that failed to move is detected (§8.3) — but nothing derives i3 workspace membership from it.
+- **Pills derive from the tree**: `occupied` from whether a workspace's root has any leaf or any
+  floating window, `urgent` from the urgency of the windows the *tree* places there, `focused` and
+  `visible` from `visible` and `focusedOutput` (§6).
+- **`tree.activateWorkspace(activeIndex)` is deleted.** GNOME's active workspace is a constant now
+  (§5.3); nothing may derive an i3 workspace from it.
+
+**Adoption on enable / restart** (main spec §8.5) needs a rule, because reducing `num-workspaces` to 2
+makes Mutter collapse windows from the removed workspaces onto the last remaining one, so a window's
+pre-enable workspace is unrecoverable. A window is adopted onto **the visible workspace of the output
+it currently occupies**. Its output is observable and is what the user sees; its old workspace is not.
+Dumping everything onto workspace I would be the alternative and is worse.
+
+**A window mapped while the session is running is a different question** (Task 23, D7) and gets the i3
+answer: **the focused output's visible workspace**, whatever monitor Mutter chose. These windows do not
+predate the extension, so there is a focused workspace to open them on, and opening them anywhere else
+is the Steam-on-the-television defect. Conversely the enable rule above must *not* become "the focused
+output" — that would collapse a multi-monitor desktop onto one display at every enable, which is what
+this phase exists to prevent (native assertion A14). The two cases are distinguished structurally, by
+whether this is the commit that builds the tree, not by a flag that could drift: see §8.5.
+
+---
+
+## 3. The focused output
+
+### 3.1 Four sources, one variable
+
+`focusedOutput` is stored state, changed from exactly four places:
+
+1. **A window gains focus** → its output. One rule covering sloppy focus, clicks, alt-tab and
+   `_activateSelection`.
+2. **`focus output <arg>`**, and a directional `focus` that walks off the edge of the visible
+   workspace's root (§4.4).
+3. **`workspace N` landing on another output** (§2.4).
+4. **The pointer crossing onto another output** — and only while
+   `focus_follows_mouse` is on. If the user has turned it off, pointer motion moves nothing and
+   `focus output` is how they reach another display; a rule that still followed the pointer would make
+   a documented setting half-effective in its least visible half. The cases rule 1 cannot cover,
+   structurally: GNOME reports a focus change only when the pointer enters a *window*, so a crossing
+   onto a gap, the bar or the desktop background reports nothing at all, and an empty workspace has no
+   window to take focus in the first place. This is the defect on the unoccupied workspaces in §1.
+
+   **Amended by Task 19 (defect D4).** This rule originally fired *only* for an output whose visible
+   workspace was empty. That made pointer focus one-way: focus drained onto whichever display showed an
+   empty workspace and the pointer could never bring it back, because the populated case was assumed to
+   be covered by rule 1 and is not. The emptiness condition is deleted, not inverted.
+
+Rule 4 is the only one needing a new subscription. It hangs on Mutter's cursor tracker and early-outs
+on an integer comparison unless the pointer's monitor actually changed, so the per-motion cost is a
+compare and the rest of the work happens only on a real crossing.
+
+### 3.2 `focus_follows_mouse` is one GSettings override
+
+`org.gnome.desktop.wm.preferences focus-mode` accepts `click | sloppy | mouse`. `sloppy` is Mutter's
+own focus-follows-mouse and its semantics match i3's: the window under the pointer takes focus, but
+crossing empty desktop leaves focus where it was. It joins the apply/restore pair in
+`settings.ts:88-106`, and the existing chain then does all the work — `windows.ts:192` already watches
+`notify::focus-window` and `_acceptFocus` (`engine.ts:249`) already calls `_selectWindow`. No new
+pointer plumbing for the common case, which is why rule 1 above covers so much.
+
+`focus_follows_mouse` leaves `UNSUPPORTED`. `yes` (i3's default, and the effective setting for a
+config that omits it) maps to `sloppy`; `no` maps to `click`.
+
+### 3.3 `mouse_warping` is load-bearing, not cosmetic
+
+`mouse_warping` also leaves `UNSUPPORTED`. i3's default is `output`: when focus moves to a different
+output, the pointer warps to the newly focused window's centre — or the output's work-area centre
+when the workspace is empty.
+
+This is required, not a nicety. Without it, sloppy focus would immediately pull focus back to
+whatever lies under the stationary pointer, and every keyboard output command in §4 would fight the
+mouse. The two features only work as a pair; implementing `focus-mode = sloppy` without warping would
+be a regression. `mouse_warping none` disables the warp and is honoured.
+
+**All three of i3's values are accepted.** i3 4.17 added `container`, which warps on *any* focus change
+rather than only on an output change. This design warps only on an output change, so `container` is
+accepted, treated as `output`, and **warned** about once — the extra granularity is not implemented. It
+must not be rejected: the entire input to this program is the user's real `~/.config/i3/config`, so a
+valid i3 value can never make the file fail to load, and the main spec's tier policy already has a
+category for valid-but-unimplemented behaviour.
+
+Warping is suppressed while the launcher holds its modal grab, and when the change of focused output
+was itself caused by rule 4 (the pointer is already there). **The launcher's grab is queried, not
+mirrored.** The engine cannot track it with a flag: `src/shell/launcher.ts` closes itself at seven
+sites the engine never hears about — a toggling second `open()`, a dismiss, three launch paths, a
+deferred key-focus-out and `destroy` — and abandons without opening when a modal grab is refused. A
+mirrored flag is therefore stuck `true` after the first ordinary use, which silently disables the warp
+for the rest of the session. The `launcher` port exposes `isOpen()` and the warp asks it.
+
+### 3.4 What this fixes
+
+- `_launcherArea()` stops inferring an output from the selection and reads `focusedOutput`. Both
+  halves of the `$mod+d` defect go, including the empty-workspace case, and the two fallback warnings
+  it logs become unreachable for that reason.
+- New windows attach to the focused output's visible workspace instead of wherever Mutter placed
+  them, which is how Steam reached the television.
+
+---
+
+## 4. Commands
+
+All three take i3's argument form: `left | right | up | down | primary | <output name>`.
+
+### 4.1 `focus output <arg>`
+
+Moves `focusedOutput`, then focuses that output's visible workspace's selection, or the output
+itself when that workspace is empty — focus being output-level is what makes an empty output
+reachable at all. Warps the pointer per §3.3. A direction with no neighbour is a no-op, not a wrap:
+outputs are physical and wrapping between them is never what a user means.
+
+### 4.2 `move container to output <arg>`
+
+Detaches the selected con from its root and inserts it into the target output's **visible**
+workspace's root at the entering edge (§4.4), structure intact, exactly as the main spec's
+`move container to workspace number` preserves a moved subtree. Focus does not follow, matching i3
+and matching `move container to workspace`. If the selected con is a root, its contents move in an
+equivalent non-root split, per §9 of the main spec.
+
+This is the command that rescues a stranded window, and the direct answer to §1's first defect.
+
+### 4.3 `move workspace to output <arg>`
+
+Reassigns the focused workspace's `output` to the target and makes it visible there, parking whatever
+the target was showing. The vacated output falls back to showing its lowest-numbered assigned
+workspace, or — if it has none left — the lowest-numbered unassigned workspace, which is then
+assigned to it. Invariant 2 forbids an output showing nothing.
+
+### 4.4 Adjacency
+
+Unchanged from the Phase 4 design, §4.1–4.2, which this document adopts verbatim:
+
+```ts
+export function neighbourMonitor(
+  areas: ReadonlyMap<MonitorId, Rect>,
+  from: MonitorId,
+  direction: Direction,
+): MonitorId | null;
+```
+
+The neighbour is the nearest output strictly beyond `from`'s edge on the direction's axis whose span
+overlaps `from`'s span on the perpendicular axis. Overlap is required: two displays diagonal to one
+another are not to the right of each other. No overlapping output beyond that edge means no
+neighbour.
+
+Crossing beats wrapping. When `focus <direction>` finds nothing inside the visible workspace's root
+without wrapping, the engine looks for a neighbour and descends into that output's visible
+workspace's root from the **entering** edge — moving `right` enters at the left — via
+`descendDirection`. Wrapping applies only when there is no neighbour, which changes observable
+behaviour under the config's effective `focus_wrapping: yes` and is the point. `move <direction>` at
+such an edge inserts into the neighbour's root at the entering edge instead of wrapping.
+
+---
+
+## 5. The attic
+
+### 5.1 Two GNOME workspaces
+
+GNOME drops to two. Index 0 is **live** and is the active workspace for the extension's whole
+lifetime. Index 1 is the **attic**. Mutter already declines to render a non-active workspace, so
+hiding is native: parked windows are genuinely unmapped, take no keyboard input and leak into no
+window list. No actor is hidden and nothing is minimised.
+
+Minimising was considered and rejected outright: Phase 3B made `minimized` mean "not in the tree"
+(`excludedFromTree`), so using it to hide a parked window would make the tree consume its own
+contents. `actor.hide()` was rejected too — the window stays mapped and focusable, still takes
+keyboard input, still appears in alt-tab, and Mutter still considers it for focus.
+
+`settings.ts:91` applies `num-workspaces = plan.workspaceCount`; it becomes the constant 2. The
+config's *N* workspaces become purely i3-shell's own notion, which is the separation this phase is
+for: GNOME stops knowing what a workspace means.
+
+`workspaces-only-on-primary = false` is a prerequisite, already delivered by Phase 3B. While it is
+true Mutter marks every window on a secondary output `on_all_workspaces`, and a sticky window cannot
+be parked — it would remain visible on the attic. The attic model is only sound because that setting
+is already owned.
+
+### 5.2 The swap
+
+Showing workspace *W* on output *M*:
+
+1. Un-park: every window on *W* → `moveToWorkspace(id, LIVE)`.
+2. Park: every window on *M*'s outgoing visible workspace → `moveToWorkspace(id, ATTIC)`.
+3. Set `visible[M] = W` and `W.output = M`.
+4. Relayout (§5.4).
+5. Drive focus explicitly to *W*'s selection, or to the output when *W* is empty.
+
+Step 5 is the subtlest thing in this phase. Parking the focused window makes **Mutter choose a
+replacement on its own**, which fires `notify::focus-window`, reaches `_acceptFocus`, and calls
+`_selectWindow` on a window nobody selected.
+
+An earlier draft of this spec said the swap should bracket its parking in `_expectedFocus`. **That was
+wrong, and the implementation disproved it by instrumenting `_acceptFocus`.** Two independent reasons:
+`_activateSelection` begins with an unconditional `_expectedFocus.clear()`, so the swap's own final step
+wipes any bracket; and more fundamentally `_expectedFocus` holds ids the engine *asked* to focus, while
+Mutter's replacement is by definition a still-**visible** window and therefore never a parked one. No
+pre-registration of parked ids can suppress that report.
+
+What actually settles the incoming workspace's selection is the trailing `_activateSelection`: its
+request produces the last focus report to arrive, so it re-selects the intended window even when an
+unexpected report was honoured first. The **unverified residual** is that the earlier unexpected report
+can transiently re-select on a *different* workspace, changing that workspace's selection and MRU order.
+
+No unit test can distinguish this: the visible outcome self-corrects, which is why an adversarial
+attempt to make the unit test fail could not. §8.4's native scenario 3 is the only test that can decide
+it. Until that runs, this design does not claim the residual is benign — only that the visible selection
+ends up correct.
+
+The whole swap is one `Engine.commit()`, so Mutter paints once, at the end.
+
+### 5.3 Keeping the active workspace on live
+
+If GNOME's active workspace ever became the attic, every parked window would appear at once and every
+visible one would vanish. Two defences:
+
+- GNOME's `switch-to-workspace-*` bindings are cleared through the conflict machinery that
+  `settings.ts:7` already applies to `org.gnome.desktop.wm.keybindings`.
+- A `workspace-switched` guard forces the active workspace back to live and logs a warning. Touchpad
+  workspace gestures have no GSetting, so the guard is the only cover for them and is not optional.
+
+### 5.4 Layout only for visible workspaces
+
+`engine.ts:423-426` lays out every workspace × monitor pair — twenty roots for a ten-workspace,
+two-output session. Only **visible** workspaces are laid out now: a parked workspace's windows are
+not on screen and its geometry is unobservable until it is shown, at which point step 4 of the swap
+computes it. Two roots instead of twenty, and a simpler rule.
+
+### 5.5 `Topology.workAreas` collapses to one map
+
+`Topology.workAreas` is today `ReadonlyMap<number, ReadonlyMap<MonitorId, Rect>>`, keyed first by
+workspace index, and `geometryTopology.ts:41` builds it by looping to the **GNOME** workspace
+manager's count. Once GNOME holds two workspaces that loop produces entries for 0 and 1 only, so any
+lookup by an i3 workspace index of 2 or above returns `undefined` — `_launcherArea()`'s
+`workAreas.get(workspace)` would fail on seven of ten workspaces.
+
+It therefore becomes a single map keyed by output:
+
+```ts
+Topology.workAreas: ReadonlyMap<MonitorId, Rect>
+```
+
+read from the *live* workspace, which is the only one any visible window occupies. A workspace's rect
+is `topology.workAreas.get(ws.output)!`. This is also the honest shape: a work area is a property of
+an output, and the per-workspace keying only ever existed because GNOME owned workspaces.
+
+---
+
+## 6. Bars and pills
+
+Each output's bar shows only the workspaces assigned to it, with its visible one marked. `bars.ts`
+draws a bar on every monitor **except** the primary, which uses the GNOME panel indicator instead
+(`bars.ts:44-45`); the indicator shows the primary's workspaces, keeping that split intact.
+
+`PillState` gains i3bar's missing distinction. i3 separates a workspace that is **focused** from one
+merely **visible** on another output; today `active` collapses both:
+
+```ts
+interface PillState { name: string; focused: boolean; visible: boolean; occupied: boolean; urgent: boolean }
+```
+
+`stylePill` keeps the branch shape Phase 4 Task 4 established, with precedence
+**focused → urgent → visible → occupied**. `samePills` compares all five fields — Phase 4 Task 4
+shipped a version that omitted `urgent` and left the feature dead at runtime, so the diff is part of
+the contract, not an optimisation. `urgent`'s doc comment changes from "not active" to "not focused".
+
+`snapshot.ts` produces pills per output rather than one global list.
+
+---
+
+## 7. Monitor hotplug
+
+Today `Tree.reconfigure()` handles a lost output by calling `appendRootContents` (`tree.ts:245`) to
+flatten its roots into the primary's tree. **The layout is destroyed and cannot be recovered** — the
+common case being a closed lid or a sleeping television.
+
+Under per-output workspaces a lost output's workspaces are **reassigned**, roots untouched:
+
+- Each workspace on the lost output is reassigned to the **primary** — deterministic, and simpler to
+  test than nearest-by-position.
+- Its layout survives intact. Only visibility changes: the lost output's visible workspace becomes
+  parked, since the primary already shows one of its own.
+- The pre-loss assignment is remembered so a replug restores it. This is meaningful precisely because
+  `MonitorIds` already derives a stable `MonitorId` from the sorted connector list, so an output that
+  comes back is recognised as the same one.
+- A gained output takes, in order: the lowest-numbered workspace whose remembered assignment names
+  it; else the lowest-numbered unassigned workspace; else the **highest**-numbered workspace of
+  whichever output currently holds the most, ties broken by lowest `MonitorId`. Taking the highest
+  leaves that output's lowest-numbered — usually its visible one — undisturbed. Invariant 2 forbids
+  an output showing nothing, so this chain always terminates.
+- `focusedOutput` moves to the primary if the output it named is gone.
+
+Mutter always reports at least one output, so "no outputs" is an assertion, not a branch.
+
+---
+
+## 8. Architecture, errors, testing
+
+### 8.1 Modules
+
+- `src/tree/tree.ts` — a genuine rewrite of workspace structure, not an extension: `workspaces`,
+  `visible`, `focusedOutput`, `root(workspace)`, `location()`, `insert()`, `moveToWorkspace()`,
+  `reconfigure()`.
+- `src/tree/monitors.ts` — **new**, pure: `neighbourMonitor` (§4.4).
+- `src/tree/outputs.ts` — **new**, pure: birth assignment, `workspace N` resolution, the three
+  output commands' target resolution, hotplug reassignment and remembering.
+- `src/commands/` — three new `Command` members and their parsing. `_runOne`'s switch has no
+  `default:`, so adding a member is a compile error until every site handles it; this is relied upon.
+- `src/config/parser.ts` — `workspace`, `focus_follows_mouse` and `mouse_warping` leave `UNSUPPORTED`.
+- `src/runtime/snapshot.ts`, `src/runtime/model.ts` — per-output pills, `PillState`,
+  `Topology.workAreas` (§5.5), and `TreeSnapshot` **version 2**: a workspace carries `output` and one
+  `root` instead of a `monitors` array. The version bump is required because `GetTree` is a public
+  D-Bus surface and `test/integration/phase2-checks.py` parses it.
+- `src/shell/geometryTopology.ts` — builds the collapsed `workAreas` (§5.5) from the live workspace
+  only, so its workspace loop disappears.
+- `src/shell/settings.ts` — the overrides in §8.2.
+- `src/shell/workspaces.ts` — the attic swap, `moveToWorkspace` bracketing, the `workspace-switched`
+  guard.
+- `src/shell/pointer.ts` — **new**: the cursor-tracker subscription for rule 4, and the warp for §3.3.
+- `src/shell/bars.ts` — per-output pill lists.
+- Layer 0 (`src/config`, `src/commands`, `src/tree`, `src/runtime`, `src/launcher`) must never import
+  `gi://`, `resource://` or `src/shell/`. `scripts/check-layer0.mjs` enforces it; `src/tree/outputs.ts`
+  and `src/tree/monitors.ts` are covered by the existing `src/tree` root.
+
+### 8.2 GNOME settings overrides
+
+All through the existing snapshot/apply/restore machinery (main spec §13):
+
+| Key | Value | Status |
+|---|---|---|
+| `org.gnome.desktop.wm.preferences num-workspaces` | `2` | changed from *N* |
+| `org.gnome.desktop.wm.preferences focus-mode` | `sloppy` / `click` per `focus_follows_mouse` | new |
+| `org.gnome.shell.app-switcher current-workspace-only` | `true` | new — alt-tab must not list parked windows |
+| `org.gnome.mutter dynamic-workspaces` | `false` | unchanged |
+| `org.gnome.mutter workspaces-only-on-primary` | `false` | unchanged (Phase 3B prerequisite, §5.1) |
+| `org.gnome.desktop.wm.preferences workspace-names` | no longer applied | GNOME's two workspaces correspond to nothing the user sees; the saved original is still restored on disable |
+| `org.gnome.desktop.wm.keybindings switch-to-workspace-*` | cleared | §5.3 |
+
+### 8.3 Errors
+
+- An `output` name matching no connector: warning on that line, default assignment used (§2.3).
+- `focus output <direction>` with no neighbour: no-op, no warning — an ordinary edge.
+- `moveToWorkspace` failing for a window during a swap: warn once naming the window, leave it where
+  it is, and continue. A half-swapped output is recoverable by switching again; an exception thrown
+  mid-swap is not.
+- The `workspace-switched` guard firing: warning, since it means something outside i3-shell moved the
+  active workspace and the user may see a flash.
+
+### 8.4 Testing
+
+Most of this is Layer 0 and pure: the model and its four invariants, birth assignment, `workspace N`
+resolution, `neighbourMonitor`, the three commands' target resolution, hotplug reassignment and
+remembering, and pill derivation.
+
+`src/shell/**` additions are unit-tested against `test/unit/shell/fakes/` — the attic swap and its
+`_expectedFocus` bracketing, the settings overrides, the cursor tracker, the `workspace-switched`
+guard, per-output bars. (`tsconfig.test.json` excludes `src/shell/**` from the *typecheck* program
+only; it does not put the code beyond the suite's reach.)
+
+Native scenarios in the nested harness, for the claims a fake cannot support:
+
+1. A parked window is not rendered and does not take focus.
+2. Switching one output's workspace leaves the other output's windows and geometry untouched.
+3. After a swap, focus is on the incoming workspace's selection, **and no other workspace's selection
+   moved**. The second half is the point: the visible selection self-corrects via the trailing
+   `_activateSelection`, so only the collateral case can fail, and only here. See §5.2 for why no unit
+   test reaches it.
+4. Unplugging an output preserves its workspaces' layout; replugging restores the assignment.
+5. `focus-mode`, `num-workspaces` and `current-workspace-only` are restored on `disable()`.
+6. `focus_follows_mouse` moves the focused output, and a keyboard `focus output` warps the pointer.
+
+The critical-log gate in `test/integration/inside.sh` is not weakened. The swap moves many windows in
+one commit, which is the shape of change that produced 34 St-CRITICALs in Phase 3B.
+
+**Migration cost, measured:** 15 of 71 test files assert per-monitor workspace structure
+(`test/unit/tree/{tree,membership,normalize,properties,topology}.test.ts`,
+`test/unit/engine{,/commands,/lifecycle}.test.ts`, `test/unit/runtime/snapshot.test.ts`,
+`test/unit/shell/{bars,pills,controlObject}.test.ts`, `test/unit/shell/fakes/actors.ts`,
+`test/integration/phase1-checks.sh`, `test/integration/phase2-checks.py`).
+
+---
+
+## 9. Amendments to the main spec
+
+1. **§7.1, level order.** "GNOME workspaces span monitors, so here it is workspace → monitor" is
+   reversed: the order is **output → workspace**, as in i3. A `WorkspaceCon` holds one root and an
+   `output`; `MonitorCon` is no longer a per-workspace child. `root.root === true` still marks a
+   root, so every `parent.root` test in §7 stands.
+2. **§9, count and settings.** `num-workspaces = N` becomes `num-workspaces = 2` (live + attic).
+   `workspace-names` is no longer applied. The paragraph beginning "**Consequence, to state
+   plainly:** while the extension is enabled GNOME treats a workspace as spanning every output" is
+   replaced by the attic model (§5): GNOME holds two workspaces and no longer represents i3
+   workspaces at all. *N* remains i3-shell's own workspace count, derived from the config as before.
+3. **§9, `workspace number N`.** No longer "activate GNOME workspace N−1". It resolves per §2.4 and
+   the GNOME active workspace never changes.
+4. **§9, `move container to workspace number N`.** The detach/attach semantics stand. The target of
+   `change_workspace_by_index` is live or attic depending on whether N is visible, not N−1. "No-op if
+   N is the current workspace" now means N is visible on the focused output.
+5. **§9, `workspace next|prev`.** Global numeric order retained; explicitly not per-output.
+6. **§6.3, directive tiers.** `workspace`, `focus_follows_mouse` and `mouse_warping` move from tier 2
+   (unsupported, warning) to implemented.
+7. **§6.7, command language.** Adds `focus output`, `move container to output`,
+   `move workspace to output`.
+8. **§13, overrides.** Adds `focus-mode` and `app-switcher current-workspace-only`; removes the
+   `workspace-names` apply; adds the `switch-to-workspace-*` clears.
+9. **Roadmap line (§17, "Phases and deliverables").** Phase 4's "multi-monitor (per-monitor focus / move across MonitorCons)"
+   and "`focus_follows_mouse` ↔ `focus-mode`" move to Phase 5, which replaces `MonitorCon` entirely.
+10. **§8.5, adoption on enable.** A window is adopted onto the visible workspace of the output it
+    currently occupies (§2.6). Its pre-enable workspace is unrecoverable, because reducing
+    `num-workspaces` to 2 makes Mutter collapse the removed workspaces onto the last remaining one.
+    Task 23 (D7) narrows this to the enable/re-enable/restart case only: a window mapped while the
+    session is running joins the focused output's visible workspace instead.
+11. **§8.2 / §7.10.** Unchanged, and noted as such: a window is excluded from the tree by
+    `excludedFromTree` exactly as Phase 3B defined. Parking is not exclusion — a parked window stays
+    in its workspace's tree — and nothing about `minimized`, `sticky` or `skipTaskbar` changes.
+
+---
+
+## 10. Acceptance criteria
+
+- **A50** With two outputs, workspace I is visible on the **primary** and workspace II on the other at
+  startup, whatever order Mutter enumerates them in; each bar shows only its own output's workspaces.
+- **A51** `workspace III output <name>` in the config places III on that output at birth **and on
+  every later `$mod+3` for as long as III is empty, including one pressed from the other display**
+  (amended by Task 19 defect D1; the pin was originally honoured at birth only); an unknown
+  output name warns on that line and III falls back to the default assignment.
+- **A52** `$mod+3` with III unplaced **and empty** shows III on the focused output and parks what was
+  there; the other output does not change. With III unplaced but **occupied**, the switch instead takes
+  focus to the display III is already on and moves no window (amended by Task 19 defect D1; the original
+  held unconditionally, which *is* the defect — see §2.4's precedence and A53).
+- **A53** `$mod+2` with II visible on another output moves focus to that output and changes no
+  window's workspace.
+- **A54** A window on a parked workspace is not rendered, takes no keyboard input, and does not
+  appear in alt-tab.
+- **A55** After a workspace swap, focus is on the incoming workspace's selection, and every other
+  workspace's selection is unchanged. Parking the previously focused window makes Mutter pick a
+  replacement; the trailing activation corrects the visible workspace, and this criterion is what
+  establishes whether the replacement damaged another one (§5.2).
+- **A56** `move container to output right` moves the selected window to the neighbouring output's
+  visible workspace, preserving a moved subtree's structure, layout, percentages and focused child;
+  focus does not follow.
+- **A57** `focus output <direction>` with no overlapping output beyond that edge is a no-op; it never
+  wraps.
+- **A58** `focus <direction>` at the edge of a visible workspace's root crosses into the neighbouring
+  output's visible workspace at the entering edge rather than wrapping.
+- **A59** Moving the pointer onto another output makes it the focused output — whether that output's
+  visible workspace is **empty or occupied** (amended by Task 19 defect D4; it originally held for the
+  empty case only, which made focus one-way) — and `$mod+d` then opens the launcher on that output.
+- **A60** With `focus-mode = sloppy` applied, moving the pointer onto a window on another output makes
+  that output focused; a keyboard `focus output` warps the pointer to the newly focused window.
+- **A61** `mouse_warping none` suppresses the warp; the launcher's modal grab suppresses it too, and the
+  suppression survives the launcher closing itself (a dismiss, a launch, or a toggling second `$mod+d`)
+  rather than latching on after the first use. `mouse_warping container` loads with a warning.
+- **A61b** With `focus_follows_mouse no`, crossing the pointer onto an empty output does **not** move the
+  focused output.
+- **A62** Unplugging an output reassigns its workspaces to the primary with layout intact; replugging
+  restores the original assignment.
+- **A63** GNOME's active workspace is `live` at all times; a forced switch to the attic is reverted
+  and logged.
+- **A64** `focus-mode`, `num-workspaces`, `current-workspace-only`, `workspace-names` and the cleared
+  `switch-to-workspace-*` bindings are all restored on `disable()`.
+- **A65** A pill is styled focused, urgent, visible, occupied in that precedence; `samePills` compares
+  all five fields.
+- **A66** No new `(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL` in the nested harness,
+  including during a swap that moves several windows at once.

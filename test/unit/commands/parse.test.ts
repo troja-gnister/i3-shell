@@ -50,6 +50,33 @@ describe('parseCommands', () => {
     expect(one('layout toggle tabbed splitv')).toEqual({type: 'layout_toggle', cycle: ['tabbed', 'splitv']});
   });
 
+  it('parses focus output in every argument form', () => {
+    expect(one('focus output right')).toEqual({type: 'focus_output', target: 'right'});
+    expect(one('focus output primary')).toEqual({type: 'focus_output', target: 'primary'});
+    expect(one('focus output DP-1')).toEqual({type: 'focus_output', target: {name: 'DP-1'}});
+  });
+
+  it('parses both output move forms', () => {
+    expect(one('move container to output right')).toEqual({type: 'move_container_to_output', target: 'right'});
+    expect(one('move workspace to output DP-1')).toEqual({type: 'move_workspace_to_output', target: {name: 'DP-1'}});
+  });
+
+  it('still parses move container to workspace', () => {
+    expect(one('move container to workspace number 3'))
+      .toEqual({type: 'move_to_workspace', target: {kind: 'number', number: 3, name: '3'}});
+  });
+
+  it('still parses the focus targets it always did', () => {
+    expect(one('focus left')).toEqual({type: 'focus', target: 'left'});
+    expect(one('focus parent')).toEqual({type: 'focus', target: 'parent'});
+  });
+
+  it('rejects focus output with no argument', () => {
+    const r = parseCommands('focus output');
+    expect(r.commands).toEqual([{type: 'unknown', text: 'focus output'}]);
+    expect(r.diagnostics[0]).toMatch(/focus output/);
+  });
+
   it('parses fullscreen, floating, kill, mode, reload, restart, nop', () => {
     expect(one('fullscreen toggle')).toEqual({type: 'fullscreen', action: 'toggle'});
     expect(one('fullscreen')).toEqual({type: 'fullscreen', action: 'toggle'});

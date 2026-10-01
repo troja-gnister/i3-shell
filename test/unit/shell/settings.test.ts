@@ -11,9 +11,11 @@ const KEYS = 'org.gnome.shell.keybindings';
 const MEDIA = 'org.gnome.settings-daemon.plugins.media-keys';
 const PREFS = 'org.gnome.desktop.wm.preferences';
 const MUTTER = 'org.gnome.mutter';
+const APP_SWITCHER = 'org.gnome.shell.app-switcher';
+const WM_KEYBINDINGS = 'org.gnome.desktop.wm.keybindings';
 const plan: OverridePlan = {
   accels: ['<Super>1', 'XF86AudioRaiseVolume'],
-  workspaceCount: 3, workspaceNames: ['1', '2', '3:web'], mouseButtonModifier: '<Alt>',
+  workspaceCount: 3, mouseButtonModifier: '<Alt>', focusMode: 'sloppy',
 };
 
 function overrides(extension: FakeSettings): SettingsOverrides {
@@ -29,11 +31,13 @@ function fixture() {
   const media = new FakeSettings(MEDIA, {'volume-up-static': 'XF86AudioRaiseVolume'});
   const prefs = new FakeSettings(PREFS, {
     'num-workspaces': 4, 'workspace-names': ['Original'], 'mouse-button-modifier': '<Super>',
+    'focus-mode': 'click',
   });
   const mutter = new FakeSettings(MUTTER, {
     'dynamic-workspaces': true, 'workspaces-only-on-primary': true,
   });
-  return {extension, keys, media, prefs, mutter};
+  const switcher = new FakeSettings(APP_SWITCHER, {'current-workspace-only': false});
+  return {extension, keys, media, prefs, mutter, switcher};
 }
 
 beforeEach(() => {
@@ -55,7 +59,10 @@ describe('SettingsOverrides', () => {
       'dynamic-workspaces': false, 'workspaces-only-on-primary': false,
     });
     expect(f.prefs.values).toEqual({
-      'num-workspaces': 3, 'workspace-names': ['1', '2', '3:web'], 'mouse-button-modifier': '<Alt>',
+      // GNOME is held at two workspaces regardless of the config's count; workspace-names is never
+      // written any more, so it is untouched by apply().
+      'num-workspaces': 2, 'workspace-names': ['Original'], 'mouse-button-modifier': '<Alt>',
+      'focus-mode': 'sloppy',
     });
     // Every live write must already have its original in the persisted recovery record.
     let snapshot: Record<string, Record<string, unknown>> = {};
@@ -77,6 +84,7 @@ describe('SettingsOverrides', () => {
     });
     expect(f.prefs.values).toEqual({
       'num-workspaces': 4, 'workspace-names': ['Original'], 'mouse-button-modifier': '<Super>',
+      'focus-mode': 'click',
     });
     expect(f.extension.get_string('overridden-settings')).toBe('{}');
     const writeCount = writes.length;
@@ -102,7 +110,7 @@ describe('SettingsOverrides', () => {
       [PREFS]: {'num-workspaces': 4},
     });
     expect(f.prefs.get_strv('workspace-names')).toEqual(['Original']);
-    expect(f.prefs.get_int('num-workspaces')).toBe(3);
+    expect(f.prefs.get_int('num-workspaces')).toBe(2);
     expect(f.mutter.get_boolean('dynamic-workspaces')).toBe(false);
     for (const object of [f.keys, f.media, f.mutter, f.prefs])
       object.failures.clear();
@@ -138,7 +146,7 @@ describe('SettingsOverrides', () => {
     overrides(f.extension).apply(plan);
 
     const recovered = overrides(f.extension);
-    recovered.apply({...plan, workspaceCount: 2, workspaceNames: ['1', '2']});
+    recovered.apply({...plan, workspaceCount: 2});
     recovered.restoreAll();
 
     expect(f.prefs.get_int('num-workspaces')).toBe(4);
@@ -156,7 +164,7 @@ describe('SettingsOverrides', () => {
     expect(f.keys.get_strv('switch-to-application-1')).toEqual(['<Super>1', '<Alt>F1']);
     expect(f.keys.get_strv('toggle-overview')).toEqual([]);
     expect(writes.filter(w => w.key === 'num-workspaces')).toEqual([]);
-    expect(f.prefs.get_int('num-workspaces')).toBe(3);
+    expect(f.prefs.get_int('num-workspaces')).toBe(2);
     settings.restoreAll();
     expect(f.prefs.get_int('num-workspaces')).toBe(4);
   });
@@ -188,8 +196,8 @@ describe('SettingsOverrides', () => {
     settings.apply(plan);
     f.prefs.failures.set('num-workspaces', failure);
     settings.restoreAll();
-    expect(f.prefs.get_int('num-workspaces')).toBe(3);
-    expect(f.prefs.get_user_value('num-workspaces')?.deep_unpack()).toBe(3);
+    expect(f.prefs.get_int('num-workspaces')).toBe(2);
+    expect(f.prefs.get_user_value('num-workspaces')?.deep_unpack()).toBe(2);
     expect(JSON.parse(f.extension.get_string('overridden-settings'))[PREFS]).toHaveProperty('num-workspaces', 4);
   });
 
@@ -222,7 +230,7 @@ describe('SettingsOverrides', () => {
     // beside dynamic-workspaces, or a config naming no workspaces would leave a secondary
     // output stuck non-tiling.
     const f = fixture();
-    overrides(f.extension).apply({...plan, workspaceCount: 0, workspaceNames: []});
+    overrides(f.extension).apply({...plan, workspaceCount: 0});
     expect(f.mutter.values['workspaces-only-on-primary']).toBe(false);
   });
 
@@ -235,10 +243,107 @@ describe('SettingsOverrides', () => {
     const f = fixture();
     const settings = overrides(f.extension);
     settings.apply(plan);
-    settings.apply({...plan, workspaceCount: 0, workspaceNames: []});
+    settings.apply({...plan, workspaceCount: 0});
     expect(f.mutter.values['workspaces-only-on-primary']).toBe(false);
     settings.restoreAll();
     expect(f.mutter.values['workspaces-only-on-primary']).toBe(true);
+  });
+
+  it('holds GNOME at two workspaces regardless of the config count', () => {
+    const f = fixture();
+    overrides(f.extension).apply({...plan, workspaceCount: 10});
+    expect(f.prefs.values['num-workspaces']).toBe(2);
+  });
+
+  it('stops alt-tab listing parked windows', () => {
+    const f = fixture();
+    overrides(f.extension).apply({...plan, workspaceCount: 10});
+    expect(f.switcher.values['current-workspace-only']).toBe(true);
+  });
+
+  it('does not apply workspace-names: GNOME\'s two workspaces name nothing the user sees', () => {
+    const f = fixture();
+    overrides(f.extension).apply({...plan, workspaceCount: 10});
+    expect(writes.filter(w => w.key === 'workspace-names')).toEqual([]);
+    expect(f.prefs.values['workspace-names']).toEqual(['Original']);
+  });
+
+  it('restores num-workspaces, current-workspace-only, and (for an upgrading user) workspace-names on disable', () => {
+    // The extension key already holds a pre-Task-6 snapshot naming what an earlier release wrote for
+    // workspace-names, simulating a user upgrading in place; num-workspaces/current-workspace-only are
+    // exercised the ordinary way, through this run's own apply().
+    const extension = new FakeSettings(EXTENSION, {'overridden-settings': JSON.stringify({
+      [PREFS]: {'workspace-names': ['Original']},
+    })});
+    const keys = new FakeSettings(KEYS, {'switch-to-application-1': ['<Super>1', '<Alt>F1'], 'toggle-overview': ['<Super>s']});
+    const media = new FakeSettings(MEDIA, {'volume-up-static': 'XF86AudioRaiseVolume'});
+    const prefs = new FakeSettings(PREFS, {
+      'num-workspaces': 4, 'workspace-names': ['FromAnOldRelease'], 'mouse-button-modifier': '<Super>',
+    });
+    const mutter = new FakeSettings(MUTTER, {'dynamic-workspaces': true, 'workspaces-only-on-primary': true});
+    const switcher = new FakeSettings(APP_SWITCHER, {'current-workspace-only': false});
+    void keys; void media; void mutter;
+
+    const settings = overrides(extension);
+    settings.apply({...plan, workspaceCount: 10});
+    expect(prefs.values['num-workspaces']).toBe(2);
+    expect(switcher.values['current-workspace-only']).toBe(true);
+
+    settings.restoreAll();
+
+    expect(prefs.values['num-workspaces']).toBe(4);
+    expect(switcher.values['current-workspace-only']).toBe(false);
+    // The pre-existing snapshot entry (not written by this apply()) is still honoured.
+    expect(prefs.values['workspace-names']).toEqual(['Original']);
+  });
+
+  it('clears GNOME\'s own workspace-switch bindings so the active workspace cannot leave live', () => {
+    const f = fixture();
+    const wmKeybindings = new FakeSettings(WM_KEYBINDINGS, {
+      'switch-to-workspace-1': ['<Super>1'],       // collides with a configured accelerator too
+      'switch-to-workspace-3': ['<Super>3'],       // no collision: only the unconditional clear catches this
+      'switch-to-workspace-left': ['<Super><Alt>Left'],
+      // F5: move-to-workspace-* moves the focused window into the attic and drags the active
+      // workspace with it -- the same defeat as switch-to-workspace-*, from the other side.
+      'move-to-workspace-2': ['<Super><Shift>2'],
+      'switch-applications': ['<Super>Tab'],       // unrelated; must survive untouched
+    });
+    overrides(f.extension).apply({...plan, workspaceCount: 10});
+    expect(wmKeybindings.values['switch-to-workspace-1']).toEqual([]);
+    expect(wmKeybindings.values['switch-to-workspace-3']).toEqual([]);
+    expect(wmKeybindings.values['switch-to-workspace-left']).toEqual([]);
+    expect(wmKeybindings.values['move-to-workspace-2']).toEqual([]);
+    expect(wmKeybindings.values['switch-applications']).toEqual(['<Super>Tab']);
+  });
+
+  it('applies focus-mode from the plan and restores the original on disable', () => {
+    const f = fixture();
+    const settings = overrides(f.extension);
+    settings.apply({...plan, focusMode: 'sloppy'});
+    expect(f.prefs.values['focus-mode']).toBe('sloppy');
+    settings.restoreAll();
+    expect(f.prefs.values['focus-mode']).toBe('click');
+  });
+
+  it('leaves focus-mode at click when the config disables focus_follows_mouse', () => {
+    const f = fixture();
+    overrides(f.extension).apply({...plan, focusMode: 'click'});
+    expect(f.prefs.values['focus-mode']).toBe('click');
+    // Nothing to remember or restore: the desired value already matched GNOME's own setting.
+    expect(writes.filter(w => w.key === 'focus-mode')).toEqual([]);
+  });
+
+  it('restores the workspace-switch and move-to-workspace bindings on disable', () => {
+    const f = fixture();
+    const wmKeybindings = new FakeSettings(WM_KEYBINDINGS, {
+      'switch-to-workspace-3': ['<Super>3'],
+      'move-to-workspace-2': ['<Super><Shift>2'],
+    });
+    const settings = overrides(f.extension);
+    settings.apply({...plan, workspaceCount: 10});
+    settings.restoreAll();
+    expect(wmKeybindings.values['switch-to-workspace-3']).toEqual(['<Super>3']);
+    expect(wmKeybindings.values['move-to-workspace-2']).toEqual(['<Super><Shift>2']);
   });
 });
 
@@ -255,7 +360,7 @@ describe('accelerators claimed outside GNOME\'s own keybinding schemas', () => {
   // already applied to GNOME's own schemas.
   const ibusPlan: OverridePlan = {
     accels: ['<Super>semicolon', '<Super>space'],
-    workspaceCount: 0, workspaceNames: [], mouseButtonModifier: '<Alt>',
+    workspaceCount: 0, mouseButtonModifier: '<Alt>', focusMode: 'sloppy',
   };
 
   function ibusFixture() {

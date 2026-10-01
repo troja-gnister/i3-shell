@@ -52,6 +52,7 @@ describe('excludedFromTree', () => {
   const info = (patch: Partial<WindowInfo>): WindowInfo => ({
     id: 1, kind: 'tiled', workspace: 0, monitor: 1,
     rect: {x: 0, y: 0, width: 10, height: 10}, title: 'w', wmClass: null,
+    instance: null, appId: null, role: null, urgent: false,
     minimized: false, fullscreen: false, maximizedH: false, maximizedV: false,
     sticky: false, skipTaskbar: false, ...patch,
   });

@@ -55,6 +55,15 @@ class NativeWindow extends Signals {
   // hint, long after its first frame.
   onAllWorkspaces = false;
   skipTaskbar = false;
+  // Phase 4: the five for_window/urgency facts. instance/appId are get_*()
+  // readers that Mutter may answer with null; role always answers a string;
+  // urgent and demands_attention are getter-only properties on the real
+  // Meta.Window, so they are read-guarded getters here too, not methods.
+  wmClassInstance: string | null = 'fixture-instance';
+  gtkApplicationId: string | null = null;
+  role = 'fixture-role';
+  urgentFlag = false;
+  demandsAttentionFlag = false;
   private read(): void { if (this.retiring) throw new Error('native read on retiring window'); }
   get_compositor_private(): Signals { this.read(); return this.actor; }
   get_window_type(): number { this.read(); return 0; }
@@ -62,6 +71,11 @@ class NativeWindow extends Signals {
   get_transient_for(): null { this.read(); return null; }
   is_attached_dialog(): boolean { this.read(); return false; }
   is_on_all_workspaces(): boolean { this.read(); return this.onAllWorkspaces; }
+  get_wm_class_instance(): string | null { this.read(); return this.wmClassInstance; }
+  get_gtk_application_id(): string | null { this.read(); return this.gtkApplicationId; }
+  get_role(): string { this.read(); return this.role; }
+  get urgent(): boolean { this.read(); return this.urgentFlag; }
+  get demands_attention(): boolean { this.read(); return this.demandsAttentionFlag; }
   get resizeable(): boolean { this.read(); return this.resizeFunction; }
   get_min_size(): [boolean, number, number] { this.read(); return this.minSize; }
   get_max_size(): [boolean, number, number] { this.read(); return this.maxSize; }
@@ -277,6 +291,91 @@ describe('native window lifetime', () => {
     const signals = [...window.handlers.values()].map(h => h.signal);
     expect(signals).toContain('notify::on-all-workspaces');
     expect(signals).toContain('notify::skip-taskbar');
+    f.tracker.destroy();
+    expect(window.handlers.size).toBe(0);
+  });
+});
+
+// Phase 4: for_window matches on instance, app_id and window_role, and
+// nothing previously read urgency, so client.urgent colours in the user's
+// config had nothing to observe. These five facts and their three watches
+// close both gaps.
+describe('Phase 4 window facts and urgency', () => {
+  it('reads instance, appId and role from Mutter', () => {
+    const f = setup();
+    f.create(true, window => {
+      window.wmClassInstance = 'gnome-control-center';
+      window.gtkApplicationId = 'org.gnome.Settings';
+      window.role = 'dialog';
+    });
+    const [info] = f.tracker.list();
+    expect(info.instance).toBe('gnome-control-center');
+    expect(info.appId).toBe('org.gnome.Settings');
+    expect(info.role).toBe('dialog');
+    f.tracker.destroy();
+  });
+
+  it('reports urgency appearing and then clearing, not merely absent', () => {
+    // A static "neither hint is set" assertion passes even against a
+    // hardcoded `urgent: false`, which is what the placeholder was before
+    // this task -- and it cannot tell OR from AND, since both are false for
+    // false,false. Asserting the transition makes the false half load-bearing.
+    const f = setup();
+    const window = f.create();
+    const info = (): boolean | undefined => f.tracker.list()[0]?.urgent;
+    window.urgentFlag = true;
+    expect(info()).toBe(true);
+    window.urgentFlag = false;
+    expect(info()).toBe(false);
+    window.demandsAttentionFlag = true;
+    expect(info()).toBe(true);
+    window.demandsAttentionFlag = false;
+    expect(info()).toBe(false);
+    f.tracker.destroy();
+  });
+
+  it('is urgent when the urgent hint is set', () => {
+    const f = setup();
+    f.create(true, window => { window.urgentFlag = true; });
+    expect(f.tracker.list()[0]?.urgent).toBe(true);
+    f.tracker.destroy();
+  });
+
+  it('is urgent when the demands-attention hint is set', () => {
+    const f = setup();
+    f.create(true, window => { window.demandsAttentionFlag = true; });
+    expect(f.tracker.list()[0]?.urgent).toBe(true);
+    f.tracker.destroy();
+  });
+
+  it('emits a title event when the title changes', () => {
+    const f = setup();
+    const window = f.create();
+    const [id] = f.tracker.list().map(w => w.id);
+    window.emit('notify::title');
+    expect(f.events.filter(e => e.type === 'title')).toEqual([{type: 'title', id}]);
+    f.tracker.destroy();
+  });
+
+  it('emits an urgent event for either urgency signal', () => {
+    const f = setup();
+    const window = f.create();
+    const [id] = f.tracker.list().map(w => w.id);
+    window.emit('notify::urgent');
+    window.emit('notify::demands-attention');
+    expect(f.events.filter(e => e.type === 'urgent')).toEqual([
+      {type: 'urgent', id}, {type: 'urgent', id},
+    ]);
+    f.tracker.destroy();
+  });
+
+  it('connects and disposes the title, urgent and demands-attention watches with the rest of the window handlers', () => {
+    const f = setup();
+    const window = f.create();
+    const signals = [...window.handlers.values()].map(h => h.signal);
+    expect(signals).toContain('notify::title');
+    expect(signals).toContain('notify::urgent');
+    expect(signals).toContain('notify::demands-attention');
     f.tracker.destroy();
     expect(window.handlers.size).toBe(0);
   });

@@ -1,8 +1,11 @@
 import {describe, it, expect} from 'vitest';
 import {logicalLines} from '../../../src/config/lexer';
 import {parse} from '../../../src/config/parser';
+import {loadConfigText} from '../../../src/config';
 
 const P = (src: string) => parse(logicalLines(src));
+/** Full pipeline (parse + resolve): `workspace N output` lands in the resolved Config, not a Directive. */
+const load = (src: string) => loadConfigText(src);
 
 describe('parse directives', () => {
   it('bindsym with flags, modes and raw commands', () => {
@@ -153,6 +156,109 @@ describe('bar block', () => {
     expect(r.directives).toEqual([]);
     expect(r.diagnostics).toEqual([
       {line: 1, severity: 'error', message: 'unknown directive strip_workspace_numbers'},
+    ]);
+  });
+});
+
+describe('workspace N output', () => {
+  it('parses workspace N output', () => {
+    const {config, diagnostics} = load('workspace 2 output DP-1\n');
+    expect(diagnostics).toEqual([]);
+    expect(config!.workspaceOutputs.get(1)).toEqual({names: ['DP-1'], line: 1});
+  });
+
+  it("takes the workspace number from a name's leading digits, as workspace number does", () => {
+    const {config} = load('workspace "3:III" output HDMI-1\n');
+    expect(config!.workspaceOutputs.get(2)).toEqual({names: ['HDMI-1'], line: 1});
+  });
+
+  it("accepts i3's list of outputs, first live one winning at resolution", () => {
+    const {config} = load('workspace 1 output primary DP-1 HDMI-1\n');
+    expect(config!.workspaceOutputs.get(0)!.names).toEqual(['primary', 'DP-1', 'HDMI-1']);
+  });
+
+  it('warns on a workspace directive with no output clause, rather than accepting it silently', () => {
+    const {diagnostics} = load('workspace 1 gaps inner 5\n');
+    expect(diagnostics.map(d => d.severity)).toEqual(['warning']);
+    expect(diagnostics[0]!.message).toMatch(/workspace/);
+  });
+
+  it('rejects a workspace directive whose number is not a number', () => {
+    const {diagnostics} = load('workspace bogus output DP-1\n');
+    expect(diagnostics.map(d => d.severity)).toEqual(['warning']);
+  });
+
+  it('rejects workspace 0, rather than silently recording an unreachable zero-based index of -1', () => {
+    // Fix round 1, F3: i3 workspace numbers are 1-based; workspaceNumber("0") legitimately returns 0
+    // (it *is* a leading digit), so without this guard `index = number - 1` would store -1, a key no
+    // real workspace index can ever match, and the pin would silently do nothing forever.
+    const {config, diagnostics} = load('workspace 0 output DP-1\n');
+    expect(diagnostics.map(d => d.severity)).toEqual(['warning']);
+    expect(diagnostics[0]!.message).toMatch(/workspace/);
+    expect(config!.workspaceOutputs.size).toBe(0);
+  });
+});
+
+describe('focus_follows_mouse', () => {
+  it('defaults to yes, as i3 does', () => {
+    expect(load('').config!.focusFollowsMouse).toBe(true);
+  });
+
+  it('parses an explicit no', () => {
+    const {config, diagnostics} = load('focus_follows_mouse no\n');
+    expect(diagnostics).toEqual([]);
+    expect(config!.focusFollowsMouse).toBe(false);
+  });
+
+  it('parses an explicit yes', () => {
+    const {config, diagnostics} = load('focus_follows_mouse yes\n');
+    expect(diagnostics).toEqual([]);
+    expect(config!.focusFollowsMouse).toBe(true);
+  });
+
+  it('rejects a value that is not yes or no', () => {
+    const r = P('focus_follows_mouse perhaps\n');
+    expect(r.diagnostics).toEqual([
+      {line: 1, severity: 'error', message: "focus_follows_mouse: expected yes or no, got 'perhaps'"},
+    ]);
+  });
+});
+
+describe('mouse_warping', () => {
+  it('defaults to output, as i3 does', () => {
+    expect(load('').config!.mouseWarping).toBe('output');
+  });
+
+  it('parses an explicit none', () => {
+    const {config, diagnostics} = load('mouse_warping none\n');
+    expect(diagnostics).toEqual([]);
+    expect(config!.mouseWarping).toBe('none');
+  });
+
+  it('parses an explicit output', () => {
+    const {config, diagnostics} = load('mouse_warping output\n');
+    expect(diagnostics).toEqual([]);
+    expect(config!.mouseWarping).toBe('output');
+  });
+
+  it('accepts container (i3 4.17), treats it as output, and warns once', () => {
+    // Fix round 1, I3: a valid i3 value must never fail the load. `container` warps on any focus
+    // change, which this design does not implement, so it folds into the closest approximation
+    // (`output`) with a warning rather than being rejected as malformed.
+    const {config, diagnostics} = load('mouse_warping container\n');
+    expect(diagnostics).toEqual([
+      {line: 1, severity: 'warning',
+        message: 'mouse_warping container: warping on any focus change is not implemented; treating it as output'},
+    ]);
+    expect(config!.mouseWarping).toBe('output');
+  });
+
+  it('rejects a value that is not output, container or none', () => {
+    // `err`, not `warn`: every implemented directive with an enumerated value rejects a malformed one
+    // (Task 11 settled this identically for focus_follows_mouse), so one typo does not silently default.
+    const r = P('mouse_warping perhaps\n');
+    expect(r.diagnostics).toEqual([
+      {line: 1, severity: 'error', message: "mouse_warping: expected output, container or none, got 'perhaps'"},
     ]);
   });
 });

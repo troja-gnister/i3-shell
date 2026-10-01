@@ -148,19 +148,43 @@ def percent_mismatch(expected, snapshot):
 # snapshot access
 # --------------------------------------------------------------------------
 
-def workspace_snapshot(index=None):
+def _snapshot():
+    """GetTree, version-checked. Version 2 inverted the tree: a workspace names
+    one output and owns one root directly, rather than a list of per-monitor
+    entries -- so every reader here goes through this one place that would
+    fail loudly on a regression back to the old shape."""
     data = tree()
     assert data.get('ready'), data
+    assert data['version'] == 2, data
+    return data
+
+
+def workspace_snapshot(index=None):
+    data = _snapshot()
     index = data['activeWorkspace'] if index is None else index
     return next(ws for ws in data['workspaces'] if ws['index'] == index)
 
 
 def monitor_snapshot(workspace=None, monitor=None):
-    ws = workspace_snapshot(workspace)
+    """The workspace a given output currently shows, or -- with no monitor
+    given -- the requested workspace itself, refusing to guess while more
+    than one output is live.
+
+    Under version 2 a workspace *is* a single output's entry (`output` and
+    `root` sit on it directly), so "the entry for monitor M" is no longer a
+    lookup inside one workspace's monitor list: it is a search over the
+    top-level `visible` list for the output, then over `workspaces` for the
+    index that entry names -- a different collection than the nested one the
+    old shape offered.
+    """
+    data = _snapshot()
     if monitor is None:
-        assert len(ws['monitors']) == 1, ws['monitors']
-        return ws['monitors'][0]
-    return next(entry for entry in ws['monitors'] if entry['id'] == monitor)
+        assert len(data['visible']) == 1, data['visible']
+        index = data['activeWorkspace'] if workspace is None else workspace
+    else:
+        assert workspace is None, 'monitor_snapshot: pass workspace or monitor, not both'
+        index = next(v['workspace'] for v in data['visible'] if v['output'] == monitor)
+    return next(ws for ws in data['workspaces'] if ws['index'] == index)
 
 
 def walk(snapshot):
@@ -214,8 +238,14 @@ def check(label, actual, expected):
     ok(label, repr(actual))
 
 
-def check_tiling(expected, label, workspace=None, monitor=None, timeout=10):
-    """Structure + native frame + engine target, against independent rectangles."""
+def check_tiling(expected, label, workspace=None, monitor=None, timeout=10, shape_only=False):
+    """Structure + native frame + engine target, against independent rectangles.
+
+    `shape_only` drops the geometry half. Phase 5 lays out only a VISIBLE workspace (one per
+    output): a parked workspace's windows sit in the GNOME attic, unrendered, so their frames
+    keep whatever values they had before the move and cannot be asserted until a swap shows
+    them. See the comment at src/engine.ts's layout loop. Structure is still fully checked.
+    """
     want_shape = bare(expected)
     detail = [None]
 
@@ -230,6 +260,8 @@ def check_tiling(expected, label, workspace=None, monitor=None, timeout=10):
         wrong = percent_mismatch(expected, entry['root'])
         if wrong:
             return wrong
+        if shape_only:
+            return True
         rects = place(expected, area, entry['root'])
         live = {w['title']: w for w in windows() if w['title'] in rects}
         if set(live) != set(rects):
@@ -1054,11 +1086,23 @@ def scenario_parent_kill_transfer():
     check_tiling(node('splith', [leaf('KT a')], [1.0]),
                  'KT the transferred subtree leaves the source workspace')
     check('KT destination workspace does not become active', state()['activeWorkspace'], 0)
+    # Workspace 3 is not visible here (the check above pins activeWorkspace at 0), so under Phase 5 it
+    # is parked in the attic and deliberately not laid out -- structure is the whole observable claim.
     check_tiling(node('splith', [node('splitv', [leaf('KT b'), leaf('KT c')], [0.5, 0.5])], [1.0]),
-                 'KT both descendants arrive together on workspace 3', workspace=2)
+                 'KT both descendants arrive together on workspace 3', workspace=2, shape_only=True)
+    # What geometry used to prove, proven the way Phase 5 allows: both really are parked, not lost.
+    # GetWindows' `workspace` is the NATIVE workspace -- 0 is live, 1 is the attic.
+    parked = {w['title']: w['workspace'] for w in windows() if w['title'] in ('KT b', 'KT c')}
+    check('KT both descendants are parked in the attic', parked, {'KT b': 1, 'KT c': 1})
+    # This used to read the window's own `workspace` field and expect the i3 index 2. That held while
+    # every i3 workspace had a GNOME workspace of its own; since the attic pinned GNOME to two, the
+    # field reports the NATIVE workspace and can only ever be 0 or 1 (asserted just above). The i3
+    # workspace a window belongs to is the tree's answer, so ask the tree.
     for title in ('KT b', 'KT c'):
-        check(f'KT {title} reports the destination workspace',
-              window_by_title(title)['workspace'], 2)
+        check(f'KT {title} is a leaf of the destination workspace',
+              leaf_node(title, workspace=2) is not None, True)
+        check(f'KT {title} left the source workspace',
+              leaf_node(title, workspace=0) is None, True)
 
     press('<Super>3')
     wait_until(lambda: state()['activeWorkspace'] == 2, 'KT workspace 3 active')
@@ -1265,8 +1309,13 @@ def describe_display():
             'logical': [[spec[0] for spec in entry[5]] for entry in logical]}
 
 
-def monitor_ids(workspace=0):
-    return [entry['id'] for entry in workspace_snapshot(workspace)['monitors']]
+def monitor_ids():
+    """The live outputs, primary first -- the top-level `visible` list, one
+    entry per output, in the tree's output order. (Version 1 read this off a
+    single workspace's `monitors` list, back when one workspace could span
+    every output; version 2 gives each workspace exactly one output, so that
+    list is gone and this is a top-level query instead.)"""
+    return [entry['output'] for entry in _snapshot()['visible']]
 
 
 def logical_monitor_rects():
@@ -1488,12 +1537,17 @@ def launcher_state():
 
 
 def check_inside(box, area, label):
-    check(label,
-          [box['x'] >= area['x'],
-           box['y'] >= area['y'],
-           box['x'] + box['width'] <= area['x'] + area['width'],
-           box['y'] + box['height'] <= area['y'] + area['height']],
-          [True, True, True, True])
+    # Report the geometry, not just four anonymous booleans: a bare [True, True, False, True] says
+    # which edge escaped but never by how much, and the numbers are the whole diagnosis.
+    edges = {'left': box['x'] >= area['x'],
+             'top': box['y'] >= area['y'],
+             'right': box['x'] + box['width'] <= area['x'] + area['width'],
+             'bottom': box['y'] + box['height'] <= area['y'] + area['height']}
+    if not all(edges.values()):
+        print(f'{label}: escaped {[k for k, v in edges.items() if not v]}',
+              'box=', json.dumps({k: box[k] for k in ("x", "y", "width", "height")}),
+              'area=', json.dumps(area), flush=True)
+    check(label, list(edges.values()), [True, True, True, True])
 
 
 def scenario_launcher(primary_id, second_id, primary_area, second_area):
@@ -1505,10 +1559,27 @@ def scenario_launcher(primary_id, second_id, primary_area, second_area):
     checkable without a second output, so it is checked here.
     """
     reset_windows()
+    # Focus FIRST, then create. Since Task 23 (D7) a live-mapped window joins the FOCUSED output's
+    # visible workspace rather than the monitor Mutter picked, so where this window lands is decided
+    # by focus -- and focus here is whatever the preceding scenario left behind. Setting it before
+    # the create is what makes "lands on the primary output" a claim about the engine rather than a
+    # bet on scenario order.
+    run('focus output primary')
+    wait_until(lambda: state()['focusedOutput'] == primary_id, 'LA focus is on the primary output')
     create('LA primary')
     wait_until(lambda: window_by_title('LA primary')['monitor'] == primary_id,
                'LA the first window lands on the primary output')
 
+    # The launcher resolves its output from the engine's focused output, so record that -- and which
+    # workspace the new window actually joined -- before opening. Without this the failure says only
+    # that the box is in the wrong place, never which of focus or adoption put it there.
+    st = state()
+    snap = tree()
+    print('LA focus context:', json.dumps(
+        {'focusedOutput': st['focusedOutput'], 'activeWorkspace': st['activeWorkspace'],
+         'visible': snap['visible'],
+         'window_monitor': window_by_title('LA primary')['monitor'],
+         'primary_id': primary_id, 'second_id': second_id}), flush=True)
     run('launcher')
     wait_until(lambda: launcher_state()['open'], 'LA the launcher opens')
     box = launcher_state()
@@ -1533,14 +1604,18 @@ def scenario_launcher(primary_id, second_id, primary_area, second_area):
           and box['x'] >= primary_area['x'],
           False)
 
-    # A binding must not fire while the launcher holds the grab. <Super>2
-    # targets workspace index 1, and the session is on index 0 here -- pressing
-    # a binding for the workspace you are already on is a no-op either way and
-    # would pass with the grab leaking. The grab-release proof below presses the
-    # SAME key: it must do nothing now and something once the launcher closes.
+    # A binding must not fire while the launcher holds the grab -- but the key pressed has to be one
+    # that WOULD do something, or a leaking grab passes. This used to hardcode "<Super>2 targets index
+    # 1 and the session is on index 0", which held while there was a single global active workspace.
+    # Under per-output workspaces the active workspace is whatever the FOCUSED output shows, and focus
+    # is on the second output by now, which shows index 1 -- so <Super>2 became a no-op either way.
+    # Derive the target instead: a workspace no output is showing, which a press must therefore move.
+    visible_indices = {entry['workspace'] for entry in tree()['visible']}
+    target = next(i for i in range(10) if i not in visible_indices)
+    grab_key = f'<Super>{(target + 1) % 10}'  # index 9 is <Super>0
     before = json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace']
-    check('LA the session has not left the boot workspace yet', before, 0)
-    press('<Super>2')
+    check('LA the grab proof targets a workspace the session is not on', before != target, True)
+    press(grab_key)
     after = json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace']
     check('LA a workspace binding does not fire while the launcher is open', after, before)
 
@@ -1554,6 +1629,20 @@ def scenario_launcher(primary_id, second_id, primary_area, second_area):
     # GetWindows reports no focus field (WindowSnapshot spreads WindowInfo,
     # which has none), so focus is proved the way the rest of this file proves
     # it: a bare key reaches only the natively focused client's Entry.
+    print('LA focus-return context:', json.dumps(
+        {'focusedOutput': state()['focusedOutput'], 'activeWorkspace': state()['activeWorkspace'],
+         'visible': tree()['visible'],
+         'selected': [{'ws': w['index'], 'sel': w.get('selected')} for w in tree()['workspaces']
+                      if w.get('selected')][:4],
+         'windows': [{'t': w['title'], 'mon': w['monitor'], 'native_ws': w['workspace'],
+                      'state': w['state']} for w in windows()]}), flush=True)
+    # Guard before the proof, not after the failure. A bare keystroke reaches a client only while the
+    # Shell is in NORMAL mode: in the overview it holds a modal grab and unmaps every client actor, so
+    # `type_key` below would time out with Mutter still reporting this very window as `focus_window` --
+    # a lost-focus failure that is nothing of the kind (Task 21). `ready_normal` already escapes the
+    # overview once at session start; nothing guaranteed the session was still out of it here.
+    check('LA the session is in NORMAL mode, so a keystroke can reach a client',
+          state()['actionMode'], 1)
     type_key('z', 'LA primary', {})
     ok('LA focus returned to the window that had it')
 
@@ -1561,7 +1650,7 @@ def scenario_launcher(primary_id, second_id, primary_area, second_area):
     # with the keyboard still captured, which is the failure that costs the
     # user their session.
     workspace_before = json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace']
-    press('<Super>2')
+    press(grab_key)  # the same key the held grab swallowed above
     wait_until(
         lambda: json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace'] != workspace_before,
         'LA bindings work again once the launcher has closed')
@@ -1604,10 +1693,29 @@ def two_monitor_scenario():
     scenario_launcher(primary_id, second_id, first_area, second_area)
 
     reset_windows()
+    # Focus first, same reason as scenario_launcher: since D7 a live-mapped window follows focus, and
+    # scenario_launcher above leaves focus on the second output.
+    run('focus output primary')
+    wait_until(lambda: state()['focusedOutput'] == primary_id, 'MM focus is on the primary before creating')
     create('MM stay')
     create('MM move')
     check_tiling(node('splith', [leaf('MM stay'), leaf('MM move')], [0.5, 0.5]),
                  'MM both windows tile on the primary output', monitor=primary_id)
+
+    # Focus explicitly, for the same reason scenario_launcher does above: `floating enable` acts on the
+    # selection of the FOCUSED output's visible workspace, and scenario_launcher leaves focus on the
+    # second output. Since Task 23 (D7) a live-mapped window joins the FOCUSED output's workspace
+    # rather than the workspace of whatever monitor Mutter chose, so these fixtures follow focus --
+    # which is exactly why focus must be set here and not inherited: without this they would be
+    # created on the second output and the assertions below, which name the primary, would fail.
+    run('focus output primary')
+    wait_until(lambda: state()['focusedOutput'] == primary_id and state()['activeWorkspace'] == 0,
+               'MM focus is on the primary output')
+    # Asked by output, not by workspace index: with two outputs live `monitor_snapshot` refuses to
+    # guess which workspace a bare index means.
+    check('MM the window to float is the selection',
+          workspace_snapshot(0)['selected'],
+          {'kind': 'tiled', 'nodeId': leaf_node('MM move', monitor=primary_id)['id']})
 
     # floating enable -> explicit position inside the other output -> floating
     # disable, waiting for the native monitor between the steps.
@@ -1633,6 +1741,26 @@ def two_monitor_scenario():
     print('before removal:', json.dumps({'nodes': moved_node, 'windows': tracked,
                                          'monitors': monitor_ids()}), flush=True)
 
+    def desk():
+        """Everything the per-output claims below are made of, in one printable digest:
+        which output shows which workspace, which output each workspace is assigned to,
+        each workspace's shape, and every tracked window's NATIVE workspace (0 live,
+        1 the attic). Printed on failure, because an unreadable native failure costs a
+        whole run."""
+        data = _snapshot()
+        return {'visible': data['visible'],
+                'workspaces': {ws['index']: {'output': ws['output'], 'shape': shape_of(ws['root'])}
+                               for ws in data['workspaces'] if ws['index'] in (0, 1)},
+                'native': {w['title']: w['workspace'] for w in windows()}}
+
+    # Captured with BOTH outputs still live, which is the only moment both targets are
+    # observable at once: a parked workspace is never laid out, so once the second output
+    # is gone `MM move`'s expectedRect is merely the stale value from this layout and says
+    # nothing. The restore is asserted against these, so "the window came back to the
+    # rectangle it had on that output" is a real claim rather than a tautology.
+    targets = {title: window_by_title(title)['expectedRect'] for title in tracked}
+    print('targets with both outputs:', json.dumps(targets), json.dumps(desk()), flush=True)
+
     # Capture BOTH configurations while both outputs are still present: after
     # the removal the second output has no logical monitor left to rebuild one
     # from, so a restore must replay what was recorded here.
@@ -1656,14 +1784,59 @@ def two_monitor_scenario():
     wait_until(lambda: len(monitor_ids()) == 1, 'the second output is gone', timeout=20)
     check('the surviving monitor keeps its stable id', monitor_ids(), [primary_id])
     check('every tracked window survives', {w['title']: w['id'] for w in windows()}, tracked)
-    check_tiling(node('splith', [leaf('MM stay'), node('splith', [leaf('MM move')], [1.0])],
-                      [0.5, 0.5]),
-                 'MM the vanished output\'s contents migrate under the primary root',
-                 monitor=primary_id)
 
-    print('display state with one output:', json.dumps(describe_display()), flush=True)
+    # A62, first half. Phase 3B flattened a lost output's workspace into the primary root
+    # (`appendRootContents`); Phase 5 Task 3 deliberately removed that. The workspace is
+    # reassigned to the primary WITH ITS LAYOUT INTACT, keeping its own root, and -- because
+    # the primary is already showing workspace 0 -- it arrives PARKED: no output shows it and
+    # its windows sit in the GNOME attic. Flattening emptied workspace 1 and put `MM move` on
+    # screen under the primary's root, so the three checks that discriminate against it are the
+    # attic membership (flattening leaves the window LIVE), workspace 1's own root still holding
+    # `MM move` (flattening leaves it empty), and the primary root holding `MM stay` alone
+    # (flattening nests `MM move` beside it, at half the work area). The reassignment and
+    # visibility checks are not discriminating on their own -- they are here so that "parked" is
+    # asserted positively, as a state, rather than inferred from something being absent.
+    def parked():
+        data = _snapshot()
+        entry = next(ws for ws in data['workspaces'] if ws['index'] == 1)
+        return (entry['output'], [v['workspace'] for v in data['visible']],
+                window_by_title('MM move')['workspace'])
 
-    targets = {title: window_by_title(title)['expectedRect'] for title in tracked}
+    want_parked = (primary_id, [0], 1)
+    try:
+        wait_until(lambda: parked() == want_parked,
+                   'MM the vanished output\'s workspace migrates to the primary, parked')
+    except AssertionError:
+        print('mismatch: (workspace 1 output, visible workspaces, MM move native workspace)',
+              json.dumps(parked()), 'want', json.dumps(want_parked),
+              json.dumps(desk()), flush=True)
+        raise
+    # Positively, not by absence: the workspace is on the primary, the only thing any output
+    # shows is workspace 0, and the window really is on the attic native workspace.
+    check('MM the vanished output\'s workspace is reassigned to the primary',
+          workspace_snapshot(1)['output'], primary_id)
+    check('MM no output shows the migrated workspace',
+          [v['workspace'] for v in _snapshot()['visible']], [0])
+    # GetWindows' `workspace` is the NATIVE workspace -- 0 is live, 1 is the attic -- not the
+    # i3 index GetTree reports (that is 1 here by coincidence of numbering; the two are
+    # different things and confusing them has cost this project real time already).
+    check('MM the migrated workspace\'s window waits in the GNOME attic',
+          window_by_title('MM move')['workspace'], 1)
+    # The layout itself. shape_only: src/engine.ts lays out only the workspaces some output is
+    # showing, so while this one is parked neither `MM move`'s frame nor its expectedRect is
+    # observable -- the structure is the whole observable claim, and it is the one flattening
+    # would get wrong (flattening would leave this root empty).
+    check_tiling(node('splith', [leaf('MM move')], [1.0]),
+                 'MM the migrated workspace keeps its own root and layout',
+                 workspace=1, shape_only=True)
+    # Workspace 0 IS visible, so its geometry is asserted in full: flattening would have made
+    # this root splith[MM stay, splith[MM move]] with MM stay on half the work area.
+    check_tiling(node('splith', [leaf('MM stay')], [1.0]),
+                 'MM the primary workspace is untouched by the migration', monitor=primary_id)
+
+    print('display state with one output:', json.dumps(describe_display()),
+          json.dumps(desk()), flush=True)
+
     generations = {title: generation(title) for title in tracked}
     failure = apply_monitors(both_outputs)
     print('restore request:', failure or 'accepted', json.dumps(describe_display()), flush=True)
@@ -1678,11 +1851,11 @@ def two_monitor_scenario():
         print('LIMITATION: this headless backend did not restore the removed virtual '
               'output.', failure or 'the request was accepted but no output returned',
               flush=True)
-        print('LIMITATION: removal and migration are verified automatically; physical '
-              'reconnection stays unchecked and belongs to the live walk.', flush=True)
+        print('LIMITATION: removal, reassignment and parking are verified automatically; '
+              'physical reconnection stays unchecked and belongs to the live walk.', flush=True)
         print('final display state:', json.dumps(describe_display()), flush=True)
         reset_windows()
-        print('ok phase 2 two-monitor scenario (removal and migration verified; '
+        print('ok phase 2 two-monitor scenario (removal, reassignment and parking verified; '
               'reconnection unsupported on this backend)', flush=True)
         return
     wait_until(lambda: len(monitor_ids()) == 2,
@@ -1690,12 +1863,48 @@ def two_monitor_scenario():
                timeout=20)
     check('the primary id is unchanged across the reconfiguration', monitor_ids()[0], primary_id)
     check('live membership is stable', {w['title']: w['id'] for w in windows()}, tracked)
-    check_tiling(node('splith', [leaf('MM stay'), node('splith', [leaf('MM move')], [1.0])],
-                      [0.5, 0.5]),
-                 'MM reconnecting does not migrate contents back', monitor=primary_id)
-    check('MM the returning output gets a valid empty root',
-          shape_of(monitor_snapshot(monitor=monitor_ids()[1])['root']), ('splith', []))
+
+    # A62, second half. Task 16 remembers where an unplug found a workspace, so the returning
+    # output takes workspace 1 back, with `MM move` still in it. Two assertions used to stand
+    # here -- 'MM reconnecting does not migrate contents back', over a flattened primary root,
+    # and 'MM the returning output gets a valid empty root' -- and both described Phase 3B,
+    # where the contents had already been poured into the primary and there was nothing left
+    # to restore. Under Phase 5 the returning output is handed a populated workspace.
+    returning = monitor_ids()[1]
+
+    def restored():
+        data = _snapshot()
+        entry = next(ws for ws in data['workspaces'] if ws['index'] == 1)
+        return (entry['output'],
+                sorted([v['output'], v['workspace']] for v in data['visible']),
+                window_by_title('MM move')['workspace'])
+
+    want_restored = (returning, sorted([[primary_id, 0], [returning, 1]]), 0)
+    try:
+        wait_until(lambda: restored() == want_restored,
+                   'MM workspace 1 returns to the output that came back')
+    except AssertionError:
+        print('mismatch: (workspace 1 output, visible pairs, MM move native workspace)',
+              json.dumps(restored()), 'want', json.dumps(want_restored),
+              json.dumps(desk()), flush=True)
+        raise
+    check('MM the output that came back is the one that was removed', returning, second_id)
+    check('MM the returning output shows workspace 1 again, not the primary\'s',
+          [v['workspace'] for v in _snapshot()['visible'] if v['output'] == returning], [1])
+    check('MM the restored window is live again rather than in the attic',
+          window_by_title('MM move')['workspace'], 0)
+    check_tiling(node('splith', [leaf('MM stay')], [1.0]),
+                 'MM the primary root never absorbed the vanished output\'s contents',
+                 monitor=primary_id)
+    # Now that workspace 1 is visible again its geometry is observable once more, so this is a
+    # full frame + target check. Flattening would leave this root empty.
+    check_tiling(node('splith', [leaf('MM move')], [1.0]),
+                 'MM the returning output gets its workspace and layout back, not an empty root',
+                 monitor=returning)
     for title in tracked:
+        # Against the targets taken while both outputs were live: each window is back on the
+        # rectangle it owned before the unplug. Flattening would have given `MM move` half of
+        # the primary work area instead, on either side of the reconnect.
         check(f'MM {title} keeps its target across the monitor change',
               window_by_title(title)['expectedRect'], targets[title])
         wait_until(lambda t=title: generation(t) != generations[t],
@@ -1859,8 +2068,15 @@ def settings_scenario():
     # The whole point of naming IBus keys instead of scanning its schemas.
     check('a scanned IBus key that collides with nothing is left alone',
           cleared['org.freedesktop.ibus.panel.emoji unicode-hotkey'], ['<Control><Shift>u'])
-    check('static workspaces applied',
-          cleared['org.gnome.desktop.wm.preferences num-workspaces'], 10)
+    # Two, not ten. Phase 5 stopped mapping i3 workspaces 1:1 onto GNOME ones: GNOME is pinned to
+    # exactly two -- LIVE_WORKSPACE 0, always active, and ATTIC_WORKSPACE 1, which holds the windows of
+    # every parked workspace because Mutter refuses to render a non-active workspace. That attic IS the
+    # hiding primitive, so this number is load-bearing: see src/shell/settings.ts, which writes 2, and
+    # the engine's onWorkspacesChanged, which re-applies the settings if GNOME's count is ever not 2.
+    # The i3 workspace count stays 10 and is asserted separately via GetState's workspaceCount.
+    check('GNOME is pinned to the two workspaces the attic needs',
+          cleared['org.gnome.desktop.wm.preferences num-workspaces'], 2)
+    check('the i3 workspace count is unaffected by that pin', state()['workspaceCount'], 10)
     # A22. The `original` half is the point of the pair: it proves the write is
     # not a no-op agreeing with what GNOME already had, which is what makes A27
     # ("no hand-edited GSetting") an assertion rather than a claim.
