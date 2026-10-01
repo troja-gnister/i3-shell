@@ -455,7 +455,10 @@ describe('engine command dispatch', () => {
     it('moves the focused output and the selection with it', () => {
       const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
       f.engine.start();
-      f.add(2, {monitor: 1});
+      f.mapOn(1, 2);   // output 1's own window
+      // Task 23, D7: `mapOn` leaves focus on the output it mapped onto, which is where the user who
+      // opened the window would be standing; this test needs them back on output 0 before crossing right.
+      expect(f.engine.run([{type: 'focus_output', target: 'left'}], 0)).toBe('focus output');
       f.calls.length = 0;
       expect(f.engine.run([{type: 'focus_output', target: 'right'}], 1)).toBe('focus output');
       expect(f.engine.state().focusedOutput).toBe(1);
@@ -526,11 +529,11 @@ describe('engine command dispatch', () => {
     it('focus right crosses to the neighbouring output at its edge rather than wrapping', () => {
       const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
       f.engine.start();
-      f.add(1, {monitor: 0});
-      f.add(2, {monitor: 0});
-      f.add(3, {monitor: 1});
-      f.add(4, {monitor: 1});
-      f.focus(2); // rightmost/focused window on output 0
+      f.mapOn(0, 1);
+      f.mapOn(0, 2);
+      f.mapOn(1, 3);
+      f.mapOn(1, 4);
+      f.focus(2); // rightmost/focused window on output 0, which brings the focused output back to 0
       f.calls.length = 0;
 
       expect(f.engine.run([{type: 'focus', target: 'right'}], 1)).toBe('focus right');
@@ -556,11 +559,14 @@ describe('engine command dispatch', () => {
     it('move right at the edge inserts into the neighbouring output at its entering edge', () => {
       const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
       f.engine.start();
-      f.add(1, {monitor: 0});
-      f.add(3, {monitor: 1});
-      f.add(4, {monitor: 1});
+      f.mapOn(0, 1);
+      f.mapOn(1, 3);
+      f.mapOn(1, 4);
       f.focus(1);
       f.calls.length = 0;
+      // `mapOn` crosses outputs through the real `focus output`, which warps; the warp this test measures
+      // is the one the `move` below makes.
+      f.pointer.clear();
 
       expect(f.engine.run([{type: 'move', direction: 'right'}], 1)).toBe('move right');
       expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: false});
@@ -609,8 +615,8 @@ describe('engine command dispatch', () => {
       // The defect this phase exists for: a window on the television with no command able to move it.
       const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
       f.engine.start();
-      f.add(8, {monitor: 1});
-      f.engine.run([{type: 'focus_output', target: 'right'}], 1);
+      f.mapOn(1, 8);
+      expect(f.engine.state().focusedOutput).toBe(1);   // `mapOn` already took the user to the television
       expect(f.engine.run([{type: 'move_container_to_output', target: 'left'}], 2)).toBe('move container to output');
       expect(f.tree().location(8)).toEqual({workspace: 0, output: 0, floating: false});
     });
@@ -646,9 +652,9 @@ describe('engine command dispatch', () => {
     it('move container to output accepts a primary target, at the normal insertion point rather than a forced edge', () => {
       const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
       f.engine.start();
-      f.add(10, {monitor: 0});
-      f.add(9, {monitor: 1});
-      f.engine.run([{type: 'focus_output', target: 'right'}], 1);
+      f.mapOn(0, 10);
+      f.mapOn(1, 9);
+      expect(f.engine.state().focusedOutput).toBe(1);
       expect(f.engine.run([{type: 'move_container_to_output', target: 'primary'}], 2)).toBe('move container to output');
       expect(f.tree().location(9)).toEqual({workspace: 0, output: 0, floating: false});
       // `primary` is not a direction: a direction would reseat window 9 at a forced edge (index 0 for
@@ -683,8 +689,10 @@ describe('engine command dispatch', () => {
     it('move workspace to output warns rather than desyncing when parking the displaced workspace is refused', () => {
       const f = fakeEngine('bindsym Mod4+q kill', {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
       f.engine.start();
-      f.add(1, {monitor: 0});
-      f.add(2, {monitor: 1});
+      // Mapped in this order on purpose: `mapOn` leaves focus where it mapped, and the command below
+      // moves the focused output's workspace to the right, so the user has to end on output 0.
+      f.mapOn(1, 2);
+      f.mapOn(0, 1);
       f.refuseMove(2);
       expect(f.engine.run([{type: 'move_workspace_to_output', target: 'right'}], 1)).toBe('move workspace to output');
       expect(f.calls).toContain('warn:could not park window 2; leaving it on screen');
@@ -725,10 +733,10 @@ describe('workspace and focus on two displays (Task 19)', () => {
   it('takes focus to an occupied workspace’s own display instead of dragging its windows', () => {
     const f = fakeEngine(referenceText, desk);
     f.engine.start();
-    f.add(7, {monitor: 3});
+    f.mapOn(3, 7);
     f.flush();
     expect(f.tree().location(7)).toEqual({workspace: 1, output: 3, floating: false});
-    f.engine.run([{type: 'focus_output', target: 'right'}], 1);
+    expect(f.engine.state().focusedOutput).toBe(3);   // `mapOn` left the user on the external
     f.engine.run([{type: 'workspace', target: number(6)}], 2);   // the external looks elsewhere
     expect([...f.tree().visible]).toEqual([[2, 0], [3, 5]]);
     f.engine.run([{type: 'focus_output', target: 'left'}], 3);
@@ -748,12 +756,12 @@ describe('workspace and focus on two displays (Task 19)', () => {
   it('parks and shows on the display the switch actually lands on', () => {
     const f = fakeEngine(referenceText, desk);
     f.engine.start();
-    f.add(7, {monitor: 3});                                      // workspace 1, on the external
-    f.add(9, {monitor: 2});                                      // workspace 0, on the laptop
+    f.mapOn(3, 7);                                               // workspace 1, on the external
+    f.mapOn(2, 9);                                               // workspace 0, on the laptop
     f.flush();
     f.engine.run([{type: 'focus_output', target: 'right'}], 1);
     f.engine.run([{type: 'workspace', target: number(6)}], 2);   // the external shows workspace 5
-    f.add(8, {monitor: 3});                                      // workspace 5, on the external
+    f.mapOn(3, 8);                                               // workspace 5, on the external
     f.flush();
     f.engine.run([{type: 'focus_output', target: 'left'}], 3);
     f.calls.length = 0;
@@ -771,9 +779,8 @@ describe('workspace and focus on two displays (Task 19)', () => {
   it('warps the pointer only when the switch crosses to another display', () => {
     const f = fakeEngine(referenceText, desk);
     f.engine.start();
-    f.add(7, {monitor: 3});
+    f.mapOn(3, 7);                                               // and the user is on the external
     f.flush();
-    f.engine.run([{type: 'focus_output', target: 'right'}], 1);
     f.engine.run([{type: 'workspace', target: number(6)}], 2);
     f.engine.run([{type: 'focus_output', target: 'left'}], 3);
     f.calls.length = 0;
@@ -807,7 +814,7 @@ describe('workspace and focus on two displays (Task 19)', () => {
   it('follows the compositor’s focus onto the other display', () => {
     const f = fakeEngine(referenceText, desk);
     f.engine.start();
-    f.add(7, {monitor: 3});
+    f.mapOn(3, 7);
     f.flush();
     f.engine.run([{type: 'focus_output', target: 'left'}], 1);
     expect(f.engine.state().focusedOutput).toBe(2);              // the laptop, showing an empty workspace

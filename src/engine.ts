@@ -128,6 +128,14 @@ export interface EngineState {
   focusedOutput: MonitorId | null;
 }
 
+/**
+ * Task 23, D7: why a window the tree has not seen is entering it, which is the only thing that decides
+ * which workspace it joins (see `_adoptionWorkspace`). 'startup' is the commit that builds the tree --
+ * enable, or `restart` -- and nothing else; `_syncWindow` defaults to 'live' so a caller that forgets
+ * gets i3's semantics rather than the compositor's.
+ */
+type Adoption = 'live' | 'startup';
+
 export class Engine {
   private _config!: Config;
   private _loaded!: LoadedConfig;
@@ -627,8 +635,17 @@ export class Engine {
       const live = this._ports.windows.list();
       const ids = new Set(live.map(w => w.id));
       for (const id of this._windows.keys()) if (!ids.has(id)) this._forget(id);
+      // Task 23, D7: `isNew` is the whole of the live-map/startup distinction, and it is not a new
+      // source of truth -- it is the same local the selection restore below already reads. The commit
+      // that BUILDS the tree is, by construction, the only one that adopts windows which predate the
+      // tree: `windows.start()` runs before `engine.start()` (see src/extension.ts), so every 'added'
+      // event for a pre-existing window is dropped by the `!this._started` guard in `onWindowEvent` and
+      // those windows reach the engine only through `windows.list()` right here. `restart` nulls the
+      // tree and lands in the same branch for the same reason. Every other adoption -- an 'added' event,
+      // or a window that was sticky/skip-taskbar from birth and has only now become eligible -- happens
+      // against a tree that already exists, and is a live map.
       for (const info of live) {
-        this._syncWindow(info.id);
+        this._syncWindow(info.id, isNew ? 'startup' : 'live');
         if (this._disposed) return;
       }
       if (isNew) {
@@ -849,7 +866,7 @@ export class Engine {
     return this._manualFloating.get(info.id) ?? info.kind === 'floating';
   }
 
-  private _syncWindow(id: WindowId): void {
+  private _syncWindow(id: WindowId, adopting: Adoption = 'live'): void {
     const info = this._ports.windows.get(id);
     if (!info) { this._forget(id); return; }
     const old = this._windows.get(id);
@@ -882,7 +899,7 @@ export class Engine {
       if (evicted !== undefined) { this._manualFloating.set(id, evicted.floating); this._minimized.delete(id); }
       // The engine is the authority now (spec 2.6). Mutter's workspace for this window is 0 or 1 and
       // says nothing about which i3 workspace it belongs to.
-      const target = existing ? existing.workspace : this._adoptionWorkspace(tree, info, evicted?.workspace);
+      const target = existing ? existing.workspace : this._adoptionWorkspace(tree, info, adopting, evicted?.workspace);
       if (!tree.location(id) && tree.workspaces.has(target)) {
         if (this._floating(info)) tree.addFloating(id, target);
         else tree.insert(id, target);
@@ -902,10 +919,18 @@ export class Engine {
       // disagrees with the new workspace until the user drags it.
       //
       // `existing` too, not just `old`: a window that has only now (re-)entered the tree took its
-      // workspace from `_adoptionWorkspace` a few lines up, which already consulted `info.monitor` and
-      // deliberately lets the workspace an *evicted* window left outrank it. A monitor that changed
-      // while the window was minimised, sticky or skip-taskbar is measured against a time when it had no
-      // workspace at all, so reading it as a drag would quietly delete that memory.
+      // workspace from `_adoptionWorkspace` a few lines up, and that call owns the choice outright.
+      // Task 23, D7 strengthened this guard rather than weakening it. The original reason was that
+      // adoption "already consulted `info.monitor`", so a re-home could only agree with it; adoption no
+      // longer consults it for a live map, which means a re-home here would now *overrule* the decision
+      // instead of echoing it -- handing the window straight back to the monitor Mutter chose and
+      // reinstating D7 on any path where the monitor also happened to change. The eviction half of the
+      // reason is untouched and is still the sharper one: a monitor that changed while the window was
+      // minimised, sticky or skip-taskbar is measured against a time when it had no workspace at all, so
+      // reading it as a drag would quietly delete the memory the eviction exists to keep.
+      //
+      // (`old` alone would not cover either case: a brand-new window has no `old`, but one returning
+      // from eviction does, having been tracked throughout.)
       if (existing && old && old.monitor !== info.monitor) {
         this._rehomeFloating(tree, id, info);
         if (this._disposed) return;
@@ -939,15 +964,27 @@ export class Engine {
   }
 
   /**
-   * Where a window the tree has not seen belongs: the workspace it left, if a window that was
-   * evicted (minimized, sticky, or skip-taskbar) and is now returning still remembers one that
-   * exists, otherwise the visible workspace of the output it is on.
+   * Where a window the tree has not seen belongs. Three answers, in order:
    *
-   * On enable its pre-enable workspace is unrecoverable -- reducing num-workspaces to 2 makes Mutter
-   * collapse the removed workspaces -- but its output is observable and is what the user sees.
+   * 1. The workspace it left, if a window that was evicted (minimized, sticky, or skip-taskbar) and is
+   *    now returning still remembers one that exists. This outranks everything: it is the only case
+   *    where the engine's own earlier decision survives, and the eviction exists to keep it.
+   * 2. `adopting === 'startup'`: the visible workspace of the output the window is already on. Its
+   *    pre-enable workspace is unrecoverable -- reducing num-workspaces to 2 makes Mutter collapse the
+   *    removed workspaces -- but its output is observable and is what the user sees. These windows
+   *    predate the tree, so there is no i3 "focused workspace" they could ever have been mapped onto,
+   *    and dragging them all onto one would collapse a multi-monitor desktop at every enable.
+   * 3. `adopting === 'live'`: the focused output's visible workspace, i3 semantics, whatever monitor
+   *    Mutter chose. Task 23, D7: this used to read `info.monitor` here too, so with focus on output 2
+   *    and Mutter mapping a window on output 1 the window was adopted onto output 1's workspace while
+   *    focus stayed on output 2 -- the user typing into a display they were not looking at. Real i3
+   *    opens a new window on the focused workspace and never asks the compositor where it would go.
+   *    (`tree.activeWorkspace` *is* `visible.get(focusedOutput)`, with the throw for an output showing
+   *    nothing, which `coverOutputs` makes unreachable.)
    */
-  private _adoptionWorkspace(tree: Tree, info: WindowInfo, remembered?: number): number {
+  private _adoptionWorkspace(tree: Tree, info: WindowInfo, adopting: Adoption, remembered?: number): number {
     if (remembered !== undefined && tree.workspaces.has(remembered)) return remembered;
+    if (adopting === 'live') return tree.activeWorkspace;
     return tree.visible.get(info.monitor ?? tree.focusedOutput) ?? tree.activeWorkspace;
   }
 

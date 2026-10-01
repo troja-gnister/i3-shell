@@ -454,7 +454,7 @@ describe('engine lifecycle', () => {
     });
     f.engine.start();
     expect(f.tree().visible.get(2)).toBe(9);
-    f.add(5, {monitor: 2}); f.flush();          // adopts onto workspace 9, visible on the television
+    f.mapOn(2, 5); f.flush();                   // adopts onto workspace 9, visible on the television
     expect(f.tree().location(5)).toMatchObject({workspace: 9});
     expect(f.windows.get(5)!.workspace).toBe(0);   // LIVE
     f.setTopology(outputsTopology([{id: 0, index: 0, connectors: ['HDMI-1']},
@@ -473,7 +473,7 @@ describe('engine lifecycle', () => {
     const f = fakeEngine('bindsym Mod4+q kill',
       {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
     f.engine.start();
-    f.add(5, {monitor: 1}); f.flush();
+    f.mapOn(1, 5); f.flush();
     f.refuseMove(5);
     f.calls.length = 0;
     f.setTopology(outputsTopology([{id: 0, index: 0}], 0));
@@ -559,8 +559,8 @@ describe('decorations', () => {
     f.engine.start();
     f.engine.setRowHeight(20);
     f.add(1); f.flush();                 // workspace 0, output 10 -- visible
-    f.add(2, {monitor: 11}); f.flush();  // workspace 1, output 11 -- visible
-    f.add(3); f.flush();                 // adopts onto workspace 0, output 10's visible workspace
+    f.mapOn(11, 2); f.flush();           // workspace 1, output 11 -- visible
+    f.mapOn(10, 3); f.flush();           // adopts onto workspace 0, output 10's visible workspace
 
     f.engine.focusWindow(3);
     f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 3, name: '3'}}], 0); f.flush();

@@ -103,9 +103,10 @@ Pinned by `normalize()` and by property tests:
    a floating window, none of which translates the frame. A window whose workspace no output shows is in
    the attic and is exempt — a change in its reported monitor is the compositor relocating it off a
    display that has gone, not the user dragging it, and re-homing it would scatter an unplugged output's
-   floating windows and defeat §7's remembering. A window only now entering the tree is exempt for the
-   same reason: §2.6's adoption rule already read its monitor, and the workspace an *evicted* window left
-   outranks it. Membership is all that moves: `Tree.rehomeFloating`
+   floating windows and defeat §7's remembering. A window only now entering the tree is exempt, and Task 23
+   (D7) strengthened rather than weakened that: §2.6's adoption rule no longer reads the monitor for a
+   live map, so a re-home here would *overrule* adoption instead of echoing it and hand the window back
+   to the monitor Mutter chose; and the workspace an *evicted* window left outranks both. Membership is all that moves: `Tree.rehomeFloating`
    writes neither `workspace.output`, `visible` nor `focusedOutput`, so invariants 2 and 3 are
    untouched, and the focused output follows the *dragged* window through `Engine._selectWindow` alone
    (Task 19, D5).
@@ -185,6 +186,14 @@ makes Mutter collapse windows from the removed workspaces onto the last remainin
 pre-enable workspace is unrecoverable. A window is adopted onto **the visible workspace of the output
 it currently occupies**. Its output is observable and is what the user sees; its old workspace is not.
 Dumping everything onto workspace I would be the alternative and is worse.
+
+**A window mapped while the session is running is a different question** (Task 23, D7) and gets the i3
+answer: **the focused output's visible workspace**, whatever monitor Mutter chose. These windows do not
+predate the extension, so there is a focused workspace to open them on, and opening them anywhere else
+is the Steam-on-the-television defect. Conversely the enable rule above must *not* become "the focused
+output" — that would collapse a multi-monitor desktop onto one display at every enable, which is what
+this phase exists to prevent (native assertion A14). The two cases are distinguished structurally, by
+whether this is the commit that builds the tree, not by a flag that could drift: see §8.5.
 
 ---
 
@@ -573,6 +582,8 @@ one commit, which is the shape of change that produced 34 St-CRITICALs in Phase 
 10. **§8.5, adoption on enable.** A window is adopted onto the visible workspace of the output it
     currently occupies (§2.6). Its pre-enable workspace is unrecoverable, because reducing
     `num-workspaces` to 2 makes Mutter collapse the removed workspaces onto the last remaining one.
+    Task 23 (D7) narrows this to the enable/re-enable/restart case only: a window mapped while the
+    session is running joins the focused output's visible workspace instead.
 11. **§8.2 / §7.10.** Unchanged, and noted as such: a window is excluded from the tree by
     `excludedFromTree` exactly as Phase 3B defined. Parking is not exclusion — a parked window stays
     in its workspace's tree — and nothing about `minimized`, `sticky` or `skipTaskbar` changes.

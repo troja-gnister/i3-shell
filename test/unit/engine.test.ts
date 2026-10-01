@@ -1,6 +1,7 @@
 import {describe, it, expect} from 'vitest';
 import {readFileSync} from 'node:fs';
 import type {Binding, Config} from '../../src/config/model';
+import {LIVE_WORKSPACE} from '../../src/runtime/model';
 import {leaves, type WindowId} from '../../src/tree/node';
 import {fakeEngine as fakePorts, outputsTopology} from './engine/fakeEngine';
 
@@ -185,8 +186,11 @@ describe('Engine', () => {
     const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
     const e = f.engine;
     e.start();
-    f.add(1, {workspace: 0, monitor: 0});
-    f.add(2, {workspace: 0, monitor: 1});
+    f.mapOn(0, 1);
+    f.mapOn(1, 2);
+    // One window on each output's own visible workspace, which is what makes "each output" meaningful.
+    expect(f.tree().location(1)).toMatchObject({output: 0, workspace: 0});
+    expect(f.tree().location(2)).toMatchObject({output: 1, workspace: 1});
     const laid = f.appliedRects();
     expect([...laid.keys()].sort()).toEqual([1, 2]);
   });
@@ -196,7 +200,7 @@ describe('Engine', () => {
     const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
     const e = f.engine;
     e.start();
-    f.add(1, {workspace: 0, monitor: 1});
+    f.mapOn(1, 1);   // mapped while output 1, showing workspace 1, is the focused output
     expect(e.state().pills[1]!.occupied).toBe(true);
     expect(e.state().pills[0]!.occupied).toBe(false);
   });
@@ -208,15 +212,74 @@ describe('Engine', () => {
     expect(e.state().focusedOutput).toBe(0);
   });
 
-  it('adopts a window onto the visible workspace of the output it is on', () => {
-    // Spec 2.6: the pre-enable workspace is unrecoverable once num-workspaces drops to 2.
-    const f = fakePorts(referenceText, {
-      monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10,
-      existingWindows: [{id: 5, workspace: 0, monitor: 1}],
+  /**
+   * Task 23, D7. The two halves of adoption, and the whole point is that they disagree:
+   *
+   * - A window Mutter maps while the session is running joins the FOCUSED output's workspace, i3
+   *   semantics, whatever monitor the compositor chose for it.
+   * - A window the engine adopts because it is starting up (or being re-enabled, or restarting) keeps
+   *   the workspace of the monitor it is already on; those windows predate the tree, and pulling them
+   *   onto one workspace would collapse a multi-monitor desktop at every enable.
+   *
+   * Both fixtures below therefore show DIFFERENT workspaces on the two outputs (output 0 shows
+   * workspace 0, output 1 shows workspace 1) and point the window's `monitor` at the output that is
+   * NOT focused, so the two candidate answers are different numbers. A topology where the focused
+   * output's workspace were also the mapped monitor's would pass either way.
+   */
+  describe('Task 23, D7: adoption', () => {
+    it('maps a live window onto the focused output’s workspace, not the monitor Mutter chose', () => {
+      const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+      const e = f.engine;
+      e.start();
+      expect(f.tree().visible.get(0)).toBe(0);
+      expect(f.tree().visible.get(1)).toBe(1);
+      expect(e.run([{type: 'focus_output', target: 'right'}], 1)).toBe('focus output');
+      expect(f.tree().focusedOutput).toBe(1);
+
+      // Mutter maps it on output 0 -- the display the user is not looking at. This is the Steam-on-the-
+      // television report: before this it was adopted onto output 0's workspace 0 while focus stayed on
+      // output 1's empty workspace 1, so the user typed into a screen they were not watching.
+      f.add(7, {monitor: 0}); f.flush();
+      expect(f.tree().location(7)).toEqual({workspace: 1, output: 1, floating: false});
+      // Workspace 1 is on screen, so the native side is LIVE, not the attic.
+      expect(f.windows.get(7)!.workspace).toBe(LIVE_WORKSPACE);
     });
-    const e = f.engine;
-    e.start();
-    expect(f.tree().location(5)).toEqual({workspace: 1, output: 1, floating: false});
+
+    it('keeps each pre-existing window on its own monitor’s workspace when the engine starts', () => {
+      // Spec 2.6: the pre-enable workspace is unrecoverable once num-workspaces drops to 2, but the
+      // output is observable and is what the user sees. Focus is on the primary (output 0) for the whole
+      // of this adoption, so collapsing onto the focused output would put all three on workspace 0.
+      const f = fakePorts(referenceText, {
+        monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10,
+        existingWindows: [{id: 5, workspace: 0, monitor: 1}, {id: 6, workspace: 0, monitor: 0},
+          {id: 7, workspace: 0, monitor: 1}],
+      });
+      const e = f.engine;
+      e.start();
+      expect(f.tree().location(5)).toEqual({workspace: 1, output: 1, floating: false});
+      expect(f.tree().location(6)).toEqual({workspace: 0, output: 0, floating: false});
+      expect(f.tree().location(7)).toEqual({workspace: 1, output: 1, floating: false});
+      expect([...leafWindows(f, 0)]).toEqual([6]);
+      expect([...leafWindows(f, 1)].sort()).toEqual([5, 7]);
+    });
+
+    it('re-adopts per monitor after `restart` rebuilds the tree', () => {
+      // `restart` nulls the tree, so its next commit re-adopts every live window exactly as enable does.
+      // Without that, a restart with focus on output 1 would drag output 0's windows across.
+      const f = fakePorts(referenceText, {
+        monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10,
+        existingWindows: [{id: 5, workspace: 0, monitor: 0}, {id: 6, workspace: 0, monitor: 1}],
+      });
+      const e = f.engine;
+      e.start();
+      // Focus lands on output 1 because the startup pass restores a selection per workspace and the
+      // last one it touches is output 1's; asserted rather than assumed, since the whole test turns on
+      // output 0's window NOT following the focused output across the rebuild.
+      expect(f.tree().focusedOutput).toBe(1);
+      expect(e.run([{type: 'restart'}], 2)).toBe('restarted');
+      expect(f.tree().location(5)).toEqual({workspace: 0, output: 0, floating: false});
+      expect(f.tree().location(6)).toEqual({workspace: 1, output: 1, floating: false});
+    });
   });
 
   describe('showOnOutputForTest (the attic swap)', () => {
@@ -366,8 +429,8 @@ describe('Engine', () => {
       const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
       const e = f.engine;
       e.start();
-      f.add(1, {workspace: 0, monitor: 0});   // output 0's own window, currently focused
-      f.add(2, {workspace: 0, monitor: 1});   // output 1's own window, unrelated to this swap
+      f.mapOn(0, 1);   // output 0's own window
+      f.mapOn(1, 2);   // output 1's own window, unrelated to this swap
       f.focus(1);
       e.showOnOutputForTest(0, 5);   // workspace 5 has no window
       // The tree-side half of the fix: activeWorkspace, selection and pills all agree the incoming
@@ -743,6 +806,12 @@ describe('Engine', () => {
       expect(f.tree().location(1)).toEqual({workspace: 0, output: 0, floating: true});
       f.change(1, {minimized: true}, 'minimized');
       expect(f.tree().location(1)).toBeNull();
+      // Task 23, D7: the user walks to the other display before un-minimising, so all three candidate
+      // answers are different -- remembered (workspace 0), the focused output's workspace (1), and the
+      // monitor Mutter now reports (output 1, also workspace 1). Without this the fixture would let the
+      // remembered answer and the live-adoption answer coincide at workspace 0 and prove nothing.
+      expect(f.engine.run([{type: 'focus_output', target: 'right'}], 0)).toBe('focus output');
+      expect(f.tree().activeWorkspace).toBe(1);
       f.change(1, {minimized: false, monitor: 1}, 'minimized');
       expect(f.tree().location(1)).toEqual({workspace: 0, output: 0, floating: true});
     });

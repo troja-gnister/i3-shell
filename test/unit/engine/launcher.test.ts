@@ -102,7 +102,7 @@ describe('engine launcher command', () => {
     // binding is dead and there is nothing on screen to explain it.
     const f = twoMonitors();
     f.engine.start();
-    f.add(1, {monitor: 11});
+    f.mapOn(11, 1);
     f.flush();
     f.engine.run(parseCommands('launcher').commands, 0);
     f.calls.length = 0;
@@ -115,7 +115,7 @@ describe('engine launcher command', () => {
     // compositor's signal and the next geometry read.
     const f = twoMonitors();
     f.engine.start();
-    f.add(1, {monitor: 11});
+    f.mapOn(11, 1);
     f.flush();
     f.engine.run(parseCommands('launcher').commands, 0);
     f.setTopology(null);

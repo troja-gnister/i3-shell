@@ -214,8 +214,15 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
     plan: null as DecorationPlan | null,
     launcherRequest: null as LauncherRequest | null,
     launcherColors: null as Colors | null,
-    /** Every `pointer.warpTo` call the engine has made, in call order -- Task 13's `mouse_warping` tests read this. */
-    pointer: {warps: (): Rect[] => pointerWarps.map(r => ({...r}))},
+    /**
+     * Every `pointer.warpTo` call the engine has made, in call order -- Task 13's `mouse_warping` tests
+     * read this. `clear()` is the same convenience `f.calls.length = 0` is: `mapOn` below drives the real
+     * `focus output` command, which warps, so a test that measures warps clears the setup's first.
+     */
+    pointer: {
+      warps: (): Rect[] => pointerWarps.map(r => ({...r})),
+      clear(): void { pointerWarps.length = 0; },
+    },
     /**
      * Fix round 1, C1: the real `Launcher` closes itself at seven sites the engine never calls
      * `close()` for. This models exactly that -- the launcher's own open/closed state flips with no
@@ -225,6 +232,25 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
     launcherClosedItself() { launcherOpen = false; },
     get topology() { return currentTopology; },
     add(id: WindowId, patch: Partial<WindowInfo> = {}) { windows.set(id, windowInfo(id, patch)); engine.onWindowEvent({type: 'added', id}); },
+    /**
+     * Task 23, D7: a window Mutter maps while the user is looking at `monitor`. Adoption follows the
+     * FOCUSED output now, not the monitor the compositor chose, so a test that wants a newly mapped
+     * window on a particular output has to put focus there first -- which is exactly what the user who
+     * opened it would have done. `info.monitor` is set to the same output, so these fixtures say nothing
+     * about the two agreeing or disagreeing; the D7 tests in engine.test.ts are the ones that make them
+     * disagree on purpose.
+     *
+     * Goes through the production `focus output <name>` command (the connector names `outputsTopology`
+     * invents) rather than poking `tree.focusedOutput`, so the fixture cannot drift from the engine.
+     */
+    mapOn(monitor: MonitorId, id: WindowId, patch: Partial<WindowInfo> = {}) {
+      const connector = currentTopology?.monitors.find(m => m.id === monitor)?.connectors[0];
+      if (connector === undefined) throw new Error(`mapOn: no output ${monitor} in the topology`);
+      const result = engine.run([{type: 'focus_output', target: {name: connector}}], 0);
+      if (result !== 'focus output' && result !== 'focus output: unchanged')
+        throw new Error(`mapOn: could not focus output ${monitor}: ${result}`);
+      f.add(id, {monitor, ...patch});
+    },
     change(id: WindowId, patch: Partial<WindowInfo>, eventType: Exclude<WindowEvent['type'], 'added' | 'removed' | 'focused'>) {
       const old = windows.get(id); if (!old) return;
       windows.set(id, {...old, ...patch}); engine.onWindowEvent({type: eventType, id});

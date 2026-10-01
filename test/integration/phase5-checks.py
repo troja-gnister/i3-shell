@@ -602,13 +602,18 @@ def create_on(output, title, label):
     """Create a window and leave it on the workspace `output` is showing, with `output` focused.
 
     Mutter, not the engine, decides which monitor a new Wayland toplevel is mapped on: a Wayland client
-    cannot ask for one, and `Engine._adoptionWorkspace` reads the window's *native* monitor before it
-    falls back to the focused output. A headless backend is free to choose the primary whatever the
-    focused output is, so the landing is asserted rather than assumed, and corrected with `move
-    container to output` -- the command Phase 5 added for exactly this, and the only route that re-homes
-    a window across outputs (floating a window and dragging it to another monitor deliberately does
-    NOT: the engine is the authority for which i3 workspace a window is on, and that workspace does not
-    move with the frame).
+    cannot ask for one, and a headless backend is free to choose the primary whatever the focused output
+    is. Task 23, D7 is that this no longer matters: `Engine._adoptionWorkspace` gives a window mapped
+    while the session is running the FOCUSED output's visible workspace, i3 semantics, and never asks
+    where the compositor put it. So `go_to_output` above is the whole of the placement, and the
+    `landed != target` branch below is now a regression tripwire rather than a routine correction -- if
+    the window did not land on the focused output's workspace, that IS D7 coming back, which is why the
+    `here == output` case fails outright instead of quietly moving it.
+
+    The correction is kept for the case where something else has already moved the focused output: it
+    uses `move container to output`, the command Phase 5 added for exactly this, and the only route that
+    re-homes a *tiled* window across outputs (floating a window and dragging it to another monitor does
+    re-home it, Task 20/D6, but that is the mouse workflow, not this).
     """
     go_to_output(output, label)
     create(title)
