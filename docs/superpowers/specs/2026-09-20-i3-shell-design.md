@@ -22,7 +22,7 @@ Phases 1 and 2 (§17) deliver exactly this core. Phases 3 and 4 layer appearance
 
 ### 1.2 Non-goals (v1)
 
-`bindcode`; `bindsym --release`; marks; scratchpad; `assign`; gaps; i3bar `status_command` / `bar {}`; top-level autostart `exec` / `exec_always`; layout persistence across shell restarts; `resize set` on tiled containers; multi-output workspace semantics (Phase 4 at the earliest); stripping application title bars (impossible on Wayland: `Meta.Window` has no `set_decorated`).
+`bindcode`; `bindsym --release`; marks; scratchpad; `assign`; gaps; i3bar `status_command` / `bar {}`; top-level autostart `exec` / `exec_always`; layout persistence across shell restarts; `resize set` on tiled containers; **i3's dynamic workspace lifecycle** (a workspace created on first visit and destroyed when it empties — this design keeps a fixed set of *N*, Phase 5 §2.5); `next_on_output` / `prev_on_output`; marks and the scratchpad; stripping application title bars (impossible on Wayland: `Meta.Window` has no `set_decorated`).
 
 ## 2. Context and constraints
 
@@ -39,7 +39,7 @@ Verified with the user's real config, unmodified.
 **Phase 1 — workspaces + shortcuts**
 
 - **A1.** `$mod+1…0` switches to workspaces 1–10; `$mod+Shift+1…0` moves the focused window there and stays on the current workspace (i3 default). Exactly ten workspaces exist at all times.
-- **A2.** The panel shows ten pills named `1:I … 10:X`; the active one is highlighted; pills with windows and empty pills are visually distinct; clicking a pill switches.
+- **A2.** The panel shows ten pills named `1:I … 10:X`; the active one is highlighted; pills with windows and empty pills are visually distinct; clicking a pill switches. (Amended by Phase 5 for more than one output: the GNOME panel indicator shows the **primary output's** workspaces and every other output gets its own bar showing its own — ten pills on a single-monitor session, split between the displays otherwise. A50, A65.)
 - **A3.** `$mod+Return` launches kitty; `$mod+Shift+q` closes the focused window; `$mod+f` toggles fullscreen; `$mod+Shift+x`, `+d`, `+b`, `+w`, `+u`, `+e` and `Mod1+Shift+4` run their `exec` commands.
 - **A4.** `$mod+r` enters `resize` mode: the indicator shows `resize`; `Escape`, `Return` and `$mod+r` leave it; while in it, bare `j` is not delivered to applications.
 - **A5.** `$mod+Shift+c` reloads the config: a changed binding takes effect without logout; a config with a syntax error is rejected with a notification and the previous bindings keep working.
@@ -174,7 +174,7 @@ Criteria: `[class="re" instance="re" title="re" app_id="re" window_role="re" flo
 ### 6.3 Directive policy — three tiers
 
 1. **Unknown directive** → error (i3 behaviour). The file is rejected.
-2. **Valid i3, not implemented** (`bindcode`, `bindsym --release`, `assign`, `workspace_layout`, `focus_follows_mouse`, top-level `exec` / `exec_always`, `gaps`, `hide_edge_borders`, `title_format`, `floating_minimum_size`, …) → warning; the directive is skipped.
+2. **Valid i3, not implemented** (`bindcode`, `bindsym --release`, `assign`, `workspace_layout`, top-level `exec` / `exec_always`, `gaps`, `hide_edge_borders`, `title_format`, `floating_minimum_size`, …) → warning; the directive is skipped. **Phase 5 moved three directives out of this tier and implemented them:** `workspace <n> output <name…>`, `focus_follows_mouse` and `mouse_warping`. A *malformed value* for one of those three is an **error** that rejects the file, matching `focus_wrapping` and `workspace_auto_back_and_forth`: the tier-2 warning was about the directive being unimplemented, not about a bad value, so it stopped applying the moment the directive was implemented. `mouse_warping container` is valid i3 and must never reject the file — it is accepted, treated as `output`, and warned about once, because warping on *any* focus change is not implemented. Every other `workspace …` form (gaps, layout, a bare switch) still warns and is skipped, so silence never means acceptance.
 3. **Valid i3, accepted with no effect** (`font`, `client.background`, `client.placeholder`, `bar {}`) → silently accepted. A warning on every load for cosmetic lines every real config contains would be noise.
 
 Warnings are shown once per load as a single notification ("i3-shell: N directives skipped — see log") and logged individually with line numbers.
@@ -202,7 +202,10 @@ Parsed by `commands/parse.ts` into typed commands; `,` and `;` chains execute se
 | `focus left\|right\|up\|down` | §7.6 |
 | `focus parent` / `focus child` | §7.6 |
 | `focus mode_toggle` | §7.10 |
-| `move left\|right\|up\|down` | §7.7 |
+| `move left\|right\|up\|down` | §7.7; at the edge of a root it crosses into the neighbouring output instead of wrapping (Phase 5 §4.4) |
+| `focus output left\|right\|up\|down\|primary\|<name…>` | Phase 5 §4.1 |
+| `move container to output <same args>` | Phase 5 §4.2 — moves the window, focus does not follow |
+| `move workspace to output <same args>` | Phase 5 §4.3 — focus follows, and it clears any remembered output for that workspace |
 | `move container to workspace number N` / `… workspace <name>` / `… workspace next\|prev` | §9 |
 | `split h\|horizontal\|v\|vertical\|toggle` | §7.4 |
 | `layout splith\|splitv\|tabbed\|stacking` / `layout toggle split` / `layout toggle all` / `layout toggle <list>` | §7.5 |
@@ -226,10 +229,11 @@ An unknown command is a parse-time warning; the binding is still grabbed and onl
 
 ```
 Tree
- └ WorkspaceCon[i]   i = 0..N-1, 1:1 with GNOME workspace index
-    └ MonitorCon[m]  one per connected monitor; a SplitCon flagged root=true whose
-      │              layout is splith|splitv and whose rect is that monitor's work area
-      └ Con*         SplitCon | LeafCon
+ └ Output[m]            every live output owns a set of workspaces and shows exactly one of them
+    └ WorkspaceCon[i]   i = 0..N-1; carries `output: MonitorId` and exactly one root
+       └ root           a SplitCon flagged root=true whose layout is splith|splitv and whose
+         │              rect is its output's work area — what MonitorCon used to be
+         └ Con*         SplitCon | LeafCon
 
 SplitCon: { layout: 'splith'|'splitv'|'tabbed'|'stacked', children: Con[],
             percents: number[]  (one per child, sum 1), focusedChild: Con|null,
@@ -241,7 +245,7 @@ Focus state: `focused: Con` — may be a SplitCon after `focus parent` — kept 
 
 Orientation: `splith` / `tabbed` → horizontal; `splitv` / `stacked` → vertical.
 
-Level order: i3 is root → output → workspace; GNOME workspaces span monitors, so here it is workspace → monitor. With one monitor the visible behaviour is identical. Wherever i3 asks "is the parent the workspace?", this design asks `parent.root`.
+Level order: **output → workspace**, as in i3 (amended by Phase 5; until then GNOME owned workspace identity and the order here was the reverse, workspace → monitor). A `WorkspaceCon` holds one root and an `output`; `MonitorCon` is no longer a per-workspace child, and a workspace is no longer 1:1 with a GNOME workspace index — GNOME holds two workspaces and represents none of i3's (§9). `root.root === true` still marks a root, so every `parent.root` test in §7 stands. With one monitor the visible behaviour is identical. Wherever i3 asks "is the parent the workspace?", this design asks `parent.root`.
 
 ### 7.2 Invariants and `normalize()`
 
@@ -257,7 +261,7 @@ After every mutation and before layout:
 
 ### 7.3 Insertion of a new tiled window
 
-Target workspace = the window's GNOME workspace; monitor = the window's monitor. With `f` = that workspace's `focusedCon`:
+Target workspace = **the focused output's visible workspace** (amended by Phase 5; it was the window's GNOME workspace, which under the attic is only ever live or attic and says nothing about an i3 workspace — §9 and Phase 5 §2.6). The monitor is that workspace's own `output`. With `f` = that workspace's `focusedCon`:
 
 - `f` is a LeafCon → insert after it in its parent.
 - `f` is a SplitCon (including a root) → append as its last child.
@@ -376,7 +380,7 @@ Floating: change the frame by N px on that axis, keeping position. `resize set W
 - LeafCon → `{ window: rect }`.
 - `splith`: children get widths `rect.w × percent[i]` left to right, full height; `splitv` analogous. Sizes are rounded to integers and the last child absorbs the rounding, so the rects tile `rect` exactly.
 - `tabbed` / `stacked`: every child gets `rect` (Phase 3: minus the tab/stack bar) and the active child (`focusedChild`) is raised.
-- MonitorCon → its work area; WorkspaceCon → each of its MonitorCons.
+- A workspace's root → that workspace's output work area, `topology.workAreas.get(ws.output)` (amended by Phase 5; it was MonitorCon → its work area, WorkspaceCon → each of its MonitorCons). Only **visible** workspaces are laid out: a parked workspace's windows are not on screen and its geometry is unobservable until it is shown, at which point the swap computes it.
 
 Rects are integer. For each non-empty `splith` / `splitv` container, direct children's rects do not overlap and their union is the parent rect. For `tabbed` / `stacked`, each direct child receives the same parent rect in Phase 2; overlap is intentional (asserted by tests).
 
@@ -397,6 +401,8 @@ A window is **tiled** iff all of: `window_type == NORMAL`; `get_transient_for() 
 ```ts
 excludedFromTree(info) = info.minimized || info.sticky || (info.skipTaskbar && info.kind === 'tiled')
 ```
+
+**Unchanged by Phase 5, and said so here because the attic invites exactly this confusion:** a window is excluded from the tree by this predicate and nothing else, exactly as Phase 3B defined it. **Parking is not exclusion.** A parked window stays in its workspace's tree, keeps its tile and its place in the layout, and only its *GNOME* workspace changes (§9, the attic). Conversely an excluded window is never parked: it belongs to no tree, so there is nothing to park, and a sticky window showing on every output is GNOME's own behaviour and is left alone. Nothing about `minimized`, `sticky` or `skipTaskbar` changes, and §7.10's record of what a rejoining window pins is unchanged too.
 
 The `kind === 'tiled'` term is not a new rule; it restores an ordering the old predicate had for free. `skip_taskbar` used to be read on the line that had already ruled out every other reason to float, so it never applied to a dialog, a transient, an attached dialog or a fixed-size window. Mutter reports `is_skip_taskbar()` true for a **modal dialog**, and a flat `minimized || sticky || skipTaskbar` excluded such a window from the tree *and* from the workspace's `floating` list — the only code that adds to that list sits on the branch that is skipped while a window is excluded — so it vanished from both. That was caught by the nested scenario A13 against a real GTK modal, not by any unit test. `minimized` and `sticky` get no such gate: `sticky` mapped to `null` unconditionally in the old code and `minimized` is orthogonal to kind by construction, so gating either would invent behaviour rather than restore it.
 
@@ -421,8 +427,8 @@ DIALOG, MODAL_DIALOG, UTILITY and transient application windows are tracked in t
 | `window::notify::maximized-horizontally` / `-vertically` | tiled and now maximized → `unmaximize()`; after unmaximize, force re-apply through commit even if the rect is unchanged |
 | `window::notify::fullscreen` | false → force re-apply the rect on the next commit even if unchanged |
 | `window::notify::on-all-workspaces` / `notify::skip-taskbar` | one `'membership'` event (named, not folded into `'minimized'`, so a log line or a failing test says which fact moved): the next commit re-reads `WindowInfo` and `excludedFromTree` (§8.2) detaches or re-inserts the window. Both connections are torn down by the same per-window `disposeWatch` as the others — no second teardown path |
-| `workspace_manager::active-workspace-changed` | indicator update; global `focused` = that workspace's `focusedCon` |
-| `layoutManager::monitors-changed` | rebuild MonitorCons (cons of a vanished monitor are appended under the primary monitor's root) → commit with forced re-apply for tiled windows, including unchanged rects |
+| `workspace_manager::active-workspace-changed` | **the guard** (amended by Phase 5 §5.3): GNOME's active workspace must always be live, so a switch to the attic is forced back and logged. Nothing derives an i3 workspace from GNOME's active index any more |
+| `layoutManager::monitors-changed` | **reassign** the lost output's workspaces to the primary with their roots untouched, and remember where each came from so a replug restores it (amended by Phase 5 §7; it used to append a vanished monitor's cons under the primary's root, which destroyed the layout irrecoverably) → commit with forced re-apply for tiled windows, including unchanged rects |
 | `display::window-demands-attention` | Phase 4 (urgent pills) |
 
 ### 8.4 Danger zones — explicit designs
@@ -436,20 +442,28 @@ DIALOG, MODAL_DIALOG, UTILITY and transient application windows are tracked in t
 5. **Maximize / minimize.** See §19.
 6. **Lock screen.** `metadata.json` declares `session-modes: ["user", "unlock-dialog"]` so the extension stays enabled across locking and the tree survives. On `Main.sessionMode` `updated`: entering a mode where `!Main.sessionMode.hasWindows` → ungrab all accelerators, pop to the `default` mode, hide the indicator; returning to `user` → regrab. A live bare-key grab (`resize` mode's `j`) must never reach the password entry.
 7. **`disable()` is total.** `SignalTracker.disconnectAll()`, ungrab every accelerator, destroy indicator and decoration actors, unexport D-Bus, restore §13 overrides, drop all maps. Idempotent (a second `disable()` is a no-op). No `move_resize_frame` on disable — windows stay where they are.
-8. **Monitors change.** Rebuild MonitorCons and relayout all workspaces (§8.3).
+8. **Monitors change.** Reassign the lost output's workspaces, repair coverage so every live output still owns and shows one of its own, and relayout the visible workspaces (§8.3, Phase 5 §7).
 
 ### 8.5 Adoption on enable / restart
 
-`global.get_window_actors()` filtered by §8.2, inserted per workspace in MRU order (`display.get_tab_list(Meta.TabList.NORMAL_ALL_MRU, workspace)`) so the most recent window is `focused`. The current GNOME focus window becomes the global `focused` if tiled. Then commit.
+`global.get_window_actors()` filtered by §8.2, inserted in MRU order (`display.get_tab_list(Meta.TabList.NORMAL_ALL_MRU, workspace)`) so the most recent window is `focused`. The current GNOME focus window becomes the global `focused` if tiled. Then commit.
+
+**Amended by Phase 5:** a window is adopted onto **the visible workspace of the output it currently occupies**, never onto its pre-enable workspace. That workspace is unrecoverable by construction — reducing `num-workspaces` to 2 makes Mutter collapse the removed workspaces onto the last remaining one before the extension can read anything — whereas the window's output is observable and is what the user sees. Dumping everything onto workspace I is the alternative and is worse. Each adopted window is then parked or shown to match its new workspace's visibility (§9, the attic).
 
 ## 9. Workspaces
 
-- Count `N` = the largest workspace number referenced by `workspace number` / `move container to workspace number` commands in the config (minimum 1, maximum 36). If the config references none, `N` = the current `num-workspaces` setting. For the reference config N = 10.
-- On enable (snapshot / restore per §13): `org.gnome.mutter dynamic-workspaces = false`, `org.gnome.desktop.wm.preferences num-workspaces = N`, `workspace-names = [configured names]`. `org.gnome.mutter workspaces-only-on-primary = false` (Phase 3B): while it is true Mutter marks every window on a **secondary** output `on_all_workspaces`, and i3-shell keeps such windows out of the tree (§8.2), so an external display could never tile. It is applied unconditionally — independently of the workspace count, because a config that names no workspaces still needs its secondary output to tile — and it is snapshotted and restored on `disable()` through the same machinery as every other override (§13). **Consequence, to state plainly:** while the extension is enabled GNOME treats a workspace as spanning every output, for every application, not only for windows i3-shell tiles. If GNOME changes the workspace count under us (`notify::n-workspaces`), the count settings are re-applied.
-- `workspace number N`: the number is the leading digits of the argument (`"1:I"` → 1); activate GNOME workspace N−1; no-op if already active (i3 without `workspace_auto_back_and_forth`). `workspace <name>` without leading digits matches a configured name, else warning.
-- `move container to workspace number N`: no-op if N is the current workspace; otherwise the engine detaches the focused con from the source tree, attaches it to the target workspace's tree per §7.3 (structure intact), records the expected workspace for every leaf, then calls `change_workspace_by_index(N−1, false)` on each. Focus stays on the current workspace (i3 default, no follow); it falls to `descendFocused(oldParent)`.
+- Count `N` = the largest workspace number referenced by `workspace number` / `move container to workspace number` commands in the config (minimum 1, maximum 36). If the config references none, `N` = the **running i3 workspace count** on a reload, and GNOME's own `num-workspaces` only on a first enable (amended by Phase 5: GNOME's count is pinned at 2 while the extension runs, so inheriting it on a reload would shrink the tree every time). `N` is then clamped up to `max(N, live output count)` — i3 creates one workspace per output at startup whatever the config names, and the clamp is what lets Phase 5 §2.2's coverage repair always find a donor. For the reference config N = 10.
+- On enable (snapshot / restore per §13): `org.gnome.mutter dynamic-workspaces = false`, `org.gnome.desktop.wm.preferences num-workspaces = 2` — **live plus the attic** (amended by Phase 5; it was *N*) — and `org.gnome.shell.app-switcher current-workspace-only = true` so alt-tab never lists a parked window. `workspace-names` is **no longer applied**, because GNOME's two workspaces correspond to nothing the user sees; a previously saved original is still restored on `disable()`. `org.gnome.mutter workspaces-only-on-primary = false` (Phase 3B): while it is true Mutter marks every window on a **secondary** output `on_all_workspaces`, and i3-shell keeps such windows out of the tree (§8.2), so an external display could never tile. It is applied unconditionally — independently of the workspace count, because a config that names no workspaces still needs its secondary output to tile — and it is snapshotted and restored on `disable()` through the same machinery as every other override (§13). **Consequence, to state plainly (replaced wholesale by Phase 5 — the paragraph this supersedes said a workspace spans every output, and a reader who found it would conclude the extension still behaves that way):** GNOME holds exactly **two** workspaces while the extension is enabled and no longer represents i3's workspaces at all. Index 0 is **live** and is the active GNOME workspace for the extension's whole lifetime; index 1 is the **attic**, which holds the windows of every i3 workspace that no output is currently showing. Mutter declines to render a non-active workspace, so hiding is native: a parked window is genuinely unmapped, takes no keyboard input and appears in no window list. That is the only hiding primitive available — `minimized` already means "not in the tree" (§8.2) and `actor.hide()` leaves a window focusable — and it is why GNOME's own overview shows a second workspace holding parked windows while the extension runs. That is a recorded divergence, not a defect. *N* remains i3-shell's own workspace count, derived from the config exactly as before, and each i3 workspace lives on exactly one output, one visible per output (Phase 5 §2). `workspaces-only-on-primary = false` stays required, and is now also what makes the attic sound: while it is true Mutter marks every window on a secondary output `on_all_workspaces`, and a sticky window cannot be parked. If GNOME changes the workspace count under us (`notify::n-workspaces`), the count settings are re-applied.
+- `workspace number N`: the number is the leading digits of the argument (`"1:I"` → 1). **The GNOME active workspace never changes** (amended by Phase 5; it used to activate GNOME workspace N−1). N is resolved to an output at **switch time**:
+  - If some output already shows N, the focused output moves to that output and no window changes workspace — i3's "go to where that workspace is".
+  - Otherwise N is shown on the output chosen by the precedence **occupied > config pin > memory > focused output** (`resolveShowOutput` in `src/tree/outputs.ts`, Phase 5 §2.4 and the Task 19 ruling), filtered through the live outputs; whatever that output was showing is parked in the attic. So a workspace holding windows is never relocated by a number press, a `workspace N output …` pin survives a `$mod+N` issued from another display, and an empty unpinned workspace materialises where the user is looking. The **memory** tier is unreachable through the `Tree` today — `reconfigure` re-homes a remembered workspace and clears its entry the moment its output returns — and is documented as such in the code; it is kept as the ruling's encoding and tested at the resolver only.
+  - If N is already visible **on the focused output** the command changes nothing except that it **re-asserts keyboard focus** on that workspace's selection. That is deliberate and is the one recovery path for focus that has drifted; the pre-Phase-5 "no-op if already active" (i3 without `workspace_auto_back_and_forth`) still describes everything else.
+  - A switch that **crosses displays warps the pointer**, which is i3's own `mouse_warping output` default; `mouse_warping none` disables it (Phase 5 §3.3).
+
+  `workspace <name>` without leading digits matches a configured name, else warning. One divergence this rests on, stated because the memory semantics of Phase 5 §7 lean on it: with the fixed set of *N* workspaces above, "hidden" and "has not been placed yet" are the same state, so `workspace N` can place — and therefore relocate — an **empty** workspace, where real i3 never moves a workspace that already exists. The conflation predates Phase 5 and is not introduced by it.
+- `move container to workspace number N`: no-op if N is **visible on the focused output** (amended by Phase 5 — that is what "the current workspace" now means); otherwise the engine detaches the focused con from the source tree, attaches it to the target workspace's tree per §7.3 (structure intact), then calls `change_workspace_by_index` on each moved leaf with **live or attic** as the target — live if N is visible on some output, attic if it is not — never N−1. The detach/attach semantics below are unchanged. Focus stays on the current workspace (i3 default, no follow); it falls to `descendFocused(oldParent)`.
   If the selected con is a monitor root, retain that root and move its contents in an equivalent non-root split, preserving descendant nodes, layout, percentages and focused child before normal §7.2 cleanup. This still moves every selected leaf as required by §7.6. An empty root is a no-op; after a nonempty root-content move, source selection remains on the now-empty root.
-- `workspace next|prev`: index ± 1 without wrap.
+- `workspace next|prev`: index ± 1 without wrap, in **global numeric order** — explicitly *not* per-output (Phase 5 §2.4). i3's `next_on_output` / `prev_on_output` are not implemented; no known config binds them.
 - `workspace_auto_back_and_forth` and `workspace back_and_forth`: Phase 4.
 
 ## 10. Keys and modes
@@ -478,7 +492,7 @@ DIALOG, MODAL_DIALOG, UTILITY and transient application windows are tracked in t
 
 ## 13. GNOME settings overrides
 
-On enable, after the config is parsed, `settings.ts` enumerates every key of type `as` (and `s` for the `-static` media keys) in `org.gnome.desktop.wm.keybindings`, `org.gnome.shell.keybindings`, `org.gnome.mutter.keybindings`, `org.gnome.mutter.wayland.keybindings` and `org.gnome.settings-daemon.plugins.media-keys`, canonicalises each accelerator (sorted modifiers, lower-cased key), and clears any that equals one of the config's **default-mode** accelerators. Mode-only bindings are transient grabs and need no clearing. It also applies `dynamic-workspaces`, `num-workspaces`, `workspace-names`, `workspaces-only-on-primary = false` (§9, from Phase 3B), and `mouse-button-modifier` when `floating_modifier` differs from the current value.
+On enable, after the config is parsed, `settings.ts` enumerates every key of type `as` (and `s` for the `-static` media keys) in `org.gnome.desktop.wm.keybindings`, `org.gnome.shell.keybindings`, `org.gnome.mutter.keybindings`, `org.gnome.mutter.wayland.keybindings` and `org.gnome.settings-daemon.plugins.media-keys`, canonicalises each accelerator (sorted modifiers, lower-cased key), and clears any that equals one of the config's **default-mode** accelerators. Mode-only bindings are transient grabs and need no clearing. It also applies `dynamic-workspaces = false`, `num-workspaces = 2` (§9, amended by Phase 5), `org.gnome.shell.app-switcher current-workspace-only = true` (new in Phase 5 — alt-tab must not list parked windows), `workspaces-only-on-primary = false` (§9, from Phase 3B), `org.gnome.desktop.wm.preferences focus-mode` (new in Phase 5 — `sloppy` for `focus_follows_mouse yes`, i3's default, and `click` for `no`), and `mouse-button-modifier` when `floating_modifier` differs from the current value. It **no longer applies** `workspace-names`, since GNOME's two workspaces name nothing the user sees, but it still *restores* a value saved by an earlier version, so a user upgrading in place gets their own names back. Every `org.gnome.desktop.wm.keybindings switch-to-workspace-*` key is additionally cleared **outright**, not by accelerator comparison (Phase 5 §5.3): GNOME's own workspace switching must never reach the attic, where every parked window would appear at once and every visible one vanish. A touchpad workspace gesture has no GSetting at all, so a `workspace-switched` guard forces the active workspace back to live and logs a warning.
 
 - Every original value is saved first into the extension's GSettings key `overridden-settings` (JSON `{schema: {key: value}}`) — the mechanism Tiling Shell uses. If that key is already non-empty on enable (the shell died before a restore), the existing snapshot is kept, not overwritten with already-overridden values, and the overrides are re-applied on top.
 - `disable()` attempts to restore every saved value and removes only successfully restored entries from the snapshot. If a setter returns `false` or throws, or its schema is unavailable, keep that original persisted for a later restore attempt and log the failure. The snapshot is empty only when all entries have been restored.
@@ -545,7 +559,9 @@ Each phase gets its own implementation plan in `docs/superpowers/plans/` and is 
 
 **Phase 3 — Layouts & appearance.** `decorations.ts`: borders with `client.*` colours, `default_border`, the `border` command, tab / stack bars with titles, the focused-container frame. Acceptance: borders and tab bars match the config colours; clicking a tab focuses it.
 
-**Phase 4 — Fidelity.** `for_window` rules applied at first-frame (`floating enable`, `border`, `resize set`, `move position center`, `move container to workspace`); `workspace_auto_back_and_forth` / `back_and_forth`; urgent state in pills; multi-monitor (per-monitor focus / move across MonitorCons; `workspaces-only-on-primary` is owned from Phase 3B, see §9); `focus_follows_mouse` ↔ `org.gnome.desktop.wm.preferences focus-mode`. Marks and scratchpad stay outside v1.
+**Phase 4 — Fidelity.** `for_window` rules applied at first-frame (`floating enable`, `border`, `resize set`, `move position center`, `move container to workspace`); `workspace_auto_back_and_forth` / `back_and_forth`; urgent state in pills. Marks and scratchpad stay outside v1. **Two deliverables moved to Phase 5** (amended): multi-monitor — described here as "per-monitor focus / move across MonitorCons", which Phase 5 cannot deliver that way because it removes `MonitorCon` entirely — and `focus_follows_mouse` ↔ `org.gnome.desktop.wm.preferences focus-mode`, which is one half of the pair Phase 5's warping needs. `workspaces-only-on-primary` is owned from Phase 3B, see §9.
+
+**Phase 5 — Per-output workspaces.** `docs/superpowers/specs/2026-09-26-phase-5-per-output-workspaces-design.md`, which amends this document in the places marked "amended by Phase 5". Each output owns its workspaces and shows exactly one; `focusedOutput` becomes first-class state; GNOME drops to two workspaces (live + attic) and stops representing i3 workspaces at all; `workspace <n> output <name…>`, `focus_follows_mouse` and `mouse_warping` are implemented; `focus output`, `move container to output` and `move workspace to output` are added; directional `focus` / `move` cross the display edge instead of wrapping; monitor hotplug reassigns a lost output's workspaces with their layout intact and remembers where they came from. Acceptance: A50–A66, in the Phase 5 design's §10 and `docs/acceptance/phase-5.md`.
 
 Required monitor arrangements are laptop alone (`eDP-1`) and docked with external display(s), lid closed. Windows migrate off the internal display when it becomes inactive and return to the internal display on undock. The user's existing `~/Dev/i3-display-manager` and `~/Dev/i3-lid-sleep` document the expected transitions. Confirm scaling and exact resolutions with the user when Phase 4 planning begins; those details are not prerequisites for Phase 2.
 
@@ -577,7 +593,7 @@ Required monitor arrangements are laptop alone (`eDP-1`) and docked with externa
 | Tabbed / stacked hidden children | Same rect, active raised | No unmap on Wayland; identical on screen; no state changes on the windows. |
 | Floating stacking | Not forced above tiled | Mutter raises the focused window; forcing `above` would change user-visible window state. Revisit in Phase 4 if it grates. |
 | Title bars | Not stripped | No API on Wayland; CSD headerbars are drawn by the app. |
-| Level order | workspace → monitor → cons | GNOME workspaces span monitors; single-monitor behaviour identical to i3. |
+| Level order | **output → workspace → cons** (amended by Phase 5; was workspace → monitor → cons) | i3's own order. The original reason — GNOME workspaces span monitors — stopped applying when Phase 5 took workspace identity away from GNOME (§7.1, §9). Single-monitor behaviour is identical to i3 either way. |
 | Session modes | `user` + `unlock-dialog`, ungrab on lock | Keeps the tree across locks without risking bare-key grabs on the password field. |
 | Cosmetic directives (`font`, `bar {}`) | Accepted silently | A warning on every load would be noise for lines every real config contains. |
 | `kill` on a container | Closes every window inside | i3 behaviour; the user asked for the tree to be real. |

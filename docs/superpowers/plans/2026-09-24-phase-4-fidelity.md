@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-24-phase-4-fidelity-design.md`
 
+**Execution status (annotated 2026-10-01, from Phase 5 Task 18).** **Tasks 1–4 were executed and reviewed** and are on branch `phase-4`, from which `phase-5` was branched, so they are included in Phase 5 by ancestry: criteria matching, the five new window facts and three new watches, `for_window` rule application, and urgent pills plus the urgent border. **Tasks 5–10 were never executed.** Each one carries a note of its own saying where it went: 5 was absorbed into Phase 5 Task 1 verbatim, 6–7 were superseded by Phase 5 Tasks 13–15 (which could not be built this way, because Phase 5 deletes `MonitorCon`), and 8–10 were folded into Phase 5 Tasks 16–18. The text is left in place because a reader of this plan needs to know why those six tasks have no commits, and because the design reasoning in Tasks 6–8 is the reasoning Phase 5 argued against. One real gap follows from this and is recorded in `PROJECT.md`: **A38–A49 have no acceptance checklist**, since Task 10 would have written it.
+
 ## Global Constraints
 
 - Layer 0 — `src/config`, `src/commands`, `src/tree`, `src/runtime`, `src/launcher`, `src/engine.ts` — must never import `gi://`, `resource://`, or anything under `src/shell/`. `scripts/check-layer0.mjs` enforces this; `node scripts/check-layer0.mjs` must print `layer0 check ok`.
@@ -659,6 +661,8 @@ git commit -m 'feat(pills): show urgency in the colours the config already defin
 
 ### Task 5: Layer 0 monitor adjacency
 
+> **NOT EXECUTED — absorbed into Phase 5 Task 1, verbatim.** `src/tree/monitors.ts` and `neighbourMonitor` exist, built under the Phase 5 plan (`docs/superpowers/specs/2026-09-26-phase-5-per-output-workspaces-design.md` §4.4 adopts this design unchanged). The code and tests below are the ones that shipped; only the task that carried them changed. Nothing here is outstanding.
+
 **Files:**
 - Create: `src/tree/monitors.ts`
 - Test: `test/unit/tree/monitors.test.ts`
@@ -834,6 +838,8 @@ git commit -m 'feat(tree): find the adjacent monitor by geometry'
 ---
 
 ### Task 6: Focus and move across monitors
+
+> **NOT EXECUTED — superseded by Phase 5 Tasks 13–15.** This task navigated *across `MonitorCon`s within one workspace*, which Phase 5 cannot do: it deletes `MonitorCon` and gives each workspace one root on one output. The behaviour landed instead as `focus output` (Phase 5 Task 13), the crossing path for directional `focus`/`move` (Task 14) and `move container to output` / `move workspace to output` (Task 15). Read this task only for the design reasoning; its file list and tests do not apply.
 
 **Files:**
 - Modify: `src/tree/tree.ts` (`focus` and `move` gain a crossing path)
@@ -1025,6 +1031,8 @@ git commit -m 'feat(tree): cross monitor boundaries on focus and move'
 
 ### Task 7: Layer 0 displacement origins
 
+> **NOT EXECUTED — superseded by Phase 5 Tasks 13–15, and the problem was solved differently.** `src/runtime/origins.ts` does not exist. Per-window displacement origins were the right answer while a lost output's cons were *flattened into the primary's tree* (main spec §8.3 before Phase 5). Phase 5 §7 reassigns a lost output's whole **workspace** instead, roots untouched, and remembers the assignment in the `Tree` itself (`_remembered`, with first-displacement-wins and clearing on an explicit `move workspace to output`), so there is no destroyed layout to reconstruct window by window.
+
 **Files:**
 - Create: `src/runtime/origins.ts`
 - Test: `test/unit/runtime/origins.test.ts`
@@ -1164,6 +1172,8 @@ git commit -m 'feat(origins): remember which monitor a window was displaced from
 
 ### Task 8: Wire origins to displacement and return
 
+> **NOT EXECUTED — folded into Phase 5 Tasks 17–18, and superseded by Phase 5 Task 16.** The hotplug behaviour shipped as Phase 5 Task 16 (`reconfigure` + `coverOutputs` + remembering), reviewed with its own fix round; the proof and documentation obligations below became Phase 5's Task 17 (native scenarios) and Task 18 (acceptance document A62, README, spec amendments). Nothing in this task is outstanding.
+
 **Files:**
 - Modify: `src/engine.ts`
 - Modify: `src/tree/tree.ts` (`reconfigure` reports what it displaced)
@@ -1281,6 +1291,8 @@ git commit -m 'feat(engine): return a displaced window to the monitor it came fr
 
 ### Task 9: Native proof
 
+> **NOT EXECUTED — folded into Phase 5 Task 17.** Phase 5's native scenarios cover the hotplug and crossing behaviour against the real compositor; Phase 5 Task 9 also moved `GetTree` to version 2, which rewrote the `phase2-checks.py` readers this task would have extended.
+
 **Files:**
 - Modify: `test/integration/phase2-checks.py`
 
@@ -1318,6 +1330,8 @@ git commit -m 'test(phase4): prove crossing, return and for_window against a com
 ---
 
 ### Task 10: Acceptance document and the README
+
+> **NOT EXECUTED — folded into Phase 5 Task 18.** There is no `docs/acceptance/phase-4.md`: Phase 4's Tasks 1–4 (rules, window facts, urgent pills) shipped without their own acceptance walk, and the output/multi-monitor criteria this task would have written became A50–A66 in `docs/acceptance/phase-5.md`. The README and `PROJECT.md` were rewritten there too. **A38–A49 are therefore unwalked and have no checklist** — if Phase 4's rules and urgent pills need a walk, it still has to be written.
 
 **Files:**
 - Create: `docs/acceptance/phase-4.md`
