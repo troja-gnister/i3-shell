@@ -37,6 +37,15 @@ const DEBUG_IFACE = `<node>
     </method>
     <method name="Relayout"/>
     <method name="LauncherState"><arg type="s" direction="out" name="json"/></method>
+    <method name="WarpPointer">
+      <arg type="i" direction="in" name="x"/>
+      <arg type="i" direction="in" name="y"/>
+      <arg type="b" direction="out" name="ok"/>
+    </method>
+    <method name="PointerPosition">
+      <arg type="i" direction="out" name="x"/>
+      <arg type="i" direction="out" name="y"/>
+    </method>
   </interface>
 </node>`;
 
@@ -96,6 +105,49 @@ export class DebugObject {
     } catch (error) {
       log.error('LauncherState failed', error);
       return '{}';
+    }
+  }
+
+  /**
+   * Put the real pointer at an absolute screen position.
+   *
+   * The two halves of `focus_follows_mouse` (rule 4, `Engine.onPointerOutput`) and `mouse_warping
+   * output` (`Engine._warpToFocusedOutput`) are the only behaviours in this project that no unit fake
+   * can stand in for: a fake pointer reports a crossing synchronously, where Mutter emits
+   * `position-invalidated` on its own schedule and only for a position it accepts. This is how Task
+   * 17's native scenarios cross an output boundary without a human hand. Test build only -- the
+   * interface it is declared on is compiled out of a release bundle with `__I3SHELL_TEST__`.
+   *
+   * Deliberately does NOT go through `Pointer.warpTo`: that one takes a rect and aims at its centre,
+   * which would make a scenario asserting "the pointer ended up inside this rect" compare the
+   * production warp against itself. This names a bare coordinate the scenario chose.
+   */
+  WarpPointer(x: number, y: number): boolean {
+    try {
+      Clutter.get_default_backend().get_default_seat().warp_pointer(Math.round(x), Math.round(y));
+      return true;
+    } catch (error) {
+      log.error(`WarpPointer ${x},${y} failed`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Where the pointer is now, in screen coordinates; `[-1, -1]` when Mutter will not say.
+   *
+   * Read from the cursor tracker rather than from anything this extension remembers, so a scenario
+   * asserting that `focus output` warped the pointer is reading Mutter's own answer. The sentinel is
+   * out of band for a real position (every work area here has non-negative origin), so a scenario
+   * that gets it fails on the comparison rather than silently passing.
+   */
+  PointerPosition(): [number, number] {
+    try {
+      const [point] = global.backend.get_cursor_tracker().get_pointer();
+      if (!point) return [-1, -1];
+      return [Math.round(point.x), Math.round(point.y)];
+    } catch (error) {
+      log.error('PointerPosition failed', error);
+      return [-1, -1];
     }
   }
 
