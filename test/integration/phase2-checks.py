@@ -1737,6 +1737,26 @@ def two_monitor_scenario():
     print('before removal:', json.dumps({'nodes': moved_node, 'windows': tracked,
                                          'monitors': monitor_ids()}), flush=True)
 
+    def desk():
+        """Everything the per-output claims below are made of, in one printable digest:
+        which output shows which workspace, which output each workspace is assigned to,
+        each workspace's shape, and every tracked window's NATIVE workspace (0 live,
+        1 the attic). Printed on failure, because an unreadable native failure costs a
+        whole run."""
+        data = _snapshot()
+        return {'visible': data['visible'],
+                'workspaces': {ws['index']: {'output': ws['output'], 'shape': shape_of(ws['root'])}
+                               for ws in data['workspaces'] if ws['index'] in (0, 1)},
+                'native': {w['title']: w['workspace'] for w in windows()}}
+
+    # Captured with BOTH outputs still live, which is the only moment both targets are
+    # observable at once: a parked workspace is never laid out, so once the second output
+    # is gone `MM move`'s expectedRect is merely the stale value from this layout and says
+    # nothing. The restore is asserted against these, so "the window came back to the
+    # rectangle it had on that output" is a real claim rather than a tautology.
+    targets = {title: window_by_title(title)['expectedRect'] for title in tracked}
+    print('targets with both outputs:', json.dumps(targets), json.dumps(desk()), flush=True)
+
     # Capture BOTH configurations while both outputs are still present: after
     # the removal the second output has no logical monitor left to rebuild one
     # from, so a restore must replay what was recorded here.
@@ -1760,14 +1780,59 @@ def two_monitor_scenario():
     wait_until(lambda: len(monitor_ids()) == 1, 'the second output is gone', timeout=20)
     check('the surviving monitor keeps its stable id', monitor_ids(), [primary_id])
     check('every tracked window survives', {w['title']: w['id'] for w in windows()}, tracked)
-    check_tiling(node('splith', [leaf('MM stay'), node('splith', [leaf('MM move')], [1.0])],
-                      [0.5, 0.5]),
-                 'MM the vanished output\'s contents migrate under the primary root',
-                 monitor=primary_id)
 
-    print('display state with one output:', json.dumps(describe_display()), flush=True)
+    # A62, first half. Phase 3B flattened a lost output's workspace into the primary root
+    # (`appendRootContents`); Phase 5 Task 3 deliberately removed that. The workspace is
+    # reassigned to the primary WITH ITS LAYOUT INTACT, keeping its own root, and -- because
+    # the primary is already showing workspace 0 -- it arrives PARKED: no output shows it and
+    # its windows sit in the GNOME attic. Flattening emptied workspace 1 and put `MM move` on
+    # screen under the primary's root, so the three checks that discriminate against it are the
+    # attic membership (flattening leaves the window LIVE), workspace 1's own root still holding
+    # `MM move` (flattening leaves it empty), and the primary root holding `MM stay` alone
+    # (flattening nests `MM move` beside it, at half the work area). The reassignment and
+    # visibility checks are not discriminating on their own -- they are here so that "parked" is
+    # asserted positively, as a state, rather than inferred from something being absent.
+    def parked():
+        data = _snapshot()
+        entry = next(ws for ws in data['workspaces'] if ws['index'] == 1)
+        return (entry['output'], [v['workspace'] for v in data['visible']],
+                window_by_title('MM move')['workspace'])
 
-    targets = {title: window_by_title(title)['expectedRect'] for title in tracked}
+    want_parked = (primary_id, [0], 1)
+    try:
+        wait_until(lambda: parked() == want_parked,
+                   'MM the vanished output\'s workspace migrates to the primary, parked')
+    except AssertionError:
+        print('mismatch: (workspace 1 output, visible workspaces, MM move native workspace)',
+              json.dumps(parked()), 'want', json.dumps(want_parked),
+              json.dumps(desk()), flush=True)
+        raise
+    # Positively, not by absence: the workspace is on the primary, the only thing any output
+    # shows is workspace 0, and the window really is on the attic native workspace.
+    check('MM the vanished output\'s workspace is reassigned to the primary',
+          workspace_snapshot(1)['output'], primary_id)
+    check('MM no output shows the migrated workspace',
+          [v['workspace'] for v in _snapshot()['visible']], [0])
+    # GetWindows' `workspace` is the NATIVE workspace -- 0 is live, 1 is the attic -- not the
+    # i3 index GetTree reports (that is 1 here by coincidence of numbering; the two are
+    # different things and confusing them has cost this project real time already).
+    check('MM the migrated workspace\'s window waits in the GNOME attic',
+          window_by_title('MM move')['workspace'], 1)
+    # The layout itself. shape_only: src/engine.ts lays out only the workspaces some output is
+    # showing, so while this one is parked neither `MM move`'s frame nor its expectedRect is
+    # observable -- the structure is the whole observable claim, and it is the one flattening
+    # would get wrong (flattening would leave this root empty).
+    check_tiling(node('splith', [leaf('MM move')], [1.0]),
+                 'MM the migrated workspace keeps its own root and layout',
+                 workspace=1, shape_only=True)
+    # Workspace 0 IS visible, so its geometry is asserted in full: flattening would have made
+    # this root splith[MM stay, splith[MM move]] with MM stay on half the work area.
+    check_tiling(node('splith', [leaf('MM stay')], [1.0]),
+                 'MM the primary workspace is untouched by the migration', monitor=primary_id)
+
+    print('display state with one output:', json.dumps(describe_display()),
+          json.dumps(desk()), flush=True)
+
     generations = {title: generation(title) for title in tracked}
     failure = apply_monitors(both_outputs)
     print('restore request:', failure or 'accepted', json.dumps(describe_display()), flush=True)
@@ -1782,11 +1847,11 @@ def two_monitor_scenario():
         print('LIMITATION: this headless backend did not restore the removed virtual '
               'output.', failure or 'the request was accepted but no output returned',
               flush=True)
-        print('LIMITATION: removal and migration are verified automatically; physical '
-              'reconnection stays unchecked and belongs to the live walk.', flush=True)
+        print('LIMITATION: removal, reassignment and parking are verified automatically; '
+              'physical reconnection stays unchecked and belongs to the live walk.', flush=True)
         print('final display state:', json.dumps(describe_display()), flush=True)
         reset_windows()
-        print('ok phase 2 two-monitor scenario (removal and migration verified; '
+        print('ok phase 2 two-monitor scenario (removal, reassignment and parking verified; '
               'reconnection unsupported on this backend)', flush=True)
         return
     wait_until(lambda: len(monitor_ids()) == 2,
@@ -1794,12 +1859,48 @@ def two_monitor_scenario():
                timeout=20)
     check('the primary id is unchanged across the reconfiguration', monitor_ids()[0], primary_id)
     check('live membership is stable', {w['title']: w['id'] for w in windows()}, tracked)
-    check_tiling(node('splith', [leaf('MM stay'), node('splith', [leaf('MM move')], [1.0])],
-                      [0.5, 0.5]),
-                 'MM reconnecting does not migrate contents back', monitor=primary_id)
-    check('MM the returning output gets a valid empty root',
-          shape_of(monitor_snapshot(monitor=monitor_ids()[1])['root']), ('splith', []))
+
+    # A62, second half. Task 16 remembers where an unplug found a workspace, so the returning
+    # output takes workspace 1 back, with `MM move` still in it. Two assertions used to stand
+    # here -- 'MM reconnecting does not migrate contents back', over a flattened primary root,
+    # and 'MM the returning output gets a valid empty root' -- and both described Phase 3B,
+    # where the contents had already been poured into the primary and there was nothing left
+    # to restore. Under Phase 5 the returning output is handed a populated workspace.
+    returning = monitor_ids()[1]
+
+    def restored():
+        data = _snapshot()
+        entry = next(ws for ws in data['workspaces'] if ws['index'] == 1)
+        return (entry['output'],
+                sorted([v['output'], v['workspace']] for v in data['visible']),
+                window_by_title('MM move')['workspace'])
+
+    want_restored = (returning, sorted([[primary_id, 0], [returning, 1]]), 0)
+    try:
+        wait_until(lambda: restored() == want_restored,
+                   'MM workspace 1 returns to the output that came back')
+    except AssertionError:
+        print('mismatch: (workspace 1 output, visible pairs, MM move native workspace)',
+              json.dumps(restored()), 'want', json.dumps(want_restored),
+              json.dumps(desk()), flush=True)
+        raise
+    check('MM the output that came back is the one that was removed', returning, second_id)
+    check('MM the returning output shows workspace 1 again, not the primary\'s',
+          [v['workspace'] for v in _snapshot()['visible'] if v['output'] == returning], [1])
+    check('MM the restored window is live again rather than in the attic',
+          window_by_title('MM move')['workspace'], 0)
+    check_tiling(node('splith', [leaf('MM stay')], [1.0]),
+                 'MM the primary root never absorbed the vanished output\'s contents',
+                 monitor=primary_id)
+    # Now that workspace 1 is visible again its geometry is observable once more, so this is a
+    # full frame + target check. Flattening would leave this root empty.
+    check_tiling(node('splith', [leaf('MM move')], [1.0]),
+                 'MM the returning output gets its workspace and layout back, not an empty root',
+                 monitor=returning)
     for title in tracked:
+        # Against the targets taken while both outputs were live: each window is back on the
+        # rectangle it owned before the unplug. Flattening would have given `MM move` half of
+        # the primary work area instead, on either side of the reconnect.
         check(f'MM {title} keeps its target across the monitor change',
               window_by_title(title)['expectedRect'], targets[title])
         wait_until(lambda t=title: generation(t) != generations[t],
