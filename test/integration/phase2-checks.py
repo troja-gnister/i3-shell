@@ -1701,9 +1701,10 @@ def two_monitor_scenario():
 
     # Focus explicitly, for the same reason scenario_launcher does above: `floating enable` acts on the
     # selection of the FOCUSED output's visible workspace, and scenario_launcher leaves focus on the
-    # second output. Mutter maps these fixtures on the primary output and the engine adopts them onto
-    # that output's workspace (Engine._adoptionWorkspace), so without this the command is handed the
-    # second output's empty root and answers "floating applies only to individual windows".
+    # second output. Since Task 23 (D7) a live-mapped window joins the FOCUSED output's workspace
+    # rather than the workspace of whatever monitor Mutter chose, so these fixtures follow focus --
+    # which is exactly why focus must be set here and not inherited: without this they would be
+    # created on the second output and the assertions below, which name the primary, would fail.
     run('focus output primary')
     wait_until(lambda: state()['focusedOutput'] == primary_id and state()['activeWorkspace'] == 0,
                'MM focus is on the primary output')
