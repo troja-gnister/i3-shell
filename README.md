@@ -16,8 +16,10 @@ as in i3 and sway.
 implemented; **Phase 5 — per-output workspaces — is implemented on the `phase-5` branch** and awaits its
 live walk: [docs/acceptance/phase-5.md](docs/acceptance/phase-5.md), A50–A66, deliberately unticked,
 because a second physical display, a real pointer and a real unplug are the only evidence for most of it.
-Verification at the time of writing: **1145 unit tests in 71 files**, both TypeScript programs, the
-Layer 0 import gate, the tree lint, and the private nested integration suite under `test/integration/`.
+Verification at the time of writing: **1160 unit tests in 71 files**, both TypeScript programs, the
+Layer 0 import gate, the tree lint, and the private nested integration suite under `test/integration/` —
+**637 assertions, exit 0, zero `LIMITATION` branches**, its first full green run for Phase 5 (2026-10-01,
+at `863a8ec`), covering real output removal and restore rather than skipping those branches.
 
 ---
 
@@ -332,6 +334,16 @@ workspace to the display you are looking at when nothing else is showing it. Bin
 - **Workspaces or windows jumped after you ran the integration suite.** `npm run test:integration`
   rebuilds `dist/`; it restores a release bundle on exit, but only `make install` refreshes the live
   symlink. Finish with `make install`.
+- **A floating window you moved with a key is still drawn on the old display — and then vanishes.**
+  `move container to output` and `move container to workspace N` re-home a floating window in the tree
+  but emit no frame change, so it stays painted where it was; the moment the other display switches away
+  from the workspace it now belongs to, it disappears. It is not lost (`GetTree` shows it on the new
+  workspace). Drag it with the mouse, which does move the frame, or `floating disable` and move it tiled.
+- **`$mod+N` opened the overview and took the keyboard.** A workspace switch that crosses displays warps
+  the pointer (i3's `mouse_warping output` default). A warp out of the **top-left corner** trips GNOME's
+  hot-corner pressure barrier. Either veto the warp with `mouse_warping none` in your config, or turn the
+  corner off: `gsettings set org.gnome.desktop.interface enable-hot-corners false`. i3-shell deliberately
+  does not change that setting for you.
 - **GNOME's own workspace shortcuts do nothing.** They are cleared on purpose; see the settings table.
 - **The overview shows windows you parked.** That is the attic, and it is how parking works.
 - **The extension was removed without being disabled.** Reinstall the same UUID and schema, enable it so
@@ -341,7 +353,7 @@ workspace to the display you are looking at when nothing else is showing it. Bin
 ## Develop
 
 ```sh
-npm test                      # unit suite: pure core + adapter doubles, on Node (1145 tests, 71 files)
+npm test                      # unit suite: pure core + adapter doubles, on Node (1160 tests, 71 files)
 npm run typecheck             # two programs: tsconfig.json (src + GNOME types), tsconfig.test.json (tests + Layer 0)
 npm run check:layer0          # fails if Layer 0 imports gi:// / resource:// / src/shell
 npm run lint:tree             # eslint over src/tree and its tests

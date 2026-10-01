@@ -527,9 +527,20 @@ export class Tree {
     // A gained output takes what it is owed before coverOutputs can hand it something arbitrary.
     // `this.visible` still holds this call's incoming entries here -- dead outputs are pruned only in
     // the rebuild below -- so an output of `ordered` missing from it is exactly one this call gained,
-    // whether newly attached or back from an unplug. A workspace some live output is currently showing
-    // is never taken: that would move what the user is looking at, and (by invariant 2, every output
-    // showing one of its own) it is also what keeps this pass from starving an existing output.
+    // whether newly attached or back from an unplug. `spokenFor` records what each live output is
+    // currently showing, and the two LOWER tiers of `_claimForGained` -- the pin scan and the
+    // lowest-free scan -- refuse those indices, which is what keeps this pass from starving an existing
+    // output.
+    //
+    // Final review, M2: the MEMORY tier does not. `adoptOutput` consults `_remembered` alone and never
+    // `spokenFor`, so a returning output *does* reclaim a workspace another live output is currently
+    // showing, and that output is pulled off what the user was watching (the rebuild below hands it its
+    // lowest-numbered remaining workspace instead). Reproduced: two outputs, unplug the second,
+    // `showWorkspace(1)` so the primary shows workspace 1, replug -- workspace 1 goes back to the
+    // second output. That is spec §7's ruling, not a bug: a replug restores the desk, and memory
+    // outranks whatever the displaced desk happened to be showing. `coverOutputs` keeps invariant 2
+    // either way. The blanket claim this comment used to make -- "a workspace some live output is
+    // currently showing is never taken" -- was false; do not restore it.
     const spokenFor = new Set<number>();
     for (const output of ordered) {
       const shown = this.visible.get(output);

@@ -389,6 +389,21 @@ gnome-extensions enable i3-shell@troja
 - **`move container to output` is implemented but unbound.** i3 ships no default binding for it either;
   bind it yourself if you want it (`bindsym $mod+Ctrl+p move container to output primary` is the useful
   one).
+- **A floating window moved by *command* keeps its old frame.** `move container to output` and
+  `move container to workspace N` re-home a floating window in the tree but emit **no frame change**, so
+  it stays drawn exactly where it was — and then appears to *vanish* when the other display switches away
+  from the workspace it now belongs to. Confirmed by execution, not inference: the commit's port calls
+  are `["moveTo:1:0","decorations","decorations"]`, with no rect. The D6 cross-output re-home cannot
+  correct it either, because no monitor *change* occurred. Workaround: drag the window instead, or
+  `floating disable` first and move it tiled. Pre-existing, but Phase 5 is what made `$mod+Shift+N` a
+  cross-display operation, so expect to meet it.
+- **GNOME's hot corner can swallow the pointer warp.** `workspace N` warps the pointer when the switch
+  crosses displays (i3's `mouse_warping output` default, A61). Warping *out of* the top-left corner trips
+  Mutter's pressure barrier, which opens the overview and takes the keyboard — mid-walk, from a key you
+  press all day. Two workarounds: `mouse_warping none` in the config, or
+  `gsettings set org.gnome.desktop.interface enable-hot-corners false`. This is an **open decision, not
+  settled behaviour**: i3-shell deliberately does not change that setting for you, so if it bites, note
+  which workaround you want rather than filing it.
 - **Everything Phase 3A/3B listed still applies**: the border overlaps its client's outermost pixels,
   `border toggle` is two-state, a bar is never shorter than 28px, a monitor showing a fullscreen window
   shows no i3-shell chrome, a window's *kind* is still fixed at its first frame, and IBus can swallow a
@@ -396,8 +411,12 @@ gnome-extensions enable i3-shell@troja
 
 ## Automated evidence (not acceptance)
 
-**Unit suite: 1145 tests in 71 files**, green on `055d90f`, alongside both TypeScript programs, the
-Layer 0 import gate and the tree lint. It ticks nothing above. What it cannot reach, and what therefore
+**Unit suite: 1160 tests in 71 files**, green at the tip of `phase-5`, alongside both TypeScript
+programs, the Layer 0 import gate and the tree lint. **Nested integration suite: 637 assertions, exit 0,
+zero `LIMITATION` branches**, green at `863a8ec` on 2026-10-01 — the first end-to-end native pass of
+Phase 5, and the run that found two real regressions (D6 and D7) no unit test could see. Zero
+`LIMITATION` lines means the headless backend really removed *and* restored an output rather than
+skipping those branches. Neither suite ticks anything above. What they cannot reach, and what therefore
 rests entirely on this walk:
 
 - **A second real display.** Every automated output is a `--virtual-monitor` in a headless nested shell.
@@ -413,8 +432,8 @@ rests entirely on this walk:
   applications, the overview or window-list extensions behave sensibly with the attic. The walk is the
   only review.
 
-The nested integration suite's Phase 5 scenarios are a separate task and are not reported here; do not
-read their absence from this section as a pass or a failure.
+The native run above is evidence, not acceptance: it exercises `--virtual-monitor` outputs in a nested
+headless shell, so every item in the list above still rests on this walk.
 
 ## The user's report
 

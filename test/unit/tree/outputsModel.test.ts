@@ -526,6 +526,31 @@ describe('showWorkspace precedence (Task 19, D1)', () => {
     t.check(new Set([7]));
   });
 
+  it('shows a workspace holding only a FLOATING window on its own output too', () => {
+    // Final review, I2. Rule 1 reads `Tree.occupied`, and `occupied` is a disjunction --
+    // `workspace.floating.length > 0 || !leaves(workspace.root).next().done`. The tiled half is pinned
+    // by the test above and four others; the floating half was pinned by nothing, so dropping it left
+    // the whole suite green while every floating-only workspace silently lost rule 1 and `$mod+N`
+    // dragged it, windows and all, onto whichever display the user was looking at -- D1's exact
+    // symptom. The fixture therefore gives workspace 1 NO tiled window at all, and parks it on the
+    // external while the laptop is focused, so "its own output" (3) and "the focused output" (2) are
+    // different answers.
+    const t = new Tree(10, desk, 2);
+    t.addFloating(7, 1);
+    expect(t.occupied(1)).toBe(true);
+    t.focusedOutput = 3;
+    t.showWorkspace(5);
+    expect([...t.visible]).toEqual([[2, 0], [3, 5]]);
+    expect(t.outputShowing(1)).toBeNull();        // parked, so rule 1 is the only thing holding it
+
+    t.focusedOutput = 2;
+    expect(t.showWorkspace(1)).toEqual({output: 3, swap: true, outgoing: 5});
+    expect(t.outputOf(1)).toBe(3);
+    expect([...t.visible]).toEqual([[2, 0], [3, 1]]);
+    expect(t.focusedOutput).toBe(3);
+    t.check(new Set([7]));
+  });
+
   it('honours a config pin at switch time for an empty workspace, not only at birth', () => {
     // Rule 2. `workspace 9 output <external>`: i3 honours that every time workspace 9 comes into
     // existence, not once at startup. Without it the first Mod+9 from the laptop re-homes workspace 9

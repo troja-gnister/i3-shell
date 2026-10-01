@@ -828,17 +828,34 @@ describe('workspace and focus on two displays (Task 19)', () => {
 
   // D5, the other half of "must remain a valid live output": a parked window's focus report has no
   // output showing it, so there is nothing to move the focused output to and it must stay put.
+  //
+  // Final review, I1 -- this fixture was rebuilt because a LATER fix emptied it. It used to say
+  // `f.add(7, {monitor: 3})`, which before Task 23 (D7) adopted window 7 onto output 3's workspace 1;
+  // D7 changed live adoption to the FOCUSED output's visible workspace, so window 7 began landing on
+  // workspace 0 -- which the laptop *is* showing. `showing` then equalled `focusedOutput` and the
+  // correct and the wrong answers coincided, leaving the guard unprotected against
+  // `focusedOutput = showing ?? storedOutput`. `mapOn` is the replacement for `{monitor: N}`: it takes
+  // the user to the output first, so the window really does join that output's own workspace. Two
+  // windows, because the selection moving from 8 to 7 is what proves the focus report reached
+  // `_selectWindow` at all rather than being swallowed by `_acceptFocus`'s expected/duplicate guards --
+  // without that, "focused output unchanged" would also pass if nothing ran.
   it('leaves the focused output alone for a focus report from a workspace nothing is showing', () => {
     const f = fakeEngine(referenceText, desk);
     f.engine.start();
-    f.add(7, {monitor: 3});
+    f.mapOn(3, 7);                                               // workspace 1, on the external
+    f.mapOn(3, 8);                                               // its neighbour, and the selection
     f.flush();
-    f.engine.run([{type: 'focus_output', target: 'right'}], 1);
+    expect(f.tree().location(7)).toEqual({workspace: 1, output: 3, floating: false});
+    expect(f.tree().selection(1)).not.toEqual({kind: 'tiled', con: f.tree().find(7)});
+
     f.engine.run([{type: 'workspace', target: number(6)}], 2);   // workspace 1 is parked now
+    expect(f.tree().outputShowing(1)).toBeNull();                // the precondition the name claims
+    expect(f.tree().outputOf(1)).toBe(3);                        // ... and it is NOT the focused output
     f.engine.run([{type: 'focus_output', target: 'left'}], 3);
     expect(f.engine.state().focusedOutput).toBe(2);
 
     f.focus(7);
+    expect(f.tree().selection(1)).toEqual({kind: 'tiled', con: f.tree().find(7)});
     expect(f.engine.state().focusedOutput).toBe(2);
     expect(f.engine.state().activeWorkspace).toBe(0);
   });

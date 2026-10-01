@@ -121,15 +121,20 @@ index and tracks the primary separately, so the primary is not index 0 in genera
 alone would hand workspace I to whichever output Mutter happened to enumerate first. The requested count is first clamped to
 `max(requested, live output count)` — i3 creates one workspace per output at startup whatever the config
 names, and the clamp is what makes §2.2's coverage repair always able to find a donor. Workspaces beyond
-the output count are assigned to the **primary**, which keeps invariant 1 total; §2.4 moves one to the focused output the first time it is
-shown. i3 instead hides a never-visited workspace from every bar, so its output is unobservable; with
+the output count are assigned to the **primary**, which keeps invariant 1 total; §2.4 resolves its output the first time it is
+shown — which for an *empty, unpinned* workspace is the focused output (amended by Task 19 defect D1;
+it originally said §2.4 moves one to the focused output, full stop). i3 instead hides a never-visited workspace from every bar, so its output is unobservable; with
 the fixed set of §2.5 this design shows all *N* pills, and a workspace therefore always belongs to
 exactly one output's bar. A third divergence, recorded for the same reason as §2.5's.
 
 `workspace <number|name> output <name…>` graduates from `UNSUPPORTED` to implemented. It accepts
 i3's list form, first live output wins, with `primary` valid as a name. A configured assignment
-overrides the default and is authoritative at birth; it does not pin the workspace forever, because
-`move workspace to output` must still work (§4.3).
+overrides the default and is authoritative at birth **and on every later switch for as long as the
+workspace is empty** (amended by Task 19 defect D1; it originally said "authoritative at birth" only,
+which made the pin a one-shot — the first `$mod+N` pressed from another display re-homed the workspace
+to that display and the pin never applied again for the rest of the session). It still does not pin the
+workspace forever: rule 1 of §2.4's precedence outranks it, so an *occupied* workspace the user moved
+with `move workspace to output` stays moved (§4.3).
 
 An output name that matches no connector is a warning on the directive's line, and the workspace
 falls back to the default rule. This is the ordinary case of a config written for a machine with
@@ -139,11 +144,27 @@ different displays and must not reject the config.
 
 - If **N is visible** on some output: move `focusedOutput` to that output. Nothing is parked or
   un-parked; the screen does not change. This is i3's "go to where that workspace is".
-- Otherwise: assign N to the focused output, show it there, park whatever that output was showing.
+- Otherwise: resolve the output at **switch time**, show N there, and park whatever *that* output was
+  showing (amended by Task 19 defect D1; it originally read "assign N to the focused output, show it
+  there", which dragged an **occupied** workspace's windows onto whichever display the user happened to
+  be standing on, and made a `workspace N output` pin a one-shot at birth). The precedence, implemented
+  as `resolveShowOutput` in `src/tree/outputs.ts`, is:
 
-This is i3's behaviour exactly. In i3 workspaces 3–10 do not exist until visited, and a visited
-workspace is created on the focused output; here "does not exist yet" is replaced by "has not been
-placed yet", which is the same thing observed from the keyboard.
+  1. **Occupied** — a workspace holding windows (tiled **or** floating) keeps the output it is on. A
+     number key never moves a window between displays.
+  2. **Config pin** — `workspace N output X` wins for an empty workspace, on every switch (§2.3).
+  3. **Memory** — §7's record of where an unplug found the workspace. Unreachable through the `Tree`
+     today, and documented as such at the function: a replug re-homes and clears the entry, so no
+     surviving entry ever names a live output.
+  4. **Focused output** — an empty, unpinned, unremembered workspace materialises where the user is.
+
+  Every tier is filtered through the live output set. Only the **resolved** output's outgoing workspace
+  is parked, and the other output still does not change.
+
+This is i3's behaviour exactly, rule 1 included: in i3 workspaces 3–10 do not exist until visited, and
+a visited workspace is created on the focused output — but a workspace that *holds windows* already
+exists somewhere, so i3 takes you to it rather than fetching it. Here "does not exist yet" is replaced
+by "has not been placed yet", which is the same thing observed from the keyboard.
 
 `workspace next|prev` keeps the main spec's global numeric order, unwrapped. Per-output cycling
 (`next_on_output`) is not in scope: no known config binds it.
@@ -594,10 +615,14 @@ one commit, which is the shape of change that produced 34 St-CRITICALs in Phase 
 
 - **A50** With two outputs, workspace I is visible on the **primary** and workspace II on the other at
   startup, whatever order Mutter enumerates them in; each bar shows only its own output's workspaces.
-- **A51** `workspace III output <name>` in the config places III on that output at birth; an unknown
+- **A51** `workspace III output <name>` in the config places III on that output at birth **and on
+  every later `$mod+3` for as long as III is empty, including one pressed from the other display**
+  (amended by Task 19 defect D1; the pin was originally honoured at birth only); an unknown
   output name warns on that line and III falls back to the default assignment.
-- **A52** `$mod+3` with III unplaced shows III on the focused output and parks what was there; the
-  other output does not change.
+- **A52** `$mod+3` with III unplaced **and empty** shows III on the focused output and parks what was
+  there; the other output does not change. With III unplaced but **occupied**, the switch instead takes
+  focus to the display III is already on and moves no window (amended by Task 19 defect D1; the original
+  held unconditionally, which *is* the defect — see §2.4's precedence and A53).
 - **A53** `$mod+2` with II visible on another output moves focus to that output and changes no
   window's workspace.
 - **A54** A window on a parked workspace is not rendered, takes no keyboard input, and does not
