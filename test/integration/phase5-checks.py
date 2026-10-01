@@ -557,7 +557,25 @@ def direction_towards(source, target):
 
 
 def go_to_output(target, label):
-    """Put the focused output on `target` through the real `focus output` command, and prove it."""
+    """Put the focused output on `target` through the real `focus output` command, and prove it.
+
+    The focused output has to be allowed to SETTLE before a direction is computed from it. A
+    `workspace N` that crosses displays warps the pointer (i3's `mouse_warping output` default, which
+    Task 19 implemented), and the pointer crossing then claims the output it lands on -- so focus can
+    arrive a beat after the command that caused it has already returned. Computing `left` from the old
+    output and executing it against the new one produced `focus output: no such output`, because by
+    then the focused output was the leftmost and had no neighbour. Settling first is the fix; retrying
+    the command would only have hidden the ordering.
+    """
+    stable = []
+
+    def steady():
+        now = focused_output()
+        stable.append(now)
+        return len(stable) >= 2 and stable[-1] == stable[-2]
+
+    if not settled(steady, 5.0):
+        print(f'{label}: the focused output never settled; saw {stable}', flush=True)
     current = focused_output()
     if current == target:
         ok(f'{label}: the focused output is already {target}')
@@ -715,6 +733,20 @@ def scenario_parked_window_is_invisible(primary_id, second_id):
 # Scenario 2 (brief): switching one output leaves the other untouched
 # --------------------------------------------------------------------------
 
+def await_settled_tile(title, label):
+    """Wait until the engine's reconciler has converged on `title`'s tile.
+
+    `create_on` returns once a window is in the tree, but the native frame lands afterwards. Any
+    baseline captured in that window records a transient map-time rect, and a later "unchanged"
+    comparison then fails against the engine's own correct, settled answer. `rect == expectedRect`
+    is the engine's convergence signal.
+    """
+    def settled_now():
+        w = window_by_title(title)
+        return w['rect'] == w['expectedRect']
+    expect(f'{label}: {title} settled into its tile before the baseline', True, settled_now)
+
+
 def scenario_other_output_untouched(primary_id, second_id):
     """Byte-identical before and after -- the whole point of per-output workspaces."""
     step('scenario 2: one window on each output')
@@ -727,6 +759,7 @@ def scenario_other_output_untouched(primary_id, second_id):
     check('scenario 2: the second output keeps only its own window',
           leaf_titles(shown_on(second_id)), ['P2 other'])
 
+    await_settled_tile('P2 other', 'scenario 2')
     before_visible = visible_map()
     before_other = window_facts('P2 other')
     before_second_root = shape_of(workspace_entry(shown_on(second_id))['root'])
@@ -952,10 +985,17 @@ def scenario_defect_login_does_not_storm():
 
     tail = shell_log_text()[offset:]
     grabs = [line for line in tail.splitlines() if 'bindings grabbed' in line]
-    if not any(f'ready: {DEFAULT_GRABS} bindings grabbed' in line for line in grabs):
-        fail('D2: the extension reached ready with every binding grabbed',
-             f'a log line reading "ready: {DEFAULT_GRABS} bindings grabbed"',
-             {'grabLines': grabs})
+    # The count in that line is whatever was grabbed at the instant it was written, and some bindings
+    # are legitimately held by another client at first and taken on a retry -- the shell log shows
+    # "25 binding(s) could not be grabbed" followed by "retry 1/3: grabbed 25 of 25". Asserting the
+    # count here read that pre-retry snapshot and failed at 40 of 65. So the line proves only that the
+    # extension REACHED ready; the settled count is proved authoritatively by `ready_normal()` above,
+    # which polls GetState until `grabbed` equals DEFAULT_GRABS. Re-asserted here against the state so
+    # this scenario still fails if the grabs regress.
+    if not grabs:
+        fail('D2: the extension reached ready', 'a log line containing "bindings grabbed"',
+             {'tailLines': tail.splitlines()[-40:]})
+    check('D2: every binding is grabbed once the retries settle', state()['grabbed'], DEFAULT_GRABS)
     ok('D2: the extension reached ready with its bindings grabbed', grabs[-1].split('[i3-shell] ')[-1])
     check('D2: GetState agrees it is ready', (state()['ready'], state()['grabbed']),
           (True, DEFAULT_GRABS))
@@ -1125,6 +1165,7 @@ def scenario_defect_occupied_workspace_stays_put(primary_id, second_id):
     create_on(second_id, 'D1 far', 'defect D1a')
     index = shown_on(second_id)
     create_on(primary_id, 'D1 near', 'defect D1a')
+    await_settled_tile('D1 far', 'defect D1a')
     far_before = window_facts('D1 far')
     before_visible = visible_map()
 

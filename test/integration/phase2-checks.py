@@ -1559,17 +1559,16 @@ def scenario_launcher(primary_id, second_id, primary_area, second_area):
     checkable without a second output, so it is checked here.
     """
     reset_windows()
+    # Focus FIRST, then create. Since Task 23 (D7) a live-mapped window joins the FOCUSED output's
+    # visible workspace rather than the monitor Mutter picked, so where this window lands is decided
+    # by focus -- and focus here is whatever the preceding scenario left behind. Setting it before
+    # the create is what makes "lands on the primary output" a claim about the engine rather than a
+    # bet on scenario order.
+    run('focus output primary')
+    wait_until(lambda: state()['focusedOutput'] == primary_id, 'LA focus is on the primary output')
     create('LA primary')
     wait_until(lambda: window_by_title('LA primary')['monitor'] == primary_id,
                'LA the first window lands on the primary output')
-
-    # Focus explicitly, do not inherit it. This scenario's claim is "the launcher opens where FOCUS
-    # is", so focus is an INPUT and must be set, not assumed: it previously relied on whatever the
-    # preceding scenario left behind, and once that scenario started moving a window to the secondary
-    # output the leftover was the secondary -- so the launcher opened there, correctly, and the test
-    # failed for a reason that had nothing to do with the launcher.
-    run('focus output primary')
-    wait_until(lambda: state()['focusedOutput'] == primary_id, 'LA focus is on the primary output')
 
     # The launcher resolves its output from the engine's focused output, so record that -- and which
     # workspace the new window actually joined -- before opening. Without this the failure says only
@@ -1694,6 +1693,10 @@ def two_monitor_scenario():
     scenario_launcher(primary_id, second_id, first_area, second_area)
 
     reset_windows()
+    # Focus first, same reason as scenario_launcher: since D7 a live-mapped window follows focus, and
+    # scenario_launcher above leaves focus on the second output.
+    run('focus output primary')
+    wait_until(lambda: state()['focusedOutput'] == primary_id, 'MM focus is on the primary before creating')
     create('MM stay')
     create('MM move')
     check_tiling(node('splith', [leaf('MM stay'), leaf('MM move')], [0.5, 0.5]),
@@ -2065,8 +2068,15 @@ def settings_scenario():
     # The whole point of naming IBus keys instead of scanning its schemas.
     check('a scanned IBus key that collides with nothing is left alone',
           cleared['org.freedesktop.ibus.panel.emoji unicode-hotkey'], ['<Control><Shift>u'])
-    check('static workspaces applied',
-          cleared['org.gnome.desktop.wm.preferences num-workspaces'], 10)
+    # Two, not ten. Phase 5 stopped mapping i3 workspaces 1:1 onto GNOME ones: GNOME is pinned to
+    # exactly two -- LIVE_WORKSPACE 0, always active, and ATTIC_WORKSPACE 1, which holds the windows of
+    # every parked workspace because Mutter refuses to render a non-active workspace. That attic IS the
+    # hiding primitive, so this number is load-bearing: see src/shell/settings.ts, which writes 2, and
+    # the engine's onWorkspacesChanged, which re-applies the settings if GNOME's count is ever not 2.
+    # The i3 workspace count stays 10 and is asserted separately via GetState's workspaceCount.
+    check('GNOME is pinned to the two workspaces the attic needs',
+          cleared['org.gnome.desktop.wm.preferences num-workspaces'], 2)
+    check('the i3 workspace count is unaffected by that pin', state()['workspaceCount'], 10)
     # A22. The `original` half is the point of the pair: it proves the write is
     # not a no-op agreeing with what GNOME already had, which is what makes A27
     # ("no hand-edited GSetting") an assertion rather than a claim.
