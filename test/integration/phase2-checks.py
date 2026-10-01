@@ -238,8 +238,14 @@ def check(label, actual, expected):
     ok(label, repr(actual))
 
 
-def check_tiling(expected, label, workspace=None, monitor=None, timeout=10):
-    """Structure + native frame + engine target, against independent rectangles."""
+def check_tiling(expected, label, workspace=None, monitor=None, timeout=10, shape_only=False):
+    """Structure + native frame + engine target, against independent rectangles.
+
+    `shape_only` drops the geometry half. Phase 5 lays out only a VISIBLE workspace (one per
+    output): a parked workspace's windows sit in the GNOME attic, unrendered, so their frames
+    keep whatever values they had before the move and cannot be asserted until a swap shows
+    them. See the comment at src/engine.ts's layout loop. Structure is still fully checked.
+    """
     want_shape = bare(expected)
     detail = [None]
 
@@ -254,6 +260,8 @@ def check_tiling(expected, label, workspace=None, monitor=None, timeout=10):
         wrong = percent_mismatch(expected, entry['root'])
         if wrong:
             return wrong
+        if shape_only:
+            return True
         rects = place(expected, area, entry['root'])
         live = {w['title']: w for w in windows() if w['title'] in rects}
         if set(live) != set(rects):
@@ -1078,11 +1086,23 @@ def scenario_parent_kill_transfer():
     check_tiling(node('splith', [leaf('KT a')], [1.0]),
                  'KT the transferred subtree leaves the source workspace')
     check('KT destination workspace does not become active', state()['activeWorkspace'], 0)
+    # Workspace 3 is not visible here (the check above pins activeWorkspace at 0), so under Phase 5 it
+    # is parked in the attic and deliberately not laid out -- structure is the whole observable claim.
     check_tiling(node('splith', [node('splitv', [leaf('KT b'), leaf('KT c')], [0.5, 0.5])], [1.0]),
-                 'KT both descendants arrive together on workspace 3', workspace=2)
+                 'KT both descendants arrive together on workspace 3', workspace=2, shape_only=True)
+    # What geometry used to prove, proven the way Phase 5 allows: both really are parked, not lost.
+    # GetWindows' `workspace` is the NATIVE workspace -- 0 is live, 1 is the attic.
+    parked = {w['title']: w['workspace'] for w in windows() if w['title'] in ('KT b', 'KT c')}
+    check('KT both descendants are parked in the attic', parked, {'KT b': 1, 'KT c': 1})
+    # This used to read the window's own `workspace` field and expect the i3 index 2. That held while
+    # every i3 workspace had a GNOME workspace of its own; since the attic pinned GNOME to two, the
+    # field reports the NATIVE workspace and can only ever be 0 or 1 (asserted just above). The i3
+    # workspace a window belongs to is the tree's answer, so ask the tree.
     for title in ('KT b', 'KT c'):
-        check(f'KT {title} reports the destination workspace',
-              window_by_title(title)['workspace'], 2)
+        check(f'KT {title} is a leaf of the destination workspace',
+              leaf_node(title, workspace=2) is not None, True)
+        check(f'KT {title} left the source workspace',
+              leaf_node(title, workspace=0) is None, True)
 
     press('<Super>3')
     wait_until(lambda: state()['activeWorkspace'] == 2, 'KT workspace 3 active')
@@ -1517,12 +1537,17 @@ def launcher_state():
 
 
 def check_inside(box, area, label):
-    check(label,
-          [box['x'] >= area['x'],
-           box['y'] >= area['y'],
-           box['x'] + box['width'] <= area['x'] + area['width'],
-           box['y'] + box['height'] <= area['y'] + area['height']],
-          [True, True, True, True])
+    # Report the geometry, not just four anonymous booleans: a bare [True, True, False, True] says
+    # which edge escaped but never by how much, and the numbers are the whole diagnosis.
+    edges = {'left': box['x'] >= area['x'],
+             'top': box['y'] >= area['y'],
+             'right': box['x'] + box['width'] <= area['x'] + area['width'],
+             'bottom': box['y'] + box['height'] <= area['y'] + area['height']}
+    if not all(edges.values()):
+        print(f'{label}: escaped {[k for k, v in edges.items() if not v]}',
+              'box=', json.dumps({k: box[k] for k in ("x", "y", "width", "height")}),
+              'area=', json.dumps(area), flush=True)
+    check(label, list(edges.values()), [True, True, True, True])
 
 
 def scenario_launcher(primary_id, second_id, primary_area, second_area):
@@ -1538,6 +1563,24 @@ def scenario_launcher(primary_id, second_id, primary_area, second_area):
     wait_until(lambda: window_by_title('LA primary')['monitor'] == primary_id,
                'LA the first window lands on the primary output')
 
+    # Focus explicitly, do not inherit it. This scenario's claim is "the launcher opens where FOCUS
+    # is", so focus is an INPUT and must be set, not assumed: it previously relied on whatever the
+    # preceding scenario left behind, and once that scenario started moving a window to the secondary
+    # output the leftover was the secondary -- so the launcher opened there, correctly, and the test
+    # failed for a reason that had nothing to do with the launcher.
+    run('focus output primary')
+    wait_until(lambda: state()['focusedOutput'] == primary_id, 'LA focus is on the primary output')
+
+    # The launcher resolves its output from the engine's focused output, so record that -- and which
+    # workspace the new window actually joined -- before opening. Without this the failure says only
+    # that the box is in the wrong place, never which of focus or adoption put it there.
+    st = state()
+    snap = tree()
+    print('LA focus context:', json.dumps(
+        {'focusedOutput': st['focusedOutput'], 'activeWorkspace': st['activeWorkspace'],
+         'visible': snap['visible'],
+         'window_monitor': window_by_title('LA primary')['monitor'],
+         'primary_id': primary_id, 'second_id': second_id}), flush=True)
     run('launcher')
     wait_until(lambda: launcher_state()['open'], 'LA the launcher opens')
     box = launcher_state()
@@ -1562,14 +1605,18 @@ def scenario_launcher(primary_id, second_id, primary_area, second_area):
           and box['x'] >= primary_area['x'],
           False)
 
-    # A binding must not fire while the launcher holds the grab. <Super>2
-    # targets workspace index 1, and the session is on index 0 here -- pressing
-    # a binding for the workspace you are already on is a no-op either way and
-    # would pass with the grab leaking. The grab-release proof below presses the
-    # SAME key: it must do nothing now and something once the launcher closes.
+    # A binding must not fire while the launcher holds the grab -- but the key pressed has to be one
+    # that WOULD do something, or a leaking grab passes. This used to hardcode "<Super>2 targets index
+    # 1 and the session is on index 0", which held while there was a single global active workspace.
+    # Under per-output workspaces the active workspace is whatever the FOCUSED output shows, and focus
+    # is on the second output by now, which shows index 1 -- so <Super>2 became a no-op either way.
+    # Derive the target instead: a workspace no output is showing, which a press must therefore move.
+    visible_indices = {entry['workspace'] for entry in tree()['visible']}
+    target = next(i for i in range(10) if i not in visible_indices)
+    grab_key = f'<Super>{(target + 1) % 10}'  # index 9 is <Super>0
     before = json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace']
-    check('LA the session has not left the boot workspace yet', before, 0)
-    press('<Super>2')
+    check('LA the grab proof targets a workspace the session is not on', before != target, True)
+    press(grab_key)
     after = json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace']
     check('LA a workspace binding does not fire while the launcher is open', after, before)
 
@@ -1583,6 +1630,20 @@ def scenario_launcher(primary_id, second_id, primary_area, second_area):
     # GetWindows reports no focus field (WindowSnapshot spreads WindowInfo,
     # which has none), so focus is proved the way the rest of this file proves
     # it: a bare key reaches only the natively focused client's Entry.
+    print('LA focus-return context:', json.dumps(
+        {'focusedOutput': state()['focusedOutput'], 'activeWorkspace': state()['activeWorkspace'],
+         'visible': tree()['visible'],
+         'selected': [{'ws': w['index'], 'sel': w.get('selected')} for w in tree()['workspaces']
+                      if w.get('selected')][:4],
+         'windows': [{'t': w['title'], 'mon': w['monitor'], 'native_ws': w['workspace'],
+                      'state': w['state']} for w in windows()]}), flush=True)
+    # Guard before the proof, not after the failure. A bare keystroke reaches a client only while the
+    # Shell is in NORMAL mode: in the overview it holds a modal grab and unmaps every client actor, so
+    # `type_key` below would time out with Mutter still reporting this very window as `focus_window` --
+    # a lost-focus failure that is nothing of the kind (Task 21). `ready_normal` already escapes the
+    # overview once at session start; nothing guaranteed the session was still out of it here.
+    check('LA the session is in NORMAL mode, so a keystroke can reach a client',
+          state()['actionMode'], 1)
     type_key('z', 'LA primary', {})
     ok('LA focus returned to the window that had it')
 
@@ -1590,7 +1651,7 @@ def scenario_launcher(primary_id, second_id, primary_area, second_area):
     # with the keyboard still captured, which is the failure that costs the
     # user their session.
     workspace_before = json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace']
-    press('<Super>2')
+    press(grab_key)  # the same key the held grab swallowed above
     wait_until(
         lambda: json.loads(call('org.i3shell.Control', 'GetState')[0])['activeWorkspace'] != workspace_before,
         'LA bindings work again once the launcher has closed')
@@ -1637,6 +1698,20 @@ def two_monitor_scenario():
     create('MM move')
     check_tiling(node('splith', [leaf('MM stay'), leaf('MM move')], [0.5, 0.5]),
                  'MM both windows tile on the primary output', monitor=primary_id)
+
+    # Focus explicitly, for the same reason scenario_launcher does above: `floating enable` acts on the
+    # selection of the FOCUSED output's visible workspace, and scenario_launcher leaves focus on the
+    # second output. Mutter maps these fixtures on the primary output and the engine adopts them onto
+    # that output's workspace (Engine._adoptionWorkspace), so without this the command is handed the
+    # second output's empty root and answers "floating applies only to individual windows".
+    run('focus output primary')
+    wait_until(lambda: state()['focusedOutput'] == primary_id and state()['activeWorkspace'] == 0,
+               'MM focus is on the primary output')
+    # Asked by output, not by workspace index: with two outputs live `monitor_snapshot` refuses to
+    # guess which workspace a bare index means.
+    check('MM the window to float is the selection',
+          workspace_snapshot(0)['selected'],
+          {'kind': 'tiled', 'nodeId': leaf_node('MM move', monitor=primary_id)['id']})
 
     # floating enable -> explicit position inside the other output -> floating
     # disable, waiting for the native monitor between the steps.
