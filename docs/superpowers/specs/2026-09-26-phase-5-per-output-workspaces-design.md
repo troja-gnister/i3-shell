@@ -182,16 +182,22 @@ Dumping everything onto workspace I would be the alternative and is worse.
 2. **`focus output <arg>`**, and a directional `focus` that walks off the edge of the visible
    workspace's root (§4.4).
 3. **`workspace N` landing on another output** (§2.4).
-4. **The pointer crossing onto an output whose visible workspace is empty** — and only while
+4. **The pointer crossing onto another output** — and only while
    `focus_follows_mouse` is on. If the user has turned it off, pointer motion moves nothing and
    `focus output` is how they reach another display; a rule that still followed the pointer would make
-   a documented setting half-effective in its least visible half. The one case rule 1
-   cannot cover, structurally: there is no window there to take focus. This is the defect on the
-   unoccupied workspaces in §1.
+   a documented setting half-effective in its least visible half. The cases rule 1 cannot cover,
+   structurally: GNOME reports a focus change only when the pointer enters a *window*, so a crossing
+   onto a gap, the bar or the desktop background reports nothing at all, and an empty workspace has no
+   window to take focus in the first place. This is the defect on the unoccupied workspaces in §1.
+
+   **Amended by Task 19 (defect D4).** This rule originally fired *only* for an output whose visible
+   workspace was empty. That made pointer focus one-way: focus drained onto whichever display showed an
+   empty workspace and the pointer could never bring it back, because the populated case was assumed to
+   be covered by rule 1 and is not. The emptiness condition is deleted, not inverted.
 
 Rule 4 is the only one needing a new subscription. It hangs on Mutter's cursor tracker and early-outs
 on an integer comparison unless the pointer's monitor actually changed, so the per-motion cost is a
-compare and emptiness is consulted only on a real crossing.
+compare and the rest of the work happens only on a real crossing.
 
 ### 3.2 `focus_follows_mouse` is one GSettings override
 
@@ -579,8 +585,9 @@ one commit, which is the shape of change that produced 34 St-CRITICALs in Phase 
   wraps.
 - **A58** `focus <direction>` at the edge of a visible workspace's root crosses into the neighbouring
   output's visible workspace at the entering edge rather than wrapping.
-- **A59** Moving the pointer onto an output whose visible workspace is **empty** makes it the focused
-  output, and `$mod+d` then opens the launcher on that output.
+- **A59** Moving the pointer onto another output makes it the focused output — whether that output's
+  visible workspace is **empty or occupied** (amended by Task 19 defect D4; it originally held for the
+  empty case only, which made focus one-way) — and `$mod+d` then opens the launcher on that output.
 - **A60** With `focus-mode = sloppy` applied, moving the pointer onto a window on another output makes
   that output focused; a keyboard `focus output` warps the pointer to the newly focused window.
 - **A61** `mouse_warping none` suppresses the warp; the launcher's modal grab suppresses it too, and the
