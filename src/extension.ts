@@ -22,6 +22,7 @@ import {Indicator} from './shell/indicator';
 import {KeyBinder} from './shell/keys';
 import {Launcher} from './shell/launcher';
 import type {RecencyStore} from './shell/launcher';
+import {Gestures} from './shell/gestures';
 import {Pointer} from './shell/pointer';
 import {SettingsRecency} from './shell/recency';
 import {log} from './shell/log';
@@ -204,6 +205,15 @@ export default class I3ShellExtension extends Extension {
     // engine as rule 4's evidence that an empty output is where the user now is. The engine, not this
     // file, owns Mutter-index -> MonitorId (onPointerMonitorIndex), so only the raw index crosses here.
     const pointer = new Pointer(tracker, closing.unlessClosing(index => { this._engine?.onPointerMonitorIndex(index); }));
+
+    // `bindgesture`'s other half: a completed three-finger horizontal swipe reaches the engine as a
+    // direction, and the config says which command that direction runs. Nothing is stored: `Gestures`
+    // owns no resource of its own beyond the stage subscription it registered with `tracker`, which
+    // `disable()`'s `disconnectAll()` already drops -- a `destroy()` here would be a second teardown
+    // route for one subscription.
+    new Gestures(tracker, closing.unlessClosing((direction, timestamp) => {
+      this._engine?.onSwipe(direction, timestamp);
+    }));
 
     const engine = new Engine({
       keys,

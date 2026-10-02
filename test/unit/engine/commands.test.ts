@@ -313,13 +313,78 @@ describe('engine command dispatch', () => {
     expect(f.calls.join('\n')).toMatch(/could not move window 1 to workspace 2; leaving it where it was/);
   });
 
-  it('does not wrap workspace prev below zero', () => {
+  it('workspace prev stays put when the user is the only member of the cycle', () => {
     // Before Task 7, `workspace N` moved only GNOME's raw active index (real switching came from this
     // task), so this used to be exercised alongside a `ports.workspaces.activate` failure -- a failure
-    // mode `workspace N` no longer has: it drives the tree directly, and `_workspaceIndex` (this guard)
-    // gates an unknown target before any of that runs.
+    // mode `workspace N` no longer has: it drives the tree directly, and `_workspaceIndex` gates an
+    // unknown target before any of that runs.
+    //
+    // The old rule dead-ended here ('no such workspace': index 0 has no numeric predecessor). The cycle
+    // never dead-ends -- an empty desk's cycle is {the visible workspace}, so `prev` wraps round to the
+    // one member there is and the command reports the no-op switch it really made.
     const f = fakeEngine(); f.engine.start();
-    expect(f.engine.run([{type: 'workspace', target: {kind: 'prev'}}], 2)).toBe('workspace: no such workspace');
+    expect(f.engine.run([{type: 'workspace', target: {kind: 'prev'}}], 2)).toBe('workspace: already active');
+  });
+
+  /**
+   * i3's `workspace next`/`prev` walk the workspaces that EXIST and wrap; they are not numeric
+   * neighbours. Every fixture below is built so the two rules disagree -- a fixture where 1, 2 and 3 are
+   * open and the user is on 1 cannot tell them apart, because both answer 2.
+   */
+  describe('workspace next/prev cycle through existing workspaces', () => {
+    /** Occupies each of `indices` with one window, leaving the engine focused on the last of them. */
+    function occupy(f: ReturnType<typeof fakeEngine>, indices: number[]): void {
+      let id = 1;
+      for (const index of indices) {
+        expect(f.engine.run([{type: 'workspace', target: {kind: 'number', number: index + 1, name: String(index + 1)}}], 0))
+          .not.toContain('no such');
+        f.add(id++);
+        f.flush();
+      }
+    }
+
+    it('wraps next from the highest occupied workspace back to the lowest', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {workspaceCount: 10});
+      f.engine.start();
+      occupy(f, [0, 1, 2]);
+      expect(f.engine.state().activeWorkspace).toBe(2);
+      // Numeric neighbour would be index 3 -- an empty workspace of the ten, reported as 'workspace 4'.
+      expect(f.engine.run([{type: 'workspace', target: {kind: 'next'}}], 1)).toBe('workspace 1');
+      expect(f.engine.state().activeWorkspace).toBe(0);
+    });
+
+    it('wraps prev from the lowest occupied workspace up to the highest', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {workspaceCount: 10});
+      f.engine.start();
+      occupy(f, [0, 1, 2]);
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: 1, name: '1'}}], 1);
+      // The old rule had no answer at index 0 at all.
+      expect(f.engine.run([{type: 'workspace', target: {kind: 'prev'}}], 2)).toBe('workspace 3');
+      expect(f.engine.state().activeWorkspace).toBe(2);
+    });
+
+    it('skips the empty workspaces between two occupied ones', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {workspaceCount: 10});
+      f.engine.start();
+      occupy(f, [0, 4]);
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: 1, name: '1'}}], 1);
+      // Numeric neighbour would be index 1, which holds nothing and is not in the cycle.
+      expect(f.engine.run([{type: 'workspace', target: {kind: 'next'}}], 3)).toBe('workspace 5');
+      expect(f.engine.state().activeWorkspace).toBe(4);
+    });
+
+    it('counts a workspace visible on another output as a member even when it is empty', () => {
+      // Two outputs show workspaces 0 and 1; only 0 holds a window. The cycle is {0, 1} because 1 is on
+      // screen, so `next` from 0 crosses to the other display rather than skipping to the next occupied
+      // workspace -- which, with nothing else open, would have been 0 itself.
+      const f = fakeEngine('bindsym Mod4+q kill',
+        {monitors: [{id: 10, index: 0}, {id: 11, index: 1}], primary: 10, workspaceCount: 10});
+      f.engine.start();
+      f.add(1); f.flush();
+      expect(f.engine.state().activeWorkspace).toBe(0);
+      expect(f.engine.run([{type: 'workspace', target: {kind: 'next'}}], 1)).toBe('workspace 2');
+      expect(f.engine.state().activeWorkspace).toBe(1);
+    });
   });
 
   it('workspace number moves focus to the output holding that workspace', () => {
@@ -857,6 +922,70 @@ describe('workspace and focus on two displays (Task 19)', () => {
     f.focus(7);
     expect(f.tree().selection(1)).toEqual({kind: 'tiled', con: f.tree().find(7)});
     expect(f.engine.state().focusedOutput).toBe(2);
+    expect(f.engine.state().activeWorkspace).toBe(0);
+  });
+});
+
+/**
+ * `Engine.onSwipe` is to `bindgesture` what `onBinding` is to `bindsym`: the one entry point a gesture
+ * source pushes into, resolving the bound command text and running it. The direction convention -- left
+ * for `workspace next`, right for `workspace prev`, matching GNOME's content-follows-fingers feel -- is
+ * expressed in the config these fixtures load, never in the engine, so inverting it is a config edit.
+ */
+describe('onSwipe', () => {
+  const GESTURES = 'bindgesture swipe:left workspace next\nbindgesture swipe:right workspace prev\n';
+
+  /** Occupies workspaces 0, 1 and 2 with one window each and leaves the engine on workspace 0. */
+  function threeOccupied(text: string): ReturnType<typeof fakeEngine> {
+    const f = fakeEngine(text, {workspaceCount: 10});
+    f.engine.start();
+    let id = 1;
+    for (const index of [0, 1, 2]) {
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: index + 1, name: String(index + 1)}}], 0);
+      f.add(id++);
+      f.flush();
+    }
+    f.engine.run([{type: 'workspace', target: {kind: 'number', number: 1, name: '1'}}], 0);
+    return f;
+  }
+
+  it('runs the command bound to a left swipe', () => {
+    const f = threeOccupied(GESTURES);
+    f.engine.onSwipe('left', 7);
+    expect(f.engine.state().activeWorkspace).toBe(1);
+  });
+
+  it('runs the command bound to a right swipe, which wraps the other way', () => {
+    const f = threeOccupied(GESTURES);
+    f.engine.onSwipe('right', 7);
+    // `workspace prev` from the lowest member of the cycle: round to the highest, i3's own wrap.
+    expect(f.engine.state().activeWorkspace).toBe(2);
+  });
+
+  it('does nothing, and says nothing, when the gesture is unbound', () => {
+    // An unbound gesture is not an error -- the user who never wrote a `bindgesture` line still swipes.
+    const f = threeOccupied('bindsym Mod4+q kill\n');
+    f.calls.length = 0;
+    f.engine.onSwipe('left', 7);
+    expect(f.engine.state().activeWorkspace).toBe(0);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('warns with the config line number when the bound command does not parse', () => {
+    const f = threeOccupied('bindgesture swipe:left wobble\n');
+    f.calls.length = 0;
+    f.engine.onSwipe('left', 7);
+    expect(f.calls).toContain("warn:config line 1: unknown command 'wobble'");
+    expect(f.engine.state().activeWorkspace).toBe(0);
+  });
+
+  it('ignores a swipe while the session is locked', () => {
+    // Unlike a binding, a gesture has no grab to drop: `onLocked` ungrabs every accelerator, so
+    // `onBinding` cannot fire over a lock screen, while the stage subscription a swipe arrives on stays
+    // live. Without this guard the lock screen would be the one place gestures still ran commands.
+    const f = threeOccupied(GESTURES);
+    f.engine.onLocked();
+    f.engine.onSwipe('left', 7);
     expect(f.engine.state().activeWorkspace).toBe(0);
   });
 });

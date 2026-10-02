@@ -2,6 +2,7 @@ import {Tree} from './tree/tree';
 import {descendFocused, leaves, walk, type Con, type MonitorId, type NodeId, type Rect, type SplitCon, type WindowId} from './tree/node';
 import {effectiveWorkspaceCount, resolveOutputArg, type OutputArg} from './tree/outputs';
 import {layoutWithRects, stackingOrder} from './tree/layout';
+import {cycleWorkspace} from './tree/cycle';
 import {RectReconciler} from './runtime/reconcile';
 import {serializeTree, type TreeSnapshot, type WindowSnapshot} from './runtime/snapshot';
 import {decorationPlan, type DecorationPlan} from './runtime/decoration';
@@ -334,7 +335,10 @@ export class Engine {
     if (this._correctingActiveWorkspace) return;
     this.commit(() => {
       // GNOME's active workspace is a constant while the extension is enabled. Touchpad workspace
-      // gestures have no GSetting to clear, so this is the only cover for them.
+      // gestures have no GSetting to clear, so this is the only cover for them -- and it still is, even
+      // now that `bindgesture` uses the swipe: `src/shell/gestures.ts` deliberately observes the event
+      // and propagates it rather than claiming it, so GNOME's own swipe tracker still moves the active
+      // workspace off LIVE and this is what puts it back.
       if (this._started && !this._disposed && this._ports.workspaces.activeIndex !== LIVE_WORKSPACE) {
         this._ports.log.warn('active workspace left live; switching back');
         this._correctingActiveWorkspace = true;
@@ -1349,6 +1353,28 @@ export class Engine {
     this.run(commands, timestamp);
   }
 
+  /**
+   * A touchpad swipe completed. `bindgesture`'s half of what `onBinding` is to `bindsym`.
+   *
+   * An unbound gesture is silent, not an error: the config is the user's real `~/.config/i3/config` and
+   * most of them will never write a `bindgesture` line, so a bare swipe must cost nothing and say nothing.
+   * Which direction means `workspace next` lives entirely in that config -- nothing here knows.
+   *
+   * The `_locked` guard is the one thing this does that `onBinding` does not need. `onLocked()` drops
+   * every accelerator grab, so a binding physically cannot fire over a lock screen; the stage
+   * subscription a swipe arrives on has no equivalent and stays live, which would otherwise make the lock
+   * screen the one place where gestures still ran commands.
+   */
+  onSwipe(direction: 'left' | 'right', timestamp: number): void {
+    if (this._locked) return;
+    const gesture = this._config.gestures.get(`swipe:${direction}`);
+    if (!gesture) return;
+    const {commands, diagnostics} = parseCommands(gesture.command);
+    for (const d of diagnostics)
+      this._ports.log.warn(`config line ${gesture.line}: ${d}`);
+    this.run(commands, timestamp);
+  }
+
   /** Executes commands in order; returns a short human-readable result (also the D-Bus reply). */
   run(commands: Command[], timestamp: number): string {
     if (this._disposed) return 'stopped';
@@ -1496,9 +1522,15 @@ export class Engine {
         return null;
       }
       case 'next':
-        return current + 1 < count ? current + 1 : null;
-      case 'prev':
-        return current > 0 ? current - 1 : null;
+      case 'prev': {
+        // i3's semantics, not numeric neighbours: cycle the workspaces that exist and wrap at both
+        // ends. These used to be `current + 1` / `current - 1` with a null at each end, which dead-ended
+        // on workspace 1 and on the config's last workspace and walked through empty workspaces nobody
+        // had opened. `Tree.cycleMembers` says what "exists" means here; `cycleWorkspace` is the walk.
+        // No tree means no cycle to walk -- and nothing on screen to walk it from.
+        const tree = this._tree;
+        return tree ? cycleWorkspace(tree.cycleMembers(), current, target.kind) : null;
+      }
       case 'back_and_forth':
         return null;
     }

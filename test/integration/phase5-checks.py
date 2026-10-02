@@ -292,6 +292,18 @@ def pointer():
     return list(call('org.i3shell.Debug', 'PointerPosition'))
 
 
+def swipe(direction):
+    """Inject a completed three-finger swipe at Engine.onSwipe.
+
+    Not at the recogniser: Mutter synthesises no touchpad events and a headless nested Shell has no
+    touchpad, so nothing here can produce a real Clutter TOUCHPAD_SWIPE. src/shell/gestures.ts is
+    therefore unit-tested only, and this covers everything downstream of the direction.
+    """
+    if not call('org.i3shell.Debug', 'SimulateSwipe', '(s)', (direction,))[0]:
+        fail('the debug surface injected this swipe', {'direction': direction, 'ok': True},
+             {'direction': direction, 'ok': False})
+
+
 def normal_action_mode():
     """Leave the overview if the Shell has drifted back into it.
 
@@ -1259,6 +1271,81 @@ def scenario_defect_pin_survives_remote_number_press(primary_id, second_id):
 
 
 # --------------------------------------------------------------------------
+# Scenario 6: a bound touchpad swipe really switches workspaces
+# --------------------------------------------------------------------------
+
+def scenario_gesture_runs_its_binding(primary_id, second_id):
+    """`bindgesture swipe:left workspace next` moves the display, and `next` cycles what EXISTS.
+
+    Two claims a unit fake cannot make. The first is that the whole path from a swipe direction to a
+    moved display works against Mutter: the `bindgesture` lookup, the command parse, and the switch.
+    The second is i3's cycle semantics on a real desk -- workspaces 1 and 5 hold a window each and 2, 3
+    and 4 hold nothing, so `workspace next` from 5 wraps round to 1. The rule this replaced would have
+    answered workspace 6 (`current + 1`), and `prev` from 1 would have answered nothing at all.
+
+    Workspace 2 is deliberately not in the fixture's own cycle as a *primary* workspace: the second
+    output shows it, so it is a member, but `next` from 5 wraps past it to the lowest member (1) and
+    `prev` from 1 wraps up to the highest (5), so neither assertion below can be satisfied by a focus
+    move to the other display instead of a switch on this one.
+    """
+    step('gestures: bind both horizontal swipes and reload')
+    reset_windows()
+    original = CONFIG.read_text()
+    diagnostics_before = (state()['errors'], state()['warnings'])
+    try:
+        CONFIG.write_text(original + '\nbindgesture swipe:left workspace next\n'
+                                     'bindgesture swipe:right workspace prev\n')
+        message = run('reload')
+        if 'reloaded' not in message:
+            fail('gestures: the config with bindgesture lines reloaded', 'a message containing "reloaded"',
+                 message, lambda: {'configTail': CONFIG.read_text().splitlines()[-3:]})
+        check('gestures: the bindgesture lines added no config error or warning',
+              (state()['errors'], state()['warnings']), diagnostics_before)
+        # A gesture is not a key: binding two of them must not change the accelerator count.
+        mode_grabs('default', DEFAULT_GRABS)
+
+        step('gestures: occupy workspaces 1 and 5 on the primary, leaving 2, 3 and 4 empty')
+        create_on(primary_id, 'swipe one', 'gestures')
+        check('gestures: the first window is on workspace 1', shown_on(primary_id), 0, visible_map)
+        check('gestures: workspace number 5 was accepted', run('workspace number 5'), 'workspace 5')
+        create_on(primary_id, 'swipe five', 'gestures')
+        expect('gestures: the primary shows workspace 5, which now holds a window', (4, ['swipe five']),
+               lambda: (shown_on(primary_id), leaf_titles(4)), context=visible_map)
+
+        step('gestures: a left swipe runs `workspace next`, which wraps to workspace 1')
+        swipe('left')
+        expect('gestures: the primary wrapped round to workspace 1, not on to an empty 6', 0,
+               lambda: shown_on(primary_id), timeout=15,
+               context=lambda: {'visible': visible_map(), 'focusedOutput': focused_output()})
+        check('gestures: and it is still the primary the keyboard is on', focused_output(), primary_id,
+              visible_map)
+
+        step('gestures: a right swipe runs `workspace prev`, which wraps back up to workspace 5')
+        swipe('right')
+        expect('gestures: the primary wrapped up to workspace 5 rather than dead-ending', 4,
+               lambda: shown_on(primary_id), timeout=15,
+               context=lambda: {'visible': visible_map(), 'focusedOutput': focused_output()})
+    finally:
+        # Tolerant on purpose, for the reason scenario_defect_pin_survives_remote_number_press gives:
+        # an exception raised here would replace whatever the scenario was failing on.
+        CONFIG.write_text(original)
+        try:
+            restored = command('reload')
+        except Exception as error:                      # noqa: BLE001 -- reported, never masking
+            print('WARNING: could not reload the original config:', error, flush=True)
+        else:
+            if not restored[0] or 'reloaded' not in restored[1]:
+                print('WARNING: restoring the original config did not reload cleanly:', restored,
+                      flush=True)
+    step('gestures: with the bindings gone, a swipe is silent and changes nothing')
+    before = shown_on(primary_id)
+    swipe('left')
+    check('gestures: an unbound swipe moved nothing', shown_on(primary_id), before, visible_map)
+    mode_grabs('default', DEFAULT_GRABS)
+    reset_windows()
+
+
+# --------------------------------------------------------------------------
 # Scenario 5 (brief, --settings): the overrides are restored on disable()
 # --------------------------------------------------------------------------
 
@@ -1390,7 +1477,8 @@ def live_session():
                      scenario_defect_native_focus_moves_focused_output,
                      scenario_defect_already_active_reasserts_focus,
                      scenario_defect_occupied_workspace_stays_put,
-                     scenario_defect_pin_survives_remote_number_press):
+                     scenario_defect_pin_survives_remote_number_press,
+                     scenario_gesture_runs_its_binding):
         reset_workspaces(primary_id, second_id)
         scenario(primary_id, second_id)
     reset_windows()

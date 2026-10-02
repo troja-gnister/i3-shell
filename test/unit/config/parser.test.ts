@@ -262,3 +262,68 @@ describe('mouse_warping', () => {
     ]);
   });
 });
+
+/**
+ * `bindgesture` is not i3 syntax -- i3 has no gestures at all. It is borrowed from sway, which is where
+ * a user who wants one will look first, and it joins `launcher` as a deliberate non-i3 directive.
+ */
+describe('bindgesture', () => {
+  it('binds a command to each horizontal swipe', () => {
+    const r = P('bindgesture swipe:left workspace next\nbindgesture swipe:right workspace prev\n');
+    expect(r.diagnostics).toEqual([]);
+    expect(r.directives).toEqual([
+      {kind: 'bindgesture', line: 1, gesture: 'swipe:left', command: 'workspace next'},
+      {kind: 'bindgesture', line: 2, gesture: 'swipe:right', command: 'workspace prev'},
+    ]);
+  });
+
+  it('resolves into the config, keyed by gesture, with the line that bound it', () => {
+    const {config, diagnostics} = load('bindgesture swipe:left workspace next\n');
+    expect(diagnostics).toEqual([]);
+    expect([...config!.gestures]).toEqual([
+      ['swipe:left', {gesture: 'swipe:left', command: 'workspace next', line: 1}],
+    ]);
+  });
+
+  it('binds nothing by default: an unbound gesture is the normal state', () => {
+    expect(load('').config!.gestures.size).toBe(0);
+  });
+
+  it('rejects a gesture name it does not implement', () => {
+    // Styled on `mouse_warping`'s error and erring for the same reason: an enumerated value that is not
+    // in the enumeration is a typo, and a parser that silently ignored it would leave the user with a
+    // gesture that does nothing and no way to find out why.
+    const r = P('bindgesture swipe:up workspace next\n');
+    expect(r.diagnostics).toEqual([
+      {line: 1, severity: 'error', message: "bindgesture: expected swipe:left or swipe:right, got 'swipe:up'"},
+    ]);
+    expect(r.directives).toEqual([]);
+  });
+
+  it('rejects sway gesture kinds other than swipe', () => {
+    const r = P('bindgesture pinch:inward workspace next\n');
+    expect(r.diagnostics).toEqual([
+      {line: 1, severity: 'error', message: "bindgesture: expected swipe:left or swipe:right, got 'pinch:inward'"},
+    ]);
+  });
+
+  it('rejects a gesture with no command', () => {
+    expect(P('bindgesture swipe:left\n').diagnostics).toEqual([
+      {line: 1, severity: 'error', message: 'bindgesture: missing command'},
+    ]);
+  });
+
+  it('warns and keeps the later binding when one gesture is bound twice', () => {
+    // Matches `bindsym`'s own duplicate rule, which is i3's: the last line wins.
+    const {config, diagnostics} = load('bindgesture swipe:left workspace next\nbindgesture swipe:left nop\n');
+    expect(diagnostics).toEqual([
+      {line: 2, severity: 'warning', message: 'duplicate bindgesture swipe:left; the later one wins'},
+    ]);
+    expect(config!.gestures.get('swipe:left')).toEqual({gesture: 'swipe:left', command: 'nop', line: 2});
+  });
+
+  it('validates the bound command at load time, as bindsym does', () => {
+    const {diagnostics} = load('bindgesture swipe:left wobble\n');
+    expect(diagnostics).toEqual([{line: 1, severity: 'warning', message: "unknown command 'wobble'"}]);
+  });
+});

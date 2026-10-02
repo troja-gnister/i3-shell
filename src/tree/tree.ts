@@ -190,6 +190,21 @@ export class Tree {
   }
 
   /**
+   * The workspaces `workspace next`/`prev` cycle through: occupied, or on screen somewhere.
+   *
+   * i3 cycles through the workspaces that exist; this design's workspaces all exist up front, so the
+   * union above is what stands in for existence (see `cycleWorkspace`). Visible is in the union, not
+   * only occupied, for one reason that matters: it makes the workspace the user is on a member of its
+   * own cycle on an empty desk, so `next` always has an answer. Ascending, because the cycle is.
+   */
+  cycleMembers(): number[] {
+    const members = new Set<number>(this.visible.values());
+    for (const index of this.workspaces.keys())
+      if (this.occupied(index)) members.add(index);
+    return [...members].sort((a, b) => a - b);
+  }
+
+  /**
    * i3's `workspace N`. Two cases, and only two.
    *
    * Visible somewhere already: move the focused output to it, changing no window's workspace — this is

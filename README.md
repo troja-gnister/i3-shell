@@ -220,6 +220,31 @@ installed applications (`Shell.AppSystem`, Flatpak included) and `$PATH` binarie
 `dmenu_run` does. `Tab` completes, `Ctrl+n`/`Ctrl+p` and `Up`/`Down` move the selection, `Escape` or the
 opening binding again closes it. `--term` is optional.
 
+## Touchpad swipes
+
+`bindgesture` is **not an i3 directive** — i3 has no gesture syntax at all, so this borrows sway's, the
+way the `launcher` command is this project's own addition. Only the two horizontal three-finger swipes are
+recognised:
+
+```
+bindgesture swipe:left workspace next
+bindgesture swipe:right workspace prev
+```
+
+Those two lines are the suggested default, not a built-in: swiping left runs whatever `swipe:left` is
+bound to, so the direction follows GNOME's content-follows-fingers convention only because that config
+says so. Swap the two commands to invert it, or bind something else entirely. With no `bindgesture` line
+a swipe does nothing, which is not an error.
+
+`workspace next` / `workspace prev` are i3's own: they cycle through the workspaces that **exist** —
+occupied, or on screen on some display — in ascending order, and wrap at both ends. With 1, 2 and 3 open,
+a left swipe from 3 lands on 1; they never walk onto an empty workspace nobody opened.
+
+Four-finger gestures are untouched, and so is GNOME's vertical three-finger swipe to the overview: a
+swipe is only claimed when it is three-fingered, travels more than 100 px horizontally, and travels
+further horizontally than vertically. A gesture name other than `swipe:left` or `swipe:right` is a config
+error, so a typo tells you rather than leaving a swipe that silently does nothing.
+
 **Known conflict: IBus.** IBus registers accelerators through the same mechanism, and two are claimed
 outright — `<Super>semicolon` (emoji picker) and `<Super>space` (input source). Those two are cleared by
 name. Beyond them, measurement shows that **with IBus running a varying subset of i3-shell's other

@@ -20,6 +20,17 @@ export interface Mode {
   bindings: Binding[];
 }
 
+/** The gestures `bindgesture` understands. sway's spelling, because i3 has none of its own. */
+export type GestureName = 'swipe:left' | 'swipe:right';
+
+/** `bindgesture swipe:left workspace next`. Deliberately shaped like `Binding` minus the key. */
+export interface GestureBinding {
+  gesture: GestureName;
+  /** Raw command text, parsed with parseCommands() when the gesture completes. */
+  command: string;
+  line: number;
+}
+
 export interface Criteria {
   class?: RegExp;
   instance?: RegExp;
@@ -86,6 +97,14 @@ export interface Config {
    * straight back and every keyboard output command would fight the mouse. The two are a pair.
    */
   mouseWarping: 'output' | 'none';
+  /**
+   * `bindgesture <swipe:left|swipe:right> <command>`, by gesture. Empty unless the config says otherwise.
+   *
+   * Not an i3 directive: i3 has no gesture syntax at all, so this borrows sway's, the way `launcher` is
+   * this project's own addition. Empty is the normal state and means a swipe does nothing -- the design
+   * never hardcodes a direction, so which way `workspace next` lies is the user's config to write.
+   */
+  gestures: Map<GestureName, GestureBinding>;
   /** bar { strip_workspace_numbers }: render pills without the leading number. */
   stripWorkspaceNumbers: boolean;
   /** Workspace number → full configured name, e.g. 1 → "1:I". */
