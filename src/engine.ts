@@ -335,10 +335,13 @@ export class Engine {
     if (this._correctingActiveWorkspace) return;
     this.commit(() => {
       // GNOME's active workspace is a constant while the extension is enabled. Touchpad workspace
-      // gestures have no GSetting to clear, so this is the only cover for them -- and it still is, even
-      // now that `bindgesture` uses the swipe: `src/shell/gestures.ts` deliberately observes the event
-      // and propagates it rather than claiming it, so GNOME's own swipe tracker still moves the active
-      // workspace off LIVE and this is what puts it back.
+      // gestures have no GSetting to clear, so this is the only cover for them.
+      //
+      // Fix round 1, B2: `src/shell/gestures.ts` now answers EVENT_STOP for the three-finger horizontal
+      // swipe it recognises, so for THAT gesture GNOME's tracker never runs and this no longer has to
+      // correct anything -- preventing beats undoing, and undoing it would have flashed the attic's
+      // windows on every swipe. This stays, and stays the only cover, for every swipe that file does not
+      // claim: a vertical three-finger swipe, any other finger count, and whatever a future Shell adds.
       if (this._started && !this._disposed && this._ports.workspaces.activeIndex !== LIVE_WORKSPACE) {
         this._ports.log.warn('active workspace left live; switching back');
         this._correctingActiveWorkspace = true;

@@ -240,9 +240,13 @@ a swipe does nothing, which is not an error.
 occupied, or on screen on some display — in ascending order, and wrap at both ends. With 1, 2 and 3 open,
 a left swipe from 3 lands on 1; they never walk onto an empty workspace nobody opened.
 
-Four-finger gestures are untouched, and so is GNOME's vertical three-finger swipe to the overview: a
-swipe is only claimed when it is three-fingered, travels more than 100 px horizontally, and travels
-further horizontally than vertically. A gesture name other than `swipe:left` or `swipe:right` is a config
+A three-finger horizontal swipe is **claimed outright**, so GNOME's own workspace swipe does not also run
+on it — with this extension enabled GNOME has only two workspaces and its swipe would animate toward the
+one holding parked windows. Everything else is left alone: four-finger gestures, GNOME's vertical
+three-finger swipe to the overview, and every other event on the system still reach GNOME untouched.
+Within a horizontal three-finger swipe, a direction is only *reported* when the travel exceeds 100 px and
+is further horizontally than vertically — but the gesture is claimed either way, so a hesitant swipe does
+nothing rather than falling through to GNOME. A gesture name other than `swipe:left` or `swipe:right` is a config
 error, so a typo tells you rather than leaving a swipe that silently does nothing.
 
 **Known conflict: IBus.** IBus registers accelerators through the same mechanism, and two are claimed

@@ -30,24 +30,37 @@ interface FakeEvent {
 /**
  * Wires a real `Gestures` against a fake stage, and plays events at it the way Mutter would: one BEGIN,
  * then any number of UPDATEs each carrying its own small delta, then END or CANCEL.
+ *
+ * **The handler is invoked with two arguments, actor first**, because that is what GJS really does: a
+ * signal callback receives the emitting object ahead of the signal's own arguments. (`@girs`'s
+ * `SignalSignatures` entry for `captured-event` reads `(event: Event) => boolean | void` and lists only
+ * the signal's own argument -- girs prepends the instance in its own `connect` overloads -- and
+ * `SignalTracker.connect` takes `(...args: any[])`, so nothing typechecked this either way. This repo's
+ * witness for the real shape is `src/shell/keys.ts`, whose `accelerator-activated` handler is
+ * `(_display, action, _device, timestamp)`.) Fix round 1, B1: this fake used to pass the event alone,
+ * which reproduced the production mistake instead of catching it, and the Stage arriving where the event
+ * was expected threw on `.type()` on every single event in a real session.
+ *
+ * `fakeStage` is deliberately a bare object with no `type()` on it, exactly like the real `Clutter.Stage`:
+ * a handler that reads the first argument as the event gets a TypeError, which is the production failure.
  */
 function gestureHarness() {
-  let handler: ((event: FakeEvent) => boolean | void) | null = null;
+  let handler: ((actor: object, event: FakeEvent) => boolean | void) | null = null;
   let nextId = 1;
-  const stage = {
-    connect: (signal: string, callback: (event: FakeEvent) => boolean | void) => {
+  const fakeStage = {
+    connect: (signal: string, callback: (actor: object, event: FakeEvent) => boolean | void) => {
       if (signal === 'captured-event') handler = callback;
       return nextId++;
     },
     disconnect: () => { handler = null; },
   };
-  vi.stubGlobal('stage', stage);
+  vi.stubGlobal('stage', fakeStage);
   const tracker = new SignalTracker();
   const swipes: Array<{direction: string; timestamp: number}> = [];
   new Gestures(tracker, (direction, timestamp) => { swipes.push({direction, timestamp}); });
   const send = (
     phase: number, dx: number, dy: number, fingers = 3, type = 14, time = 100,
-  ): boolean | void => handler?.({
+  ): boolean | void => handler?.(fakeStage, {
     type: () => type,
     get_gesture_phase: () => phase,
     get_gesture_motion_delta: () => [dx, dy],
@@ -56,11 +69,12 @@ function gestureHarness() {
   });
   return {
     tracker, send, swipes,
-    /** BEGIN, three equal UPDATEs totalling (dx, dy), then END. */
-    swipe(dx: number, dy: number, fingers = 3, time = 100): void {
-      send(0, 0, 0, fingers, 14, time);
-      for (let i = 0; i < 3; i++) send(1, dx / 3, dy / 3, fingers, 14, time);
-      send(2, 0, 0, fingers, 14, time);
+    /** BEGIN, three equal UPDATEs totalling (dx, dy), then END. Answers what each phase returned. */
+    swipe(dx: number, dy: number, fingers = 3, time = 100): Array<boolean | void> {
+      const answers = [send(0, 0, 0, fingers, 14, time)];
+      for (let i = 0; i < 3; i++) answers.push(send(1, dx / 3, dy / 3, fingers, 14, time));
+      answers.push(send(2, 0, 0, fingers, 14, time));
+      return answers;
     },
   };
 }
@@ -68,16 +82,20 @@ function gestureHarness() {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('Gestures', () => {
-  it('reports left for a three-finger swipe whose fingers travelled left', () => {
+  it('reports left for a three-finger swipe whose fingers travelled left, and claims every phase', () => {
     const h = gestureHarness();
-    h.swipe(-300, 0, 3, 4242);
+    const answers = h.swipe(-300, 0, 3, 4242);
     expect(h.swipes).toEqual([{direction: 'left', timestamp: 4242}]);
+    // EVENT_STOP (true in the fake Clutter above) for BEGIN, three UPDATEs and END alike -- see the
+    // claim test below for why every phase and not only the one that reports.
+    expect(answers).toEqual([true, true, true, true, true]);
   });
 
-  it('reports right for the opposite travel', () => {
+  it('reports right for the opposite travel, and claims every phase of that one too', () => {
     const h = gestureHarness();
-    h.swipe(300, 0);
+    const answers = h.swipe(300, 0);
     expect(h.swipes).toEqual([{direction: 'right', timestamp: 100}]);
+    expect(answers).toEqual([true, true, true, true, true]);
   });
 
   it('reports nothing when the horizontal travel never passes the threshold', () => {
@@ -147,15 +165,29 @@ describe('Gestures', () => {
     expect(h.swipes).toEqual([]);
   });
 
-  it('propagates every event it sees, claiming none of them', () => {
-    // Deliberate: GNOME's own `_workspaceAnimation._swipeTracker` is a private that breaks across Shell
-    // versions and is not touched here, so this observes rather than competing for the event. The attic
-    // guard in `Engine.onWorkspacesChanged` is what undoes GNOME's half.
+  it('claims every phase of a three-finger swipe, so GNOME never sees any part of it', () => {
+    // Fix round 1, B2: this used to propagate. GNOME is pinned to two workspaces, so its own swipe
+    // animates toward the ATTIC -- where parked windows live -- and the guard in `onWorkspacesChanged`
+    // then corrects it back. Every phase, not only END: a claimed END after a propagated BEGIN would
+    // still have let GNOME start animating.
     const h = gestureHarness();
-    expect(h.send(0, 0, 0)).toBe(false);
-    expect(h.send(1, -300, 0)).toBe(false);
-    expect(h.send(2, 0, 0)).toBe(false);
+    expect(h.send(0, 0, 0)).toBe(true);    // BEGIN
+    expect(h.send(1, -300, 0)).toBe(true); // UPDATE
+    expect(h.send(3, 0, 0)).toBe(true);    // CANCEL
+    expect(h.send(2, 0, 0)).toBe(true);    // END
+  });
+
+  it('propagates a four-finger swipe, so GNOME keeps its own gestures working', () => {
+    const h = gestureHarness();
+    expect(h.swipe(-300, 0, 4)).toEqual([false, false, false, false, false]);
+  });
+
+  it('propagates an event that is not a touchpad swipe at all', () => {
+    // Every pointer motion and scroll on the system passes through this handler; shadowing any of them
+    // would break the desktop far beyond this feature.
+    const h = gestureHarness();
     expect(h.send(0, 0, 0, 3, 7)).toBe(false);
+    expect(h.send(1, -300, 0, 3, 10)).toBe(false);
   });
 
   it('stops reporting once the tracker is torn down', () => {
