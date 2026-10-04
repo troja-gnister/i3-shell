@@ -924,6 +924,141 @@ describe('workspace and focus on two displays (Task 19)', () => {
     expect(f.engine.state().focusedOutput).toBe(2);
     expect(f.engine.state().activeWorkspace).toBe(0);
   });
+
+  // D8, the live defect, in the arrival order the compositor produces it: switching the focused output
+  // to an EMPTY workspace handed the focused output to the OTHER display, so `$mod+d` opened the
+  // launcher on the monitor the user had just looked away from. Nothing here is hand-rolled -- parking
+  // the outgoing workspace's focused window makes the compositor pick a replacement on its own (the
+  // fake emits it from `moveToWorkspace`, as Mutter does), and the only window left on screen is on the
+  // other display, because the incoming workspace is empty and so has nothing of its own to pick. D5
+  // then read that involuntary pick as the user having moved there.
+  it('keeps the focused output on the display that just switched to an empty workspace', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);                                               // the application still visible on the external
+    f.mapOn(2, 9);                                               // the laptop's own window
+    f.flush();
+    // Mutter focuses a window it has just mapped; the engine never asks for that, so without this the
+    // fake holds no native focus at all, nothing is focused to park, and the replacement pick this test
+    // is about never happens -- the defect would be invisible here.
+    f.focus(9);
+    expect(f.engine.state().focusedOutput).toBe(2);
+    expect([...f.tree().visible]).toEqual([[2, 0], [3, 1]]);
+
+    expect(f.engine.run([{type: 'workspace', target: number(6)}], 1)).toBe('workspace 6');
+    expect([...f.tree().visible]).toEqual([[2, 5], [3, 1]]);
+    expect(f.tree().occupied(5)).toBe(false);                    // the precondition the name claims
+    expect(f.windows.get(9)!.workspace).not.toBe(LIVE_WORKSPACE); // ... and 9 really was parked
+    expect(f.engine.state().focusedOutput).toBe(2);
+    expect(f.engine.state().activeWorkspace).toBe(5);
+    // What the user actually saw, and the only part of this they could see: `$mod+d`.
+    expect(f.engine.launcherAreaForTest()).toEqual(f.topology!.workAreas.get(2));
+  });
+
+  // D8, the other arrival order, and the reason the suppression cannot be scoped to the commit that
+  // changed the visibility: Mutter hides a window it has moved off the active workspace from a
+  // `calc_showing` later, and reassigns the focus from there, so the replacement pick can reach the
+  // engine a main-loop turn after the `moveToWorkspace` call that caused it. Two windows on the
+  // external, so the report names a window that is not `_lastFocus`: with one, `_acceptFocus`'s
+  // duplicate guard swallows it and this test would pass with the defect still in place.
+  it('ignores the compositor’s replacement pick when it arrives in a later commit', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);
+    f.mapOn(3, 8);                                               // the selection, and the keyboard
+    f.flush();
+    f.engine.run([{type: 'focus_output', target: 'left'}], 1);
+    expect(f.engine.state().focusedOutput).toBe(2);
+
+    expect(f.engine.run([{type: 'workspace', target: number(6)}], 2)).toBe('workspace 6');
+    expect([...f.tree().visible]).toEqual([[2, 5], [3, 1]]);
+    expect(f.tree().outputShowing(1)).toBe(3);                   // NOT the parked-window guard's case
+
+    f.focus(7);
+    expect(f.tree().selection(1)).toEqual({kind: 'tiled', con: f.tree().find(7)});  // it did reach _selectWindow
+    expect(f.engine.state().focusedOutput).toBe(2);
+    expect(f.engine.state().activeWorkspace).toBe(5);
+    expect(f.engine.launcherAreaForTest()).toEqual(f.topology!.workAreas.get(2));
+  });
+
+  // D5's legitimate half, adjacent to D8's suppression: the suppression is spent by the one report it
+  // exists for. When the user then really does click the window on the other display, the focused
+  // output must follow it -- that is D5, and `move container to workspace N` acting on the display the
+  // user is looking at is what depends on it.
+  it('still follows a focus report once the involuntary one has been accounted for', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);
+    f.mapOn(3, 8);
+    f.flush();
+    f.engine.run([{type: 'focus_output', target: 'left'}], 1);
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);
+    f.focus(7);                                                  // the compositor's own pick: ignored
+    expect(f.engine.state().focusedOutput).toBe(2);
+
+    f.focus(8);                                                  // the user clicks the external
+    expect(f.engine.state().focusedOutput).toBe(3);
+    expect(f.engine.state().activeWorkspace).toBe(1);
+    expect(f.engine.run([{type: 'move_to_workspace', target: number(4)}], 3)).toBe('moved to workspace 4');
+    expect(f.tree().location(8)?.workspace).toBe(3);
+  });
+
+  // D8's suppression records the output it was armed for, not a bare flag, and that is what makes it
+  // lapse rather than linger: once the user has moved the focused output themselves the next focus
+  // report is theirs again, even though the involuntary one the suppression was armed for never came. A
+  // flag would swallow that report -- and would also swallow the parked-window report the test above
+  // this one exists for, leaving that guard pinned by nothing at all.
+  //
+  // Three displays, because two cannot tell the two answers apart: an armed output shows an empty
+  // workspace (that is what arms it), so it has no window of its own to report, and with only one other
+  // display the user's own crossing has already taken the focused output to wherever the reported window
+  // is -- the correct and the wrong answers would coincide.
+  it('stops suppressing as soon as the user moves the focused output themselves', () => {
+    const f = fakeEngine(referenceText, {monitors: [{id: 2, index: 0}, {id: 3, index: 1}, {id: 4, index: 2}], primary: 2, workspaceCount: 10});
+    f.engine.start();
+    f.mapOn(4, 7);                                               // two windows on the third display's
+    f.mapOn(4, 8);                                               // own workspace 2
+    f.flush();
+    f.focus(8);                                                  // ... and the keyboard is on 8, not 7
+    expect([...f.tree().visible]).toEqual([[2, 0], [3, 1], [4, 2]]);
+
+    f.engine.run([{type: 'focus_output', target: {name: 'fixture-2'}}], 1);
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);   // output 2 shows empty workspace 5
+    expect(f.engine.state().focusedOutput).toBe(2);              // armed for output 2
+    f.engine.run([{type: 'focus_output', target: {name: 'fixture-3'}}], 3);
+    expect(f.engine.state().focusedOutput).toBe(3);              // ... and the user has left it again
+
+    f.focus(7);                                                  // a click on the third display
+    expect(f.tree().selection(2)).toEqual({kind: 'tiled', con: f.tree().find(7)});
+    expect(f.engine.state().focusedOutput).toBe(4);
+    expect(f.engine.state().activeWorkspace).toBe(2);
+  });
+
+  // The other half of "cannot suppress the legitimate click": a switch the engine took the keyboard for
+  // suppresses nothing at all. The incoming workspace is occupied, so `_activateSelection` really
+  // activates, and the focus report that follows is the engine's own -- there is no involuntary pick
+  // outstanding, and the user's next click on the other display must move the focused output as always.
+  it('suppresses nothing when the switch took the keyboard for itself', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(2, 9);                                               // the laptop's own window, workspace 0
+    f.mapOn(3, 7);                                               // the external's, workspace 1
+    f.flush();
+    f.engine.run([{type: 'workspace', target: number(6)}], 1);   // the external parks workspace 1
+    expect(f.tree().outputShowing(1)).toBeNull();
+    f.engine.run([{type: 'focus_output', target: 'left'}], 2);
+    expect(f.engine.state().focusedOutput).toBe(2);
+
+    // Occupied, so D1 rule 1 shows it on its own display again -- and this time there is a window there
+    // to activate, so the engine owns the keyboard.
+    expect(f.engine.run([{type: 'workspace', target: number(2)}], 3)).toBe('workspace 2');
+    expect(f.engine.state().focusedOutput).toBe(3);
+    expect(f.calls.filter(call => call === 'focus:7').length).toBe(1);
+
+    f.focus(9);                                                  // the user clicks back on the laptop
+    expect(f.engine.state().focusedOutput).toBe(2);
+    expect(f.engine.state().activeWorkspace).toBe(0);
+  });
 });
 
 /**

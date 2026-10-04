@@ -163,6 +163,12 @@ export class Engine {
   private readonly _minimized = new Map<WindowId, {floating: boolean; workspace: number | undefined}>();
   private readonly _expectedFocus = new Set<WindowId>();
   private _lastFocus: WindowId | null = null;
+  /**
+   * D8: the output the engine deliberately pointed the focus at in the last commit that changed
+   * what an output shows, while one inbound focus report is still outstanding -- null once it has been.
+   * `_armInvoluntaryFocus` sets it, `_acceptFocus` spends it; see both for the whole of the rule.
+   */
+  private _involuntaryFocusOn: MonitorId | null = null;
   private readonly _unmaximizing = new Set<WindowId>();
   private readonly _unmaximizeAttempts = new Map<WindowId, number>();
   private readonly _forced = new Set<WindowId>();
@@ -605,9 +611,14 @@ export class Engine {
     this._committing = true;
     try {
       while (this._queued.length && !this._disposed) {
+        // D8: snapshotted per queued change rather than once per drain, because a focus report the
+        // compositor raises from inside this change's own port calls is queued *behind* it and drains as
+        // the next one -- so the arming below has to be in place before that one runs.
+        const showing = this._tree ? new Map(this._tree.visible) : null;
         const changed = this._queued.shift()!();
         if (this._disposed) break;
         if (changed !== false) this._layoutAndPublish();
+        this._armInvoluntaryFocus(showing);
       }
     } finally {
       this._committing = false;
@@ -1161,15 +1172,61 @@ export class Engine {
    * `visible.get(focusedOutput)`, so pointing the focused output at a display that shows something else
    * would make every workspace-scoped command act on the wrong workspace. A focus report for a parked
    * window (Mutter can still send one) therefore leaves the focused output alone.
+   *
+   * D8: `claimOutput` false keeps the selection half and drops the focused-output half, for the
+   * one caller that can tell the user's focus change from the compositor's own -- `_acceptFocus`. Only a
+   * parameter, not a field read: `focusWindow` (a click on i3-shell's own tab) and `_rehomeFloating` (the
+   * window the user is dragging) are the user acting, and they keep the rule whole.
    */
-  private _selectWindow(id: WindowId): void {
+  private _selectWindow(id: WindowId, claimOutput = true): void {
     const tree = this._tree;
     const location = tree?.location(id);
     if (!tree || !location) return;
     if (location.floating) tree.selectFloating(id);
     else { const leaf = tree.find(id); if (leaf) tree.select(leaf); }
+    if (!claimOutput) return;
     const showing = tree.outputShowing(location.workspace);
     if (showing !== null) tree.focusedOutput = showing;
+  }
+
+  /**
+   * D8, the defect a live session found after Phase 5 merged: arm, or disarm, the one-report suppression `_acceptFocus` spends. Called once per
+   * drained change in `commit()`, with what each output was showing before that change ran.
+   *
+   * The defect: show an EMPTY workspace on an output and that output has no window to focus, so the
+   * compositor's keyboard focus necessarily stays on -- or is reassigned to -- a window on another
+   * display, and it says so with an ordinary focus report. D5 (`_selectWindow` above) then reads that
+   * leftover as the user having moved there and hands the focused output to the display they just looked
+   * away from; `$mod+d` opens the launcher there, which is how the user saw it. `onPointerOutput` cannot
+   * correct it: `src/shell/pointer.ts` is edge-triggered on `_lastMonitor`, so a pointer standing still
+   * emits nothing. The ruling: an explicit user action beats the compositor's involuntary pick. A
+   * `workspace` switch, a `move workspace to output` and a reconfigure all set `focusedOutput`
+   * deliberately, and a report that arrives as a consequence of one must not override it.
+   *
+   * Three things make this a suppression of exactly that report and not of D5:
+   *
+   * - **It is armed only by a change in `tree.visible`.** A report in a commit where the engine changed
+   *   nothing about what is on screen -- a real click, or a sloppy-focus hover -- is D5's, and D5 is
+   *   load-bearing. Comparing the map is what defines "the engine changed what a workspace shows"; it
+   *   needs no bookkeeping at the places that write to `visible`, and a new one cannot forget it.
+   * - **It is dropped when the engine took the keyboard itself.** `_expectedFocus` is non-empty exactly
+   *   when `_activateSelection` got an activation accepted in this commit, which is the case this defect
+   *   is not: the incoming workspace had a window, the engine asked for it, and the report that follows
+   *   is its own. The same assignment clears a *stale* arming for that reason -- the keyboard is owned
+   *   now, so nothing involuntary is still outstanding.
+   * - **It records the output, not a flag.** The suppression lapses the moment anything else moves the
+   *   focused output -- `focus output`, a pointer crossing onto another display (D4), a second switch.
+   *   Those are the user, and after them the next report is the user's too.
+   *
+   * A tree being *born* (`before` null) is not such a change: nothing was on screen to displace, and the
+   * commit that builds it accepts the compositor's focus itself, through `_layoutAndPublish`.
+   */
+  private _armInvoluntaryFocus(before: ReadonlyMap<MonitorId, number> | null): void {
+    const tree = this._tree;
+    if (!tree || !before) return;
+    if (before.size === tree.visible.size &&
+      [...tree.visible].every(([output, index]) => before.get(output) === index)) return;
+    this._involuntaryFocusOn = this._expectedFocus.size > 0 ? null : tree.focusedOutput;
   }
 
   private _acceptFocus(id: WindowId | null): void {
@@ -1179,7 +1236,13 @@ export class Engine {
     const duplicate = id === this._lastFocus;
     this._lastFocus = id;
     if (id === null || !this._tree?.location(id)) return;
-    if (!expected && !duplicate) this._selectWindow(id);
+    if (expected || duplicate) return;
+    // D8: spent here, on the first report that reaches `_selectWindow` at all. Deliberately not on an
+    // `id === null` report: Mutter can focus its own no-focus window on the way to picking a
+    // replacement, and spending the suppression on that would leave the pick itself unsuppressed.
+    const involuntary = this._involuntaryFocusOn === this._tree.focusedOutput;
+    this._involuntaryFocusOn = null;
+    this._selectWindow(id, !involuntary);
   }
 
   private _selectedIds(): WindowId[] {

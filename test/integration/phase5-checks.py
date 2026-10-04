@@ -12,8 +12,10 @@ Mutter does asynchronously, or reports success where Mutter reports nothing at a
     `position-invalidated` on its own schedule.
 
 Six of the scenarios are the brief's. Five more are the defects the user hit within minutes of logging
-into the Task 1-16 build, every one of them in exactly that gap; they are named `_defect_` so a reader
-can tell "this was specified" from "this was measured on a real desk". They must never regress.
+into the Task 1-16 build, and one more (D8) is the defect they hit on the Phase 5 build itself -- the
+focused output following Mutter's replacement focus off the display they were looking at. Every one of
+them is in exactly that gap; they are named `_defect_` so a reader can tell "this was specified" from
+"this was measured on a real desk". They must never regress.
 
 READING FAILURES. Nothing here raises a bare assert. `check`, `expect` and `fail` all print the step
 that was running, what was expected and what was actually observed, because the controller who runs
@@ -1119,6 +1121,108 @@ def scenario_defect_native_focus_moves_focused_output(primary_id, second_id):
 
 
 # --------------------------------------------------------------------------
+# Defect D8: showing an EMPTY workspace must not hand the focused output away
+# --------------------------------------------------------------------------
+
+def empty_workspace(label):
+    """An i3 workspace index that holds no window and that no output is showing.
+
+    Both halves matter: unshown is what makes `workspace N` materialise it (the visible branch of
+    `Tree.showWorkspace` only moves the focused output), and empty is what leaves
+    `resolveShowOutput` with the focused output as its answer and leaves that output with no window
+    of its own to focus. The reference config pins nothing, so nothing outranks the focused output.
+    """
+    shown = set(visible_map().values())
+    for ws in snapshot()['workspaces']:
+        if ws['index'] in shown or ws['floating']:
+            continue
+        if any(node['kind'] == 'leaf' for node in walk(ws['root'])):
+            continue
+        return ws['index']
+    fail(f'{label}: one of the ten workspaces is empty and unshown',
+         'an empty, unshown workspace', {'visible': visible_map(),
+                                         'occupancy': {ws['index']: leaf_titles(ws['index'])
+                                                       for ws in snapshot()['workspaces']}})
+
+
+def launcher_box():
+    return json.loads(call('org.i3shell.Debug', 'LauncherState')[0])
+
+
+def scenario_defect_empty_workspace_keeps_the_focused_output(primary_id, second_id):
+    """Switching the display the user is looking at to an EMPTY workspace used to hand the focused
+    output to the OTHER display, so `$mod+d` opened the launcher on the monitor they had just looked
+    away from -- and moving the cursor off that monitor and back fixed it until the next time.
+
+    This is the defect 1201 unit tests could not see, and it is the asynchrony this file exists for:
+    parking the outgoing workspace's focused window makes MUTTER choose the replacement focus, from
+    its own `calc_showing` later rather than from inside the call that moved the window, and the only
+    window left on screen is on the other display because the incoming workspace is empty. D5 --
+    `Engine._selectWindow` moving the focused output to the newly focused window's display -- then read
+    that involuntary pick as the user having moved there.
+
+    The pointer is left standing still on the primary throughout, which is both what the user was doing
+    and why nothing corrected it: `src/shell/pointer.ts` is edge-triggered on its last monitor, so a
+    stationary pointer emits nothing at all.
+
+    The premise is waited for through the KEYBOARD, before the focused output is asserted: Mutter's
+    replacement pick is what this scenario is about, and asserting "the focused output did not move"
+    before that pick has landed would pass with the defect fully present.
+
+    The launcher is asserted too, not merely `focusedOutput`, because it is the whole of what the user
+    could actually see.
+    """
+    step('defect D8: a window on each display, with the cursor and the keyboard on the primary')
+    reset_windows()
+    create_on(second_id, 'D8 other', 'defect D8')    # the application that stays visible over there
+    create_on(primary_id, 'D8 here', 'defect D8')    # ... and the one this switch is about to park
+    go_to_output(primary_id, 'defect D8')
+    warp(centre(work_area(primary_id)))
+    expect('D8: the focused output is the primary', primary_id, focused_output)
+    typing_reaches('x', 'D8 here', ['D8 other'], 'D8: native focus starts on the primary\'s window')
+
+    step('defect D8: switch the primary to an empty workspace')
+    index = empty_workspace('defect D8')
+    other_before = shown_on(second_id)
+    check('D8: the switch was accepted', run(f'workspace number {index + 1}'), f'workspace {index + 1}')
+    expect('D8: the empty workspace materialised on the primary', index, lambda: shown_on(primary_id),
+           timeout=15, context=visible_map)
+    check('D8: the other display was not switched', shown_on(second_id), other_before, visible_map)
+    check('D8: and it is still showing its window', leaf_titles(other_before), ['D8 other'])
+    typing_reaches('y', 'D8 other', [],
+                   'D8: Mutter moved the keyboard to the other display on its own -- the premise')
+
+    step('defect D8: the focused output must stay on the display the user is looking at')
+    check('D8: the focused output stayed on the primary', focused_output(), primary_id,
+          lambda: {'visible': visible_map(), 'pointer': pointer(),
+                   'activeWorkspace': snapshot()['activeWorkspace'],
+                   'note': 'Engine._armInvoluntaryFocus must suppress the focused-output half of D5 '
+                           'for the compositor\'s own replacement pick; if the keyboard check above '
+                           'passed and this did not, that IS the defect'})
+    check('D8: so the active workspace is the empty one', snapshot()['activeWorkspace'], index)
+    if settled(lambda: focused_output() != primary_id, 2.0):
+        fail('D8: no later report takes the focused output away either', primary_id, focused_output(),
+             {'visible': visible_map(), 'pointer': pointer()})
+    ok('D8: and it stays there', 'no focus report moved it for 2s')
+
+    step('defect D8: so $mod+d opens the launcher on that display')
+    run('launcher')
+    expect('D8: the launcher opened', True, lambda: launcher_box()['open'])
+    box, area = launcher_box(), work_area(primary_id)
+    edges = {'left': box['x'] >= area['x'], 'top': box['y'] >= area['y'],
+             'right': box['x'] + box['width'] <= area['x'] + area['width'],
+             'bottom': box['y'] + box['height'] <= area['y'] + area['height']}
+    if not all(edges.values()):
+        fail('D8: the launcher opened inside the work area of the display the user is on',
+             {'output': primary_id, 'area': area}, {'box': box, 'escaped': sorted(k for k, v in edges.items() if not v),
+                                                   'otherArea': work_area(second_id)})
+    ok('D8: the launcher opened on the display the user is looking at', _render(box))
+    run('launcher')
+    expect('D8: the launcher closed again', False, lambda: launcher_box()['open'])
+    reset_windows()
+
+
+# --------------------------------------------------------------------------
 # Defect D3: `workspace <n>` on the already-active workspace still re-asserts focus
 # --------------------------------------------------------------------------
 
@@ -1475,6 +1579,7 @@ def live_session():
                      scenario_pointer_and_warp,
                      scenario_defect_pointer_claims_both_ways,
                      scenario_defect_native_focus_moves_focused_output,
+                     scenario_defect_empty_workspace_keeps_the_focused_output,
                      scenario_defect_already_active_reasserts_focus,
                      scenario_defect_occupied_workspace_stays_put,
                      scenario_defect_pin_survives_remote_number_press,
