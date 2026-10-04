@@ -58,12 +58,19 @@ describe('Engine', () => {
     expect(e.run([{type: 'workspace', target: {kind: 'number', number: 3, name: '3'}}], 4)).toBe('workspace 3');
     expect(e.state().activeWorkspace).toBe(2);
     expect(e.run([{type: 'workspace', target: {kind: 'number', number: 3, name: '3'}}], 5)).toBe('workspace: already active');
-    expect(e.run([{type: 'workspace', target: {kind: 'prev'}}], 6)).toBe('workspace 2');
-    expect(e.run([{type: 'move_to_workspace', target: {kind: 'number', number: 2, name: '2'}}], 8)).toBe('move container to workspace: already there');
-    // `next` resolves against the tree's own active workspace too (active is 1 here, from `prev`
-    // above); `prev`'s own coverage above does not exercise `next`'s branch of `_workspaceIndex`.
-    expect(e.run([{type: 'workspace', target: {kind: 'next'}}], 9)).toBe('workspace 3');
-    expect(e.state().activeWorkspace).toBe(2);
+    expect(e.run([{type: 'move_to_workspace', target: {kind: 'number', number: 3, name: '3'}}], 8)).toBe('move container to workspace: already there');
+    // `next`/`prev` cycle the workspaces that exist and wrap (i3's own semantics), so this stretch had
+    // to be rewritten: it used to assert the numeric neighbours 2 and 3. Window 1 is parked on workspace
+    // 9 (i3 "10") by the move above and nothing else is open, so the cycle is {2, 9} -- `prev` from the
+    // lowest member wraps up to the highest, and `next` from it steps straight across the eight empty
+    // workspaces in between. The old rule would have answered 'workspace 2' and 'workspace 4' here.
+    expect(e.run([{type: 'workspace', target: {kind: 'prev'}}], 6)).toBe('workspace 10');
+    expect(e.state().activeWorkspace).toBe(9);
+    expect(e.run([{type: 'workspace', target: {kind: 'number', number: 3, name: '3'}}], 9)).toBe('workspace 3');
+    // `next` resolves against the tree's own active workspace too; `prev`'s own coverage above does not
+    // exercise `next`'s branch of `_workspaceIndex`.
+    expect(e.run([{type: 'workspace', target: {kind: 'next'}}], 10)).toBe('workspace 10');
+    expect(e.state().activeWorkspace).toBe(9);
   });
 
   it('moves the tree\'s own active workspace for real, not just GNOME\'s index', () => {

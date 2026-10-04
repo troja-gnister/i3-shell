@@ -1,7 +1,7 @@
 import {parseCommands} from '../commands/parse';
 import {comboToAccel} from './accel';
 import {DEFAULT_COLORS} from './model';
-import type {Binding, ColorSet, Colors, Config, Criteria, Diagnostic, Mode, Rule} from './model';
+import type {Binding, ColorSet, Colors, Config, Criteria, Diagnostic, GestureBinding, GestureName, Mode, Rule} from './model';
 import type {ParseResult} from './parser';
 
 export interface ResolveResult {
@@ -66,8 +66,9 @@ export function resolve(parsed: ParseResult): ResolveResult {
   const specifiedColors = new Set<keyof Colors>();
   const workspaceNames = new Map<number, string>();
   const workspaceOutputs = new Map<number, {names: string[]; line: number}>();
+  const gestures = new Map<GestureName, GestureBinding>();
   const config: Config = {
-    modes, rules, colors, specifiedColors, workspaceNames,
+    modes, rules, colors, specifiedColors, workspaceNames, gestures,
     defaultBorder: {style: 'normal', width: 2},
     defaultFloatingBorder: {style: 'normal', width: 2},
     floatingModifier: 'Mod4',
@@ -115,6 +116,15 @@ export function resolve(parsed: ParseResult): ResolveResult {
         }
         const binding: Binding = {accel: r.accel, combo: d.combo, command: d.command, noRepeat: d.noRepeat, line: d.line};
         mode.bindings.push(binding);
+        inspectCommand(d.command, d.line);
+        break;
+      }
+      case 'bindgesture': {
+        // i3's duplicate rule, as `bindsym` above applies it: the later line wins, with a warning so a
+        // config that binds one gesture twice says so rather than quietly dropping half of itself.
+        if (gestures.has(d.gesture))
+          diagnostics.push({line: d.line, severity: 'warning', message: `duplicate bindgesture ${d.gesture}; the later one wins`});
+        gestures.set(d.gesture, {gesture: d.gesture, command: d.command, line: d.line});
         inspectCommand(d.command, d.line);
         break;
       }

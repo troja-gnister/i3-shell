@@ -313,13 +313,78 @@ describe('engine command dispatch', () => {
     expect(f.calls.join('\n')).toMatch(/could not move window 1 to workspace 2; leaving it where it was/);
   });
 
-  it('does not wrap workspace prev below zero', () => {
+  it('workspace prev stays put when the user is the only member of the cycle', () => {
     // Before Task 7, `workspace N` moved only GNOME's raw active index (real switching came from this
     // task), so this used to be exercised alongside a `ports.workspaces.activate` failure -- a failure
-    // mode `workspace N` no longer has: it drives the tree directly, and `_workspaceIndex` (this guard)
-    // gates an unknown target before any of that runs.
+    // mode `workspace N` no longer has: it drives the tree directly, and `_workspaceIndex` gates an
+    // unknown target before any of that runs.
+    //
+    // The old rule dead-ended here ('no such workspace': index 0 has no numeric predecessor). The cycle
+    // never dead-ends -- an empty desk's cycle is {the visible workspace}, so `prev` wraps round to the
+    // one member there is and the command reports the no-op switch it really made.
     const f = fakeEngine(); f.engine.start();
-    expect(f.engine.run([{type: 'workspace', target: {kind: 'prev'}}], 2)).toBe('workspace: no such workspace');
+    expect(f.engine.run([{type: 'workspace', target: {kind: 'prev'}}], 2)).toBe('workspace: already active');
+  });
+
+  /**
+   * i3's `workspace next`/`prev` walk the workspaces that EXIST and wrap; they are not numeric
+   * neighbours. Every fixture below is built so the two rules disagree -- a fixture where 1, 2 and 3 are
+   * open and the user is on 1 cannot tell them apart, because both answer 2.
+   */
+  describe('workspace next/prev cycle through existing workspaces', () => {
+    /** Occupies each of `indices` with one window, leaving the engine focused on the last of them. */
+    function occupy(f: ReturnType<typeof fakeEngine>, indices: number[]): void {
+      let id = 1;
+      for (const index of indices) {
+        expect(f.engine.run([{type: 'workspace', target: {kind: 'number', number: index + 1, name: String(index + 1)}}], 0))
+          .not.toContain('no such');
+        f.add(id++);
+        f.flush();
+      }
+    }
+
+    it('wraps next from the highest occupied workspace back to the lowest', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {workspaceCount: 10});
+      f.engine.start();
+      occupy(f, [0, 1, 2]);
+      expect(f.engine.state().activeWorkspace).toBe(2);
+      // Numeric neighbour would be index 3 -- an empty workspace of the ten, reported as 'workspace 4'.
+      expect(f.engine.run([{type: 'workspace', target: {kind: 'next'}}], 1)).toBe('workspace 1');
+      expect(f.engine.state().activeWorkspace).toBe(0);
+    });
+
+    it('wraps prev from the lowest occupied workspace up to the highest', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {workspaceCount: 10});
+      f.engine.start();
+      occupy(f, [0, 1, 2]);
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: 1, name: '1'}}], 1);
+      // The old rule had no answer at index 0 at all.
+      expect(f.engine.run([{type: 'workspace', target: {kind: 'prev'}}], 2)).toBe('workspace 3');
+      expect(f.engine.state().activeWorkspace).toBe(2);
+    });
+
+    it('skips the empty workspaces between two occupied ones', () => {
+      const f = fakeEngine('bindsym Mod4+q kill', {workspaceCount: 10});
+      f.engine.start();
+      occupy(f, [0, 4]);
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: 1, name: '1'}}], 1);
+      // Numeric neighbour would be index 1, which holds nothing and is not in the cycle.
+      expect(f.engine.run([{type: 'workspace', target: {kind: 'next'}}], 3)).toBe('workspace 5');
+      expect(f.engine.state().activeWorkspace).toBe(4);
+    });
+
+    it('counts a workspace visible on another output as a member even when it is empty', () => {
+      // Two outputs show workspaces 0 and 1; only 0 holds a window. The cycle is {0, 1} because 1 is on
+      // screen, so `next` from 0 crosses to the other display rather than skipping to the next occupied
+      // workspace -- which, with nothing else open, would have been 0 itself.
+      const f = fakeEngine('bindsym Mod4+q kill',
+        {monitors: [{id: 10, index: 0}, {id: 11, index: 1}], primary: 10, workspaceCount: 10});
+      f.engine.start();
+      f.add(1); f.flush();
+      expect(f.engine.state().activeWorkspace).toBe(0);
+      expect(f.engine.run([{type: 'workspace', target: {kind: 'next'}}], 1)).toBe('workspace 2');
+      expect(f.engine.state().activeWorkspace).toBe(1);
+    });
   });
 
   it('workspace number moves focus to the output holding that workspace', () => {
@@ -857,6 +922,261 @@ describe('workspace and focus on two displays (Task 19)', () => {
     f.focus(7);
     expect(f.tree().selection(1)).toEqual({kind: 'tiled', con: f.tree().find(7)});
     expect(f.engine.state().focusedOutput).toBe(2);
+    expect(f.engine.state().activeWorkspace).toBe(0);
+  });
+
+  // D8, the live defect, in the arrival order the compositor produces it: switching the focused output
+  // to an EMPTY workspace handed the focused output to the OTHER display, so `$mod+d` opened the
+  // launcher on the monitor the user had just looked away from. Nothing here is hand-rolled -- parking
+  // the outgoing workspace's focused window makes the compositor pick a replacement on its own (the
+  // fake emits it from `moveToWorkspace`, as Mutter does), and the only window left on screen is on the
+  // other display, because the incoming workspace is empty and so has nothing of its own to pick. D5
+  // then read that involuntary pick as the user having moved there.
+  it('keeps the focused output on the display that just switched to an empty workspace', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);                                               // the application still visible on the external
+    f.mapOn(2, 9);                                               // the laptop's own window
+    f.flush();
+    // Mutter focuses a window it has just mapped; the engine never asks for that, so without this the
+    // fake holds no native focus at all, nothing is focused to park, and the replacement pick this test
+    // is about never happens -- the defect would be invisible here.
+    f.focus(9);
+    expect(f.engine.state().focusedOutput).toBe(2);
+    expect([...f.tree().visible]).toEqual([[2, 0], [3, 1]]);
+
+    expect(f.engine.run([{type: 'workspace', target: number(6)}], 1)).toBe('workspace 6');
+    expect([...f.tree().visible]).toEqual([[2, 5], [3, 1]]);
+    expect(f.tree().occupied(5)).toBe(false);                    // the precondition the name claims
+    expect(f.windows.get(9)!.workspace).not.toBe(LIVE_WORKSPACE); // ... and 9 really was parked
+    expect(f.engine.state().focusedOutput).toBe(2);
+    expect(f.engine.state().activeWorkspace).toBe(5);
+    // What the user actually saw, and the only part of this they could see: `$mod+d`.
+    expect(f.engine.launcherAreaForTest()).toEqual(f.topology!.workAreas.get(2));
+  });
+
+  // D8, the other arrival order, and the reason the suppression cannot be scoped to the commit that
+  // changed the visibility: Mutter hides a window it has moved off the active workspace from a
+  // `calc_showing` later, and reassigns the focus from there, so the replacement pick can reach the
+  // engine a main-loop turn after the `moveToWorkspace` call that caused it. Two windows on the
+  // external, so the report names a window that is not `_lastFocus`: with one, `_acceptFocus`'s
+  // duplicate guard swallows it and this test would pass with the defect still in place.
+  it('ignores the compositor’s replacement pick when it arrives in a later commit', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);
+    f.mapOn(3, 8);                                               // the selection, and the keyboard
+    f.flush();
+    f.engine.run([{type: 'focus_output', target: 'left'}], 1);
+    expect(f.engine.state().focusedOutput).toBe(2);
+
+    expect(f.engine.run([{type: 'workspace', target: number(6)}], 2)).toBe('workspace 6');
+    expect([...f.tree().visible]).toEqual([[2, 5], [3, 1]]);
+    expect(f.tree().outputShowing(1)).toBe(3);                   // NOT the parked-window guard's case
+
+    f.focus(7);
+    expect(f.tree().selection(1)).toEqual({kind: 'tiled', con: f.tree().find(7)});  // it did reach _selectWindow
+    expect(f.engine.state().focusedOutput).toBe(2);
+    expect(f.engine.state().activeWorkspace).toBe(5);
+    expect(f.engine.launcherAreaForTest()).toEqual(f.topology!.workAreas.get(2));
+  });
+
+  // D8, round 2, and the reason a one-shot token was too weak: the compositor does not send ONE focus
+  // notification for one involuntary pick. Mutter focuses its replacement, unsets the input focus while
+  // it hides the window being parked, and focuses the replacement again. A suppression spent by the
+  // first report is already gone when the third arrives, which is what the native suite measured
+  // against 390f7a1 -- the primary showing the empty workspace and `focusedOutput` on the other display
+  // all the same. The first report here is still the fake's own replacement pick, not a hand-rolled
+  // one; only the two Mutter adds while hiding are written out.
+  it('ignores every report of one involuntary pick, not only the first', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);
+    f.mapOn(2, 9);
+    f.flush();
+    f.focus(9);
+    f.engine.run([{type: 'workspace', target: number(6)}], 1);
+    expect([...f.tree().visible]).toEqual([[2, 5], [3, 1]]);
+    expect(f.engine.state().focusedOutput).toBe(2);               // the replacement pick, suppressed
+
+    f.focus(null);                                                // Mutter unsets the input focus...
+    expect(f.engine.state().focusedOutput).toBe(2);
+    f.focus(7);                                                   // ... and focuses its pick again
+    expect(f.tree().selection(1)).toEqual({kind: 'tiled', con: f.tree().find(7)});
+    expect(f.engine.state().focusedOutput).toBe(2);
+    expect(f.engine.state().activeWorkspace).toBe(5);
+    expect(f.engine.launcherAreaForTest()).toEqual(f.topology!.workAreas.get(2));
+  });
+
+  // What ends the suppression instead of a report count: its own premise. It holds only while that
+  // output still has nothing to focus, so a window opening on the newly shown workspace ends it -- the
+  // compositor has a choice there now, and the next focus report is informative again. This is the
+  // legitimate case that a durable suppression must not swallow.
+  it('stops suppressing once the newly shown workspace has a window of its own', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);
+    f.mapOn(3, 8);
+    f.flush();
+    f.engine.run([{type: 'focus_output', target: 'left'}], 1);
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);    // the laptop shows empty workspace 5
+    expect(f.engine.state().focusedOutput).toBe(2);
+    f.focus(7);                                                   // the involuntary pick, suppressed
+    expect(f.engine.state().focusedOutput).toBe(2);
+
+    f.add(10, {monitor: 2});                                      // a window opens on workspace 5
+    f.flush();
+    expect(f.tree().location(10)?.workspace).toBe(5);
+    expect(f.tree().occupied(5)).toBe(true);
+
+    f.focus(8);                                                   // and then a click on the external
+    expect(f.engine.state().focusedOutput).toBe(3);
+    expect(f.engine.state().activeWorkspace).toBe(1);
+  });
+
+  // Overruled once, overruled for good: a failed clause clears the record instead of merely answering
+  // false, so coming back to the display showing that empty workspace does not resurrect a suppression
+  // the user has already walked past. Without the clear, the second report below is swallowed and the
+  // focused output sticks to a display the user has twice told it to leave.
+  it('does not resurrect the suppression when the user comes back to that display', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);
+    f.mapOn(3, 8);
+    f.flush();
+    f.engine.run([{type: 'focus_output', target: 'left'}], 1);
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);    // the laptop shows empty workspace 5
+    expect(f.engine.state().focusedOutput).toBe(2);
+
+    f.engine.run([{type: 'focus_output', target: 'right'}], 3);   // the user crosses to the external
+    f.focus(7);                                                   // and a report arrives while there
+    expect(f.engine.state().focusedOutput).toBe(3);
+    f.engine.run([{type: 'focus_output', target: 'left'}], 4);    // ... then back to the empty workspace
+    expect(f.engine.state().focusedOutput).toBe(2);
+
+    f.focus(8);                                                   // a click on the external, not a pick
+    expect(f.engine.state().focusedOutput).toBe(3);
+    expect(f.engine.state().activeWorkspace).toBe(1);
+  });
+
+  // D8's suppression records the output it was armed for, not a bare flag, and that is what makes it
+  // lapse rather than linger: once the user has moved the focused output themselves the next focus
+  // report is theirs again, even though the involuntary one the suppression was armed for never came. A
+  // flag would swallow that report -- and would also swallow the parked-window report the test above
+  // this one exists for, leaving that guard pinned by nothing at all.
+  //
+  // Three displays, because two cannot tell the two answers apart: an armed output shows an empty
+  // workspace (that is what arms it), so it has no window of its own to report, and with only one other
+  // display the user's own crossing has already taken the focused output to wherever the reported window
+  // is -- the correct and the wrong answers would coincide.
+  it('stops suppressing as soon as the user moves the focused output themselves', () => {
+    const f = fakeEngine(referenceText, {monitors: [{id: 2, index: 0}, {id: 3, index: 1}, {id: 4, index: 2}], primary: 2, workspaceCount: 10});
+    f.engine.start();
+    f.mapOn(4, 7);                                               // two windows on the third display's
+    f.mapOn(4, 8);                                               // own workspace 2
+    f.flush();
+    f.focus(8);                                                  // ... and the keyboard is on 8, not 7
+    expect([...f.tree().visible]).toEqual([[2, 0], [3, 1], [4, 2]]);
+
+    f.engine.run([{type: 'focus_output', target: {name: 'fixture-2'}}], 1);
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);   // output 2 shows empty workspace 5
+    expect(f.engine.state().focusedOutput).toBe(2);              // armed for output 2
+    f.engine.run([{type: 'focus_output', target: {name: 'fixture-3'}}], 3);
+    expect(f.engine.state().focusedOutput).toBe(3);              // ... and the user has left it again
+
+    f.focus(7);                                                  // a click on the third display
+    expect(f.tree().selection(2)).toEqual({kind: 'tiled', con: f.tree().find(7)});
+    expect(f.engine.state().focusedOutput).toBe(4);
+    expect(f.engine.state().activeWorkspace).toBe(2);
+  });
+
+  // The other half of "cannot suppress the legitimate click": a switch the engine took the keyboard for
+  // suppresses nothing at all. The incoming workspace is occupied, so `_activateSelection` really
+  // activates, and the focus report that follows is the engine's own -- there is no involuntary pick
+  // outstanding, and the user's next click on the other display must move the focused output as always.
+  it('suppresses nothing when the switch took the keyboard for itself', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(2, 9);                                               // the laptop's own window, workspace 0
+    f.mapOn(3, 7);                                               // the external's, workspace 1
+    f.flush();
+    f.engine.run([{type: 'workspace', target: number(6)}], 1);   // the external parks workspace 1
+    expect(f.tree().outputShowing(1)).toBeNull();
+    f.engine.run([{type: 'focus_output', target: 'left'}], 2);
+    expect(f.engine.state().focusedOutput).toBe(2);
+
+    // Occupied, so D1 rule 1 shows it on its own display again -- and this time there is a window there
+    // to activate, so the engine owns the keyboard.
+    expect(f.engine.run([{type: 'workspace', target: number(2)}], 3)).toBe('workspace 2');
+    expect(f.engine.state().focusedOutput).toBe(3);
+    expect(f.calls.filter(call => call === 'focus:7').length).toBe(1);
+
+    f.focus(9);                                                  // the user clicks back on the laptop
+    expect(f.engine.state().focusedOutput).toBe(2);
+    expect(f.engine.state().activeWorkspace).toBe(0);
+  });
+});
+
+/**
+ * `Engine.onSwipe` is to `bindgesture` what `onBinding` is to `bindsym`: the one entry point a gesture
+ * source pushes into, resolving the bound command text and running it. The direction convention -- left
+ * for `workspace next`, right for `workspace prev`, matching GNOME's content-follows-fingers feel -- is
+ * expressed in the config these fixtures load, never in the engine, so inverting it is a config edit.
+ */
+describe('onSwipe', () => {
+  const GESTURES = 'bindgesture swipe:left workspace next\nbindgesture swipe:right workspace prev\n';
+
+  /** Occupies workspaces 0, 1 and 2 with one window each and leaves the engine on workspace 0. */
+  function threeOccupied(text: string): ReturnType<typeof fakeEngine> {
+    const f = fakeEngine(text, {workspaceCount: 10});
+    f.engine.start();
+    let id = 1;
+    for (const index of [0, 1, 2]) {
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: index + 1, name: String(index + 1)}}], 0);
+      f.add(id++);
+      f.flush();
+    }
+    f.engine.run([{type: 'workspace', target: {kind: 'number', number: 1, name: '1'}}], 0);
+    return f;
+  }
+
+  it('runs the command bound to a left swipe', () => {
+    const f = threeOccupied(GESTURES);
+    f.engine.onSwipe('left', 7);
+    expect(f.engine.state().activeWorkspace).toBe(1);
+  });
+
+  it('runs the command bound to a right swipe, which wraps the other way', () => {
+    const f = threeOccupied(GESTURES);
+    f.engine.onSwipe('right', 7);
+    // `workspace prev` from the lowest member of the cycle: round to the highest, i3's own wrap.
+    expect(f.engine.state().activeWorkspace).toBe(2);
+  });
+
+  it('does nothing, and says nothing, when the gesture is unbound', () => {
+    // An unbound gesture is not an error -- the user who never wrote a `bindgesture` line still swipes.
+    const f = threeOccupied('bindsym Mod4+q kill\n');
+    f.calls.length = 0;
+    f.engine.onSwipe('left', 7);
+    expect(f.engine.state().activeWorkspace).toBe(0);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('warns with the config line number when the bound command does not parse', () => {
+    const f = threeOccupied('bindgesture swipe:left wobble\n');
+    f.calls.length = 0;
+    f.engine.onSwipe('left', 7);
+    expect(f.calls).toContain("warn:config line 1: unknown command 'wobble'");
+    expect(f.engine.state().activeWorkspace).toBe(0);
+  });
+
+  it('ignores a swipe while the session is locked', () => {
+    // Unlike a binding, a gesture has no grab to drop: `onLocked` ungrabs every accelerator, so
+    // `onBinding` cannot fire over a lock screen, while the stage subscription a swipe arrives on stays
+    // live. Without this guard the lock screen would be the one place gestures still ran commands.
+    const f = threeOccupied(GESTURES);
+    f.engine.onLocked();
+    f.engine.onSwipe('left', 7);
     expect(f.engine.state().activeWorkspace).toBe(0);
   });
 });

@@ -1,12 +1,13 @@
 import {workspaceNumber} from '../commands/parse';
 import {splitHead, tokenize, unquote} from '../util/text';
 import type {LogicalLine} from './lexer';
-import type {BorderStyle, Diagnostic} from './model';
+import type {BorderStyle, Diagnostic, GestureName} from './model';
 
 export type ClientColorKey = 'focused' | 'focused_inactive' | 'unfocused' | 'urgent';
 
 export type Directive =
   | {kind: 'bindsym'; line: number; mode: string; combo: string; command: string; noRepeat: boolean}
+  | {kind: 'bindgesture'; line: number; gesture: GestureName; command: string}
   | {kind: 'mode'; line: number; name: string}
   | {kind: 'for_window'; line: number; criteria: string; command: string}
   | {kind: 'default_border' | 'default_floating_border'; line: number; style: BorderStyle['style']; width: number}
@@ -141,6 +142,29 @@ export function parse(lines: LogicalLine[]): ParseResult {
         continue;
       }
       directives.push({kind: 'bindsym', line: l.line, mode, combo, command, noRepeat});
+      continue;
+    }
+
+    if (head === 'bindgesture') {
+      // Not i3. sway's directive, because sway is where a user looking for a gesture binding will look
+      // and inventing a third spelling would help nobody; `launcher` is the precedent for this project
+      // adding a directive i3 does not have.
+      //
+      // `err`, not `warn`, and worded like `mouse_warping`'s: the gesture name is an enumerated value, so
+      // one that is not in the enumeration is a typo. Accepting it silently would leave the user with a
+      // swipe that does nothing and nothing in the config status to say why. sway's other gestures
+      // (`swipe:up`/`down`, `pinch:*`, `hold:*`) fall in here too -- only the two horizontal swipes are
+      // recognised, and a swipe GNOME still owns must not be claimed by accident.
+      const [gesture, command] = splitHead(rest);
+      if (gesture !== 'swipe:left' && gesture !== 'swipe:right') {
+        err(`bindgesture: expected swipe:left or swipe:right, got '${gesture}'`);
+        continue;
+      }
+      if (!command) {
+        err('bindgesture: missing command');
+        continue;
+      }
+      directives.push({kind: 'bindgesture', line: l.line, gesture, command});
       continue;
     }
 

@@ -2,6 +2,7 @@ import {Tree} from './tree/tree';
 import {descendFocused, leaves, walk, type Con, type MonitorId, type NodeId, type Rect, type SplitCon, type WindowId} from './tree/node';
 import {effectiveWorkspaceCount, resolveOutputArg, type OutputArg} from './tree/outputs';
 import {layoutWithRects, stackingOrder} from './tree/layout';
+import {cycleWorkspace} from './tree/cycle';
 import {RectReconciler} from './runtime/reconcile';
 import {serializeTree, type TreeSnapshot, type WindowSnapshot} from './runtime/snapshot';
 import {decorationPlan, type DecorationPlan} from './runtime/decoration';
@@ -162,6 +163,12 @@ export class Engine {
   private readonly _minimized = new Map<WindowId, {floating: boolean; workspace: number | undefined}>();
   private readonly _expectedFocus = new Set<WindowId>();
   private _lastFocus: WindowId | null = null;
+  /**
+   * D8: the output the engine last pointed the focus at by changing what that output shows.
+   * `_armInvoluntaryFocus` records it, `_involuntaryFocus` re-derives from it whether a native focus
+   * report is the compositor's own doing; see both for the whole of the rule.
+   */
+  private _shownOnFocusedOutput: MonitorId | null = null;
   private readonly _unmaximizing = new Set<WindowId>();
   private readonly _unmaximizeAttempts = new Map<WindowId, number>();
   private readonly _forced = new Set<WindowId>();
@@ -335,6 +342,12 @@ export class Engine {
     this.commit(() => {
       // GNOME's active workspace is a constant while the extension is enabled. Touchpad workspace
       // gestures have no GSetting to clear, so this is the only cover for them.
+      //
+      // Fix round 1, B2: `src/shell/gestures.ts` now answers EVENT_STOP for the three-finger horizontal
+      // swipe it recognises, so for THAT gesture GNOME's tracker never runs and this no longer has to
+      // correct anything -- preventing beats undoing, and undoing it would have flashed the attic's
+      // windows on every swipe. This stays, and stays the only cover, for every swipe that file does not
+      // claim: a vertical three-finger swipe, any other finger count, and whatever a future Shell adds.
       if (this._started && !this._disposed && this._ports.workspaces.activeIndex !== LIVE_WORKSPACE) {
         this._ports.log.warn('active workspace left live; switching back');
         this._correctingActiveWorkspace = true;
@@ -598,9 +611,14 @@ export class Engine {
     this._committing = true;
     try {
       while (this._queued.length && !this._disposed) {
+        // D8: snapshotted per queued change rather than once per drain, because a focus report the
+        // compositor raises from inside this change's own port calls is queued *behind* it and drains as
+        // the next one -- so the arming below has to be in place before that one runs.
+        const showing = this._tree ? new Map(this._tree.visible) : null;
         const changed = this._queued.shift()!();
         if (this._disposed) break;
         if (changed !== false) this._layoutAndPublish();
+        this._armInvoluntaryFocus(showing);
       }
     } finally {
       this._committing = false;
@@ -1154,15 +1172,98 @@ export class Engine {
    * `visible.get(focusedOutput)`, so pointing the focused output at a display that shows something else
    * would make every workspace-scoped command act on the wrong workspace. A focus report for a parked
    * window (Mutter can still send one) therefore leaves the focused output alone.
+   *
+   * D8: `claimOutput` false keeps the selection half and drops the focused-output half, for the one
+   * caller that can tell the user's focus change from the compositor's own -- `_acceptFocus`, through
+   * `_involuntaryFocus` below. Only a parameter, not a field read: `focusWindow` (a click on i3-shell's
+   * own tab) and `_rehomeFloating` (the window the user is dragging) are the user acting, and they keep
+   * the rule whole.
    */
-  private _selectWindow(id: WindowId): void {
+  private _selectWindow(id: WindowId, claimOutput = true): void {
     const tree = this._tree;
     const location = tree?.location(id);
     if (!tree || !location) return;
     if (location.floating) tree.selectFloating(id);
     else { const leaf = tree.find(id); if (leaf) tree.select(leaf); }
+    if (!claimOutput) return;
     const showing = tree.outputShowing(location.workspace);
     if (showing !== null) tree.focusedOutput = showing;
+  }
+
+  /**
+   * D8, the defect a live session found after Phase 5 merged: arm, or disarm, the one-report suppression `_acceptFocus` spends. Called once per
+   * drained change in `commit()`, with what each output was showing before that change ran.
+   *
+   * The defect: show an EMPTY workspace on an output and that output has no window to focus, so the
+   * compositor's keyboard focus necessarily stays on -- or is reassigned to -- a window on another
+   * display, and it says so with an ordinary focus report. D5 (`_selectWindow` above) then reads that
+   * leftover as the user having moved there and hands the focused output to the display they just looked
+   * away from; `$mod+d` opens the launcher there, which is how the user saw it. `onPointerOutput` cannot
+   * correct it: `src/shell/pointer.ts` is edge-triggered on `_lastMonitor`, so a pointer standing still
+   * emits nothing. The ruling: an explicit user action beats the compositor's involuntary pick. A
+   * `workspace` switch, a `move workspace to output` and a reconfigure all set `focusedOutput`
+   * deliberately, and a report that arrives as a consequence of one must not override it.
+   *
+   * Three things make this a suppression of exactly that report and not of D5:
+   *
+   * - **It is armed only by a change in `tree.visible`.** A report in a commit where the engine changed
+   *   nothing about what is on screen -- a real click, or a sloppy-focus hover -- is D5's, and D5 is
+   *   load-bearing. Comparing the map is what defines "the engine changed what a workspace shows"; it
+   *   needs no bookkeeping at the places that write to `visible`, and a new one cannot forget it.
+   * - **It records the output, not a flag.** The suppression lapses the moment anything else moves the
+   *   focused output -- `focus output`, a pointer crossing onto another display (D4), a second switch.
+   *   Those are the user, and after them the next report is the user's too. A flag would also swallow
+   *   the report the parked-window guard in `_selectWindow` exists for, leaving that guard pinned by
+   *   nothing at all.
+   * - **Whether it suppresses anything is decided later, from live state.** This only records the
+   *   output; `_involuntaryFocus` below asks the two questions that matter at the moment a report
+   *   arrives, so a commit that changed visibility and took the keyboard for itself (an incoming
+   *   workspace with a window in it) suppresses nothing, with no bookkeeping here.
+   *
+   * A tree being *born* (`before` null) is not such a change: nothing was on screen to displace, and the
+   * commit that builds it accepts the compositor's focus itself, through `_layoutAndPublish`.
+   */
+  private _armInvoluntaryFocus(before: ReadonlyMap<MonitorId, number> | null): void {
+    const tree = this._tree;
+    if (!tree || !before) return;
+    if (before.size === tree.visible.size &&
+      [...tree.visible].every(([output, index]) => before.get(output) === index)) return;
+    this._shownOnFocusedOutput = tree.focusedOutput;
+  }
+
+  /**
+   * Is an inbound focus report the compositor's own doing rather than the user's? Round 2, and the whole
+   * of the reason this is a condition re-derived from live state instead of the one-shot token the first
+   * fix used.
+   *
+   * The native suite measured that token being too weak: Mutter does not send ONE notification for one
+   * involuntary pick. It focuses its replacement, unsets the input focus while it hides the window being
+   * parked, and focuses the replacement again -- so the first report spent the token and a later one
+   * claimed the other display regardless. Nothing here is spent by a report; both clauses below are facts
+   * about the tree as it is now, so they answer the same way however many reports arrive.
+   *
+   * Two clauses, both live, and each of them is also what *ends* the suppression:
+   *
+   * - **the focused output is still the one the engine pointed focus at.** Anything else that moves it
+   *   is the user -- `focus output`, a pointer crossing onto another display (D4), a `focus` or `move`
+   *   that crossed an output edge -- and after one of those the next report is theirs.
+   * - **that output still has nothing to focus.** `activeWorkspace` is `visible.get(focusedOutput)`, so
+   *   this reads what the output shows *now*: a second `workspace` switch, a `move workspace to output`
+   *   or a window simply opening there all end the suppression, because the compositor then HAS a window
+   *   on that display to focus and a report naming another one is informative again. This clause is the
+   *   defect's premise and nothing more, which is why it needs no record of its own: the engine taking
+   *   the keyboard for itself (an incoming workspace that had a window) is the same fact.
+   *
+   * A failed clause clears the record for good rather than merely answering false, so a focused output
+   * that wanders away and comes back cannot resurrect a suppression the user has already overruled.
+   */
+  private _involuntaryFocus(): boolean {
+    const tree = this._tree;
+    if (this._shownOnFocusedOutput === null || !tree) return false;
+    if (this._shownOnFocusedOutput === tree.focusedOutput && !tree.occupied(tree.activeWorkspace))
+      return true;
+    this._shownOnFocusedOutput = null;
+    return false;
   }
 
   private _acceptFocus(id: WindowId | null): void {
@@ -1172,7 +1273,16 @@ export class Engine {
     const duplicate = id === this._lastFocus;
     this._lastFocus = id;
     if (id === null || !this._tree?.location(id)) return;
-    if (!expected && !duplicate) this._selectWindow(id);
+    if (expected || duplicate) return;
+    const involuntary = this._involuntaryFocus();
+    if (involuntary)
+      // Logged, not silent: this is the one place the engine overrules the compositor about where the
+      // user is, it fires only while the suppression holds, and the native suite reads the count out of
+      // the journal the way the user read the storm (test/integration/phase5-checks.py, defect D8).
+      this._ports.log.info(`involuntary focus: window ${id} focused while output ` +
+        `${this._tree.focusedOutput} shows empty workspace ${this._tree.activeWorkspace}; ` +
+        'leaving the focused output alone');
+    this._selectWindow(id, !involuntary);
   }
 
   private _selectedIds(): WindowId[] {
@@ -1349,6 +1459,28 @@ export class Engine {
     this.run(commands, timestamp);
   }
 
+  /**
+   * A touchpad swipe completed. `bindgesture`'s half of what `onBinding` is to `bindsym`.
+   *
+   * An unbound gesture is silent, not an error: the config is the user's real `~/.config/i3/config` and
+   * most of them will never write a `bindgesture` line, so a bare swipe must cost nothing and say nothing.
+   * Which direction means `workspace next` lives entirely in that config -- nothing here knows.
+   *
+   * The `_locked` guard is the one thing this does that `onBinding` does not need. `onLocked()` drops
+   * every accelerator grab, so a binding physically cannot fire over a lock screen; the stage
+   * subscription a swipe arrives on has no equivalent and stays live, which would otherwise make the lock
+   * screen the one place where gestures still ran commands.
+   */
+  onSwipe(direction: 'left' | 'right', timestamp: number): void {
+    if (this._locked) return;
+    const gesture = this._config.gestures.get(`swipe:${direction}`);
+    if (!gesture) return;
+    const {commands, diagnostics} = parseCommands(gesture.command);
+    for (const d of diagnostics)
+      this._ports.log.warn(`config line ${gesture.line}: ${d}`);
+    this.run(commands, timestamp);
+  }
+
   /** Executes commands in order; returns a short human-readable result (also the D-Bus reply). */
   run(commands: Command[], timestamp: number): string {
     if (this._disposed) return 'stopped';
@@ -1496,9 +1628,15 @@ export class Engine {
         return null;
       }
       case 'next':
-        return current + 1 < count ? current + 1 : null;
-      case 'prev':
-        return current > 0 ? current - 1 : null;
+      case 'prev': {
+        // i3's semantics, not numeric neighbours: cycle the workspaces that exist and wrap at both
+        // ends. These used to be `current + 1` / `current - 1` with a null at each end, which dead-ended
+        // on workspace 1 and on the config's last workspace and walked through empty workspaces nobody
+        // had opened. `Tree.cycleMembers` says what "exists" means here; `cycleWorkspace` is the walk.
+        // No tree means no cycle to walk -- and nothing on screen to walk it from.
+        const tree = this._tree;
+        return tree ? cycleWorkspace(tree.cycleMembers(), current, target.kind) : null;
+      }
       case 'back_and_forth':
         return null;
     }

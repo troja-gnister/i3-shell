@@ -12,8 +12,10 @@ Mutter does asynchronously, or reports success where Mutter reports nothing at a
     `position-invalidated` on its own schedule.
 
 Six of the scenarios are the brief's. Five more are the defects the user hit within minutes of logging
-into the Task 1-16 build, every one of them in exactly that gap; they are named `_defect_` so a reader
-can tell "this was specified" from "this was measured on a real desk". They must never regress.
+into the Task 1-16 build, and one more (D8) is the defect they hit on the Phase 5 build itself -- the
+focused output following Mutter's replacement focus off the display they were looking at. Every one of
+them is in exactly that gap; they are named `_defect_` so a reader can tell "this was specified" from
+"this was measured on a real desk". They must never regress.
 
 READING FAILURES. Nothing here raises a bare assert. `check`, `expect` and `fail` all print the step
 that was running, what was expected and what was actually observed, because the controller who runs
@@ -55,6 +57,10 @@ ATTIC_WORKSPACE = 1
 # src/engine.ts onWorkspacesChanged. One correction per genuine gesture is healthy; the defect produced
 # 3376 in four seconds at every login, so anything in single digits across one enable is "not a storm".
 GUARD_WARNING = 'active workspace left live'
+# src/engine.ts _acceptFocus logs this once per focus report it overrules, and only while D8's
+# suppression holds. Counting it is what makes the D8 scenario non-vacuous -- and the count itself is the
+# measurement that killed the first fix, which spent the suppression on the compositor's FIRST report.
+INVOLUNTARY_PICK = 'involuntary focus:'
 GUARD_BUDGET = 9
 RECURSION_MARKERS = ('too much recursion', 'Maximum call stack size exceeded')
 
@@ -290,6 +296,18 @@ def warp(point):
 
 def pointer():
     return list(call('org.i3shell.Debug', 'PointerPosition'))
+
+
+def swipe(direction):
+    """Inject a completed three-finger swipe at Engine.onSwipe.
+
+    Not at the recogniser: Mutter synthesises no touchpad events and a headless nested Shell has no
+    touchpad, so nothing here can produce a real Clutter TOUCHPAD_SWIPE. src/shell/gestures.ts is
+    therefore unit-tested only, and this covers everything downstream of the direction.
+    """
+    if not call('org.i3shell.Debug', 'SimulateSwipe', '(s)', (direction,))[0]:
+        fail('the debug surface injected this swipe', {'direction': direction, 'ok': True},
+             {'direction': direction, 'ok': False})
 
 
 def normal_action_mode():
@@ -1107,6 +1125,123 @@ def scenario_defect_native_focus_moves_focused_output(primary_id, second_id):
 
 
 # --------------------------------------------------------------------------
+# Defect D8: showing an EMPTY workspace must not hand the focused output away
+# --------------------------------------------------------------------------
+
+def empty_workspace(label):
+    """An i3 workspace index that holds no window and that no output is showing.
+
+    Both halves matter: unshown is what makes `workspace N` materialise it (the visible branch of
+    `Tree.showWorkspace` only moves the focused output), and empty is what leaves
+    `resolveShowOutput` with the focused output as its answer and leaves that output with no window
+    of its own to focus. The reference config pins nothing, so nothing outranks the focused output.
+    """
+    shown = set(visible_map().values())
+    for ws in snapshot()['workspaces']:
+        if ws['index'] in shown or ws['floating']:
+            continue
+        if any(node['kind'] == 'leaf' for node in walk(ws['root'])):
+            continue
+        return ws['index']
+    fail(f'{label}: one of the ten workspaces is empty and unshown',
+         'an empty, unshown workspace', {'visible': visible_map(),
+                                         'occupancy': {ws['index']: leaf_titles(ws['index'])
+                                                       for ws in snapshot()['workspaces']}})
+
+
+def launcher_box():
+    return json.loads(call('org.i3shell.Debug', 'LauncherState')[0])
+
+
+def scenario_defect_empty_workspace_keeps_the_focused_output(primary_id, second_id):
+    """Switching the display the user is looking at to an EMPTY workspace used to hand the focused
+    output to the OTHER display, so `$mod+d` opened the launcher on the monitor they had just looked
+    away from -- and moving the cursor off that monitor and back fixed it until the next time.
+
+    This is the defect 1201 unit tests could not see, and it is the asynchrony this file exists for:
+    parking the outgoing workspace's focused window makes MUTTER choose the replacement focus, from
+    its own `calc_showing` later rather than from inside the call that moved the window, and the only
+    window left on screen is on the other display because the incoming workspace is empty. D5 --
+    `Engine._selectWindow` moving the focused output to the newly focused window's display -- then read
+    that involuntary pick as the user having moved there.
+
+    The pointer is left standing still on the primary throughout, which is both what the user was doing
+    and why nothing corrected it: `src/shell/pointer.ts` is edge-triggered on its last monitor, so a
+    stationary pointer emits nothing at all.
+
+    The premise is waited for through the KEYBOARD, before the focused output is asserted: Mutter's
+    replacement pick is what this scenario is about, and asserting "the focused output did not move"
+    before that pick has landed would pass with the defect fully present.
+
+    The launcher is asserted too, not merely `focusedOutput`, because it is the whole of what the user
+    could actually see.
+    """
+    step('defect D8: a window on each display, with the cursor and the keyboard on the primary')
+    reset_windows()
+    create_on(second_id, 'D8 other', 'defect D8')    # the application that stays visible over there
+    create_on(primary_id, 'D8 here', 'defect D8')    # ... and the one this switch is about to park
+    go_to_output(primary_id, 'defect D8')
+    warp(centre(work_area(primary_id)))
+    expect('D8: the focused output is the primary', primary_id, focused_output)
+    typing_reaches('x', 'D8 here', ['D8 other'], 'D8: native focus starts on the primary\'s window')
+
+    step('defect D8: switch the primary to an empty workspace')
+    index = empty_workspace('defect D8')
+    other_before = shown_on(second_id)
+    offset = len(shell_log_text())
+    check('D8: the switch was accepted', run(f'workspace number {index + 1}'), f'workspace {index + 1}')
+    expect('D8: the empty workspace materialised on the primary', index, lambda: shown_on(primary_id),
+           timeout=15, context=visible_map)
+    check('D8: the other display was not switched', shown_on(second_id), other_before, visible_map)
+    check('D8: and it is still showing its window', leaf_titles(other_before), ['D8 other'])
+    typing_reaches('y', 'D8 other', [],
+                   'D8: Mutter moved the keyboard to the other display on its own -- the premise')
+
+    step('defect D8: the engine must have seen the compositor\'s pick and overruled it')
+    # Asserted before the conclusion, and this is what keeps the scenario honest: "the focused output did
+    # not move" would also pass if no focus report had arrived at all. The count is printed because it is
+    # the measurement the first fix died on -- it assumed exactly one report per involuntary pick.
+    expect('D8: the engine overruled at least one involuntary focus report', True,
+           lambda: log_count(INVOLUNTARY_PICK, offset) >= 1, timeout=15,
+           context=lambda: {'focusedOutput': focused_output(), 'visible': visible_map(),
+                            'tail': [line for line in shell_log_text()[offset:].splitlines()
+                                     if 'i3-shell' in line][-10:]})
+    print('defect D8: involuntary focus reports overruled:', log_count(INVOLUNTARY_PICK, offset),
+          flush=True)
+
+    step('defect D8: the focused output must stay on the display the user is looking at')
+    check('D8: the focused output stayed on the primary', focused_output(), primary_id,
+          lambda: {'visible': visible_map(), 'pointer': pointer(),
+                   'activeWorkspace': snapshot()['activeWorkspace'],
+                   'overruled': log_count(INVOLUNTARY_PICK, offset),
+                   'note': 'Engine._involuntaryFocus must suppress the focused-output half of D5 for '
+                           'the compositor\'s own replacement pick, for EVERY report of it and not '
+                           'merely the first; if "overruled" is non-zero and this still moved, some '
+                           'later report found the suppression no longer holding'})
+    check('D8: so the active workspace is the empty one', snapshot()['activeWorkspace'], index)
+    if settled(lambda: focused_output() != primary_id, 2.0):
+        fail('D8: no later report takes the focused output away either', primary_id, focused_output(),
+             {'visible': visible_map(), 'pointer': pointer()})
+    ok('D8: and it stays there', 'no focus report moved it for 2s')
+
+    step('defect D8: so $mod+d opens the launcher on that display')
+    run('launcher')
+    expect('D8: the launcher opened', True, lambda: launcher_box()['open'])
+    box, area = launcher_box(), work_area(primary_id)
+    edges = {'left': box['x'] >= area['x'], 'top': box['y'] >= area['y'],
+             'right': box['x'] + box['width'] <= area['x'] + area['width'],
+             'bottom': box['y'] + box['height'] <= area['y'] + area['height']}
+    if not all(edges.values()):
+        fail('D8: the launcher opened inside the work area of the display the user is on',
+             {'output': primary_id, 'area': area}, {'box': box, 'escaped': sorted(k for k, v in edges.items() if not v),
+                                                   'otherArea': work_area(second_id)})
+    ok('D8: the launcher opened on the display the user is looking at', _render(box))
+    run('launcher')
+    expect('D8: the launcher closed again', False, lambda: launcher_box()['open'])
+    reset_windows()
+
+
+# --------------------------------------------------------------------------
 # Defect D3: `workspace <n>` on the already-active workspace still re-asserts focus
 # --------------------------------------------------------------------------
 
@@ -1259,6 +1394,81 @@ def scenario_defect_pin_survives_remote_number_press(primary_id, second_id):
 
 
 # --------------------------------------------------------------------------
+# Scenario 6: a bound touchpad swipe really switches workspaces
+# --------------------------------------------------------------------------
+
+def scenario_gesture_runs_its_binding(primary_id, second_id):
+    """`bindgesture swipe:left workspace next` moves the display, and `next` cycles what EXISTS.
+
+    Two claims a unit fake cannot make. The first is that the whole path from a swipe direction to a
+    moved display works against Mutter: the `bindgesture` lookup, the command parse, and the switch.
+    The second is i3's cycle semantics on a real desk -- workspaces 1 and 5 hold a window each and 2, 3
+    and 4 hold nothing, so `workspace next` from 5 wraps round to 1. The rule this replaced would have
+    answered workspace 6 (`current + 1`), and `prev` from 1 would have answered nothing at all.
+
+    Workspace 2 is deliberately not in the fixture's own cycle as a *primary* workspace: the second
+    output shows it, so it is a member, but `next` from 5 wraps past it to the lowest member (1) and
+    `prev` from 1 wraps up to the highest (5), so neither assertion below can be satisfied by a focus
+    move to the other display instead of a switch on this one.
+    """
+    step('gestures: bind both horizontal swipes and reload')
+    reset_windows()
+    original = CONFIG.read_text()
+    diagnostics_before = (state()['errors'], state()['warnings'])
+    try:
+        CONFIG.write_text(original + '\nbindgesture swipe:left workspace next\n'
+                                     'bindgesture swipe:right workspace prev\n')
+        message = run('reload')
+        if 'reloaded' not in message:
+            fail('gestures: the config with bindgesture lines reloaded', 'a message containing "reloaded"',
+                 message, lambda: {'configTail': CONFIG.read_text().splitlines()[-3:]})
+        check('gestures: the bindgesture lines added no config error or warning',
+              (state()['errors'], state()['warnings']), diagnostics_before)
+        # A gesture is not a key: binding two of them must not change the accelerator count.
+        mode_grabs('default', DEFAULT_GRABS)
+
+        step('gestures: occupy workspaces 1 and 5 on the primary, leaving 2, 3 and 4 empty')
+        create_on(primary_id, 'swipe one', 'gestures')
+        check('gestures: the first window is on workspace 1', shown_on(primary_id), 0, visible_map)
+        check('gestures: workspace number 5 was accepted', run('workspace number 5'), 'workspace 5')
+        create_on(primary_id, 'swipe five', 'gestures')
+        expect('gestures: the primary shows workspace 5, which now holds a window', (4, ['swipe five']),
+               lambda: (shown_on(primary_id), leaf_titles(4)), context=visible_map)
+
+        step('gestures: a left swipe runs `workspace next`, which wraps to workspace 1')
+        swipe('left')
+        expect('gestures: the primary wrapped round to workspace 1, not on to an empty 6', 0,
+               lambda: shown_on(primary_id), timeout=15,
+               context=lambda: {'visible': visible_map(), 'focusedOutput': focused_output()})
+        check('gestures: and it is still the primary the keyboard is on', focused_output(), primary_id,
+              visible_map)
+
+        step('gestures: a right swipe runs `workspace prev`, which wraps back up to workspace 5')
+        swipe('right')
+        expect('gestures: the primary wrapped up to workspace 5 rather than dead-ending', 4,
+               lambda: shown_on(primary_id), timeout=15,
+               context=lambda: {'visible': visible_map(), 'focusedOutput': focused_output()})
+    finally:
+        # Tolerant on purpose, for the reason scenario_defect_pin_survives_remote_number_press gives:
+        # an exception raised here would replace whatever the scenario was failing on.
+        CONFIG.write_text(original)
+        try:
+            restored = command('reload')
+        except Exception as error:                      # noqa: BLE001 -- reported, never masking
+            print('WARNING: could not reload the original config:', error, flush=True)
+        else:
+            if not restored[0] or 'reloaded' not in restored[1]:
+                print('WARNING: restoring the original config did not reload cleanly:', restored,
+                      flush=True)
+    step('gestures: with the bindings gone, a swipe is silent and changes nothing')
+    before = shown_on(primary_id)
+    swipe('left')
+    check('gestures: an unbound swipe moved nothing', shown_on(primary_id), before, visible_map)
+    mode_grabs('default', DEFAULT_GRABS)
+    reset_windows()
+
+
+# --------------------------------------------------------------------------
 # Scenario 5 (brief, --settings): the overrides are restored on disable()
 # --------------------------------------------------------------------------
 
@@ -1388,9 +1598,11 @@ def live_session():
                      scenario_pointer_and_warp,
                      scenario_defect_pointer_claims_both_ways,
                      scenario_defect_native_focus_moves_focused_output,
+                     scenario_defect_empty_workspace_keeps_the_focused_output,
                      scenario_defect_already_active_reasserts_focus,
                      scenario_defect_occupied_workspace_stays_put,
-                     scenario_defect_pin_survives_remote_number_press):
+                     scenario_defect_pin_survives_remote_number_press,
+                     scenario_gesture_runs_its_binding):
         reset_workspaces(primary_id, second_id)
         scenario(primary_id, second_id)
     reset_windows()

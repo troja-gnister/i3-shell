@@ -46,6 +46,10 @@ const DEBUG_IFACE = `<node>
       <arg type="i" direction="out" name="x"/>
       <arg type="i" direction="out" name="y"/>
     </method>
+    <method name="SimulateSwipe">
+      <arg type="s" direction="in" name="direction"/>
+      <arg type="b" direction="out" name="ok"/>
+    </method>
   </interface>
 </node>`;
 
@@ -148,6 +152,31 @@ export class DebugObject {
     } catch (error) {
       log.error('PointerPosition failed', error);
       return [-1, -1];
+    }
+  }
+
+  /**
+   * Behave as if a three-finger touchpad swipe had completed in `direction` ("left" or "right").
+   *
+   * Enters at `Engine.onSwipe`, not at `Gestures`: the recogniser cannot be driven natively at all --
+   * Mutter synthesises no touchpad events and the nested harness has no touchpad to produce them, so
+   * `Clutter.VirtualInputDevice` (which `PressKey` uses for the keyboard) has nothing to offer here.
+   * What that leaves genuinely coverable is everything downstream of the direction: the `bindgesture`
+   * lookup, the command parse and the workspace switch it runs. That is the half worth a native
+   * scenario, and the half a unit fake's `run()` cannot prove really moved a window on a real display.
+   * Test build only, like the rest of this interface.
+   */
+  SimulateSwipe(direction: string): boolean {
+    try {
+      if (direction !== 'left' && direction !== 'right') {
+        log.error(`SimulateSwipe: expected left or right, got "${direction}"`);
+        return false;
+      }
+      this._engine.onSwipe(direction, global.get_current_time());
+      return true;
+    } catch (error) {
+      log.error(`SimulateSwipe "${direction}" failed`, error);
+      return false;
     }
   }
 
