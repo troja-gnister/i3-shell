@@ -164,11 +164,11 @@ export class Engine {
   private readonly _expectedFocus = new Set<WindowId>();
   private _lastFocus: WindowId | null = null;
   /**
-   * D8: the output the engine deliberately pointed the focus at in the last commit that changed
-   * what an output shows, while one inbound focus report is still outstanding -- null once it has been.
-   * `_armInvoluntaryFocus` sets it, `_acceptFocus` spends it; see both for the whole of the rule.
+   * D8: the output the engine last pointed the focus at by changing what that output shows.
+   * `_armInvoluntaryFocus` records it, `_involuntaryFocus` re-derives from it whether a native focus
+   * report is the compositor's own doing; see both for the whole of the rule.
    */
-  private _involuntaryFocusOn: MonitorId | null = null;
+  private _shownOnFocusedOutput: MonitorId | null = null;
   private readonly _unmaximizing = new Set<WindowId>();
   private readonly _unmaximizeAttempts = new Map<WindowId, number>();
   private readonly _forced = new Set<WindowId>();
@@ -1173,10 +1173,11 @@ export class Engine {
    * would make every workspace-scoped command act on the wrong workspace. A focus report for a parked
    * window (Mutter can still send one) therefore leaves the focused output alone.
    *
-   * D8: `claimOutput` false keeps the selection half and drops the focused-output half, for the
-   * one caller that can tell the user's focus change from the compositor's own -- `_acceptFocus`. Only a
-   * parameter, not a field read: `focusWindow` (a click on i3-shell's own tab) and `_rehomeFloating` (the
-   * window the user is dragging) are the user acting, and they keep the rule whole.
+   * D8: `claimOutput` false keeps the selection half and drops the focused-output half, for the one
+   * caller that can tell the user's focus change from the compositor's own -- `_acceptFocus`, through
+   * `_involuntaryFocus` below. Only a parameter, not a field read: `focusWindow` (a click on i3-shell's
+   * own tab) and `_rehomeFloating` (the window the user is dragging) are the user acting, and they keep
+   * the rule whole.
    */
   private _selectWindow(id: WindowId, claimOutput = true): void {
     const tree = this._tree;
@@ -1209,14 +1210,15 @@ export class Engine {
    *   nothing about what is on screen -- a real click, or a sloppy-focus hover -- is D5's, and D5 is
    *   load-bearing. Comparing the map is what defines "the engine changed what a workspace shows"; it
    *   needs no bookkeeping at the places that write to `visible`, and a new one cannot forget it.
-   * - **It is dropped when the engine took the keyboard itself.** `_expectedFocus` is non-empty exactly
-   *   when `_activateSelection` got an activation accepted in this commit, which is the case this defect
-   *   is not: the incoming workspace had a window, the engine asked for it, and the report that follows
-   *   is its own. The same assignment clears a *stale* arming for that reason -- the keyboard is owned
-   *   now, so nothing involuntary is still outstanding.
    * - **It records the output, not a flag.** The suppression lapses the moment anything else moves the
    *   focused output -- `focus output`, a pointer crossing onto another display (D4), a second switch.
-   *   Those are the user, and after them the next report is the user's too.
+   *   Those are the user, and after them the next report is the user's too. A flag would also swallow
+   *   the report the parked-window guard in `_selectWindow` exists for, leaving that guard pinned by
+   *   nothing at all.
+   * - **Whether it suppresses anything is decided later, from live state.** This only records the
+   *   output; `_involuntaryFocus` below asks the two questions that matter at the moment a report
+   *   arrives, so a commit that changed visibility and took the keyboard for itself (an incoming
+   *   workspace with a window in it) suppresses nothing, with no bookkeeping here.
    *
    * A tree being *born* (`before` null) is not such a change: nothing was on screen to displace, and the
    * commit that builds it accepts the compositor's focus itself, through `_layoutAndPublish`.
@@ -1226,7 +1228,42 @@ export class Engine {
     if (!tree || !before) return;
     if (before.size === tree.visible.size &&
       [...tree.visible].every(([output, index]) => before.get(output) === index)) return;
-    this._involuntaryFocusOn = this._expectedFocus.size > 0 ? null : tree.focusedOutput;
+    this._shownOnFocusedOutput = tree.focusedOutput;
+  }
+
+  /**
+   * Is an inbound focus report the compositor's own doing rather than the user's? Round 2, and the whole
+   * of the reason this is a condition re-derived from live state instead of the one-shot token the first
+   * fix used.
+   *
+   * The native suite measured that token being too weak: Mutter does not send ONE notification for one
+   * involuntary pick. It focuses its replacement, unsets the input focus while it hides the window being
+   * parked, and focuses the replacement again -- so the first report spent the token and a later one
+   * claimed the other display regardless. Nothing here is spent by a report; both clauses below are facts
+   * about the tree as it is now, so they answer the same way however many reports arrive.
+   *
+   * Two clauses, both live, and each of them is also what *ends* the suppression:
+   *
+   * - **the focused output is still the one the engine pointed focus at.** Anything else that moves it
+   *   is the user -- `focus output`, a pointer crossing onto another display (D4), a `focus` or `move`
+   *   that crossed an output edge -- and after one of those the next report is theirs.
+   * - **that output still has nothing to focus.** `activeWorkspace` is `visible.get(focusedOutput)`, so
+   *   this reads what the output shows *now*: a second `workspace` switch, a `move workspace to output`
+   *   or a window simply opening there all end the suppression, because the compositor then HAS a window
+   *   on that display to focus and a report naming another one is informative again. This clause is the
+   *   defect's premise and nothing more, which is why it needs no record of its own: the engine taking
+   *   the keyboard for itself (an incoming workspace that had a window) is the same fact.
+   *
+   * A failed clause clears the record for good rather than merely answering false, so a focused output
+   * that wanders away and comes back cannot resurrect a suppression the user has already overruled.
+   */
+  private _involuntaryFocus(): boolean {
+    const tree = this._tree;
+    if (this._shownOnFocusedOutput === null || !tree) return false;
+    if (this._shownOnFocusedOutput === tree.focusedOutput && !tree.occupied(tree.activeWorkspace))
+      return true;
+    this._shownOnFocusedOutput = null;
+    return false;
   }
 
   private _acceptFocus(id: WindowId | null): void {
@@ -1237,11 +1274,14 @@ export class Engine {
     this._lastFocus = id;
     if (id === null || !this._tree?.location(id)) return;
     if (expected || duplicate) return;
-    // D8: spent here, on the first report that reaches `_selectWindow` at all. Deliberately not on an
-    // `id === null` report: Mutter can focus its own no-focus window on the way to picking a
-    // replacement, and spending the suppression on that would leave the pick itself unsuppressed.
-    const involuntary = this._involuntaryFocusOn === this._tree.focusedOutput;
-    this._involuntaryFocusOn = null;
+    const involuntary = this._involuntaryFocus();
+    if (involuntary)
+      // Logged, not silent: this is the one place the engine overrules the compositor about where the
+      // user is, it fires only while the suppression holds, and the native suite reads the count out of
+      // the journal the way the user read the storm (test/integration/phase5-checks.py, defect D8).
+      this._ports.log.info(`involuntary focus: window ${id} focused while output ` +
+        `${this._tree.focusedOutput} shows empty workspace ${this._tree.activeWorkspace}; ` +
+        'leaving the focused output alone');
     this._selectWindow(id, !involuntary);
   }
 

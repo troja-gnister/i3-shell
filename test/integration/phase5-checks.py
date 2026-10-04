@@ -57,6 +57,10 @@ ATTIC_WORKSPACE = 1
 # src/engine.ts onWorkspacesChanged. One correction per genuine gesture is healthy; the defect produced
 # 3376 in four seconds at every login, so anything in single digits across one enable is "not a storm".
 GUARD_WARNING = 'active workspace left live'
+# src/engine.ts _acceptFocus logs this once per focus report it overrules, and only while D8's
+# suppression holds. Counting it is what makes the D8 scenario non-vacuous -- and the count itself is the
+# measurement that killed the first fix, which spent the suppression on the compositor's FIRST report.
+INVOLUNTARY_PICK = 'involuntary focus:'
 GUARD_BUDGET = 9
 RECURSION_MARKERS = ('too much recursion', 'Maximum call stack size exceeded')
 
@@ -1184,6 +1188,7 @@ def scenario_defect_empty_workspace_keeps_the_focused_output(primary_id, second_
     step('defect D8: switch the primary to an empty workspace')
     index = empty_workspace('defect D8')
     other_before = shown_on(second_id)
+    offset = len(shell_log_text())
     check('D8: the switch was accepted', run(f'workspace number {index + 1}'), f'workspace {index + 1}')
     expect('D8: the empty workspace materialised on the primary', index, lambda: shown_on(primary_id),
            timeout=15, context=visible_map)
@@ -1192,13 +1197,27 @@ def scenario_defect_empty_workspace_keeps_the_focused_output(primary_id, second_
     typing_reaches('y', 'D8 other', [],
                    'D8: Mutter moved the keyboard to the other display on its own -- the premise')
 
+    step('defect D8: the engine must have seen the compositor\'s pick and overruled it')
+    # Asserted before the conclusion, and this is what keeps the scenario honest: "the focused output did
+    # not move" would also pass if no focus report had arrived at all. The count is printed because it is
+    # the measurement the first fix died on -- it assumed exactly one report per involuntary pick.
+    expect('D8: the engine overruled at least one involuntary focus report', True,
+           lambda: log_count(INVOLUNTARY_PICK, offset) >= 1, timeout=15,
+           context=lambda: {'focusedOutput': focused_output(), 'visible': visible_map(),
+                            'tail': [line for line in shell_log_text()[offset:].splitlines()
+                                     if 'i3-shell' in line][-10:]})
+    print('defect D8: involuntary focus reports overruled:', log_count(INVOLUNTARY_PICK, offset),
+          flush=True)
+
     step('defect D8: the focused output must stay on the display the user is looking at')
     check('D8: the focused output stayed on the primary', focused_output(), primary_id,
           lambda: {'visible': visible_map(), 'pointer': pointer(),
                    'activeWorkspace': snapshot()['activeWorkspace'],
-                   'note': 'Engine._armInvoluntaryFocus must suppress the focused-output half of D5 '
-                           'for the compositor\'s own replacement pick; if the keyboard check above '
-                           'passed and this did not, that IS the defect'})
+                   'overruled': log_count(INVOLUNTARY_PICK, offset),
+                   'note': 'Engine._involuntaryFocus must suppress the focused-output half of D5 for '
+                           'the compositor\'s own replacement pick, for EVERY report of it and not '
+                           'merely the first; if "overruled" is non-zero and this still moved, some '
+                           'later report found the suppression no longer holding'})
     check('D8: so the active workspace is the empty one', snapshot()['activeWorkspace'], index)
     if settled(lambda: focused_output() != primary_id, 2.0):
         fail('D8: no later report takes the focused output away either', primary_id, focused_output(),

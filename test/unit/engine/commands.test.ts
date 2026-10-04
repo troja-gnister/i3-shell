@@ -981,26 +981,82 @@ describe('workspace and focus on two displays (Task 19)', () => {
     expect(f.engine.launcherAreaForTest()).toEqual(f.topology!.workAreas.get(2));
   });
 
-  // D5's legitimate half, adjacent to D8's suppression: the suppression is spent by the one report it
-  // exists for. When the user then really does click the window on the other display, the focused
-  // output must follow it -- that is D5, and `move container to workspace N` acting on the display the
-  // user is looking at is what depends on it.
-  it('still follows a focus report once the involuntary one has been accounted for', () => {
+  // D8, round 2, and the reason a one-shot token was too weak: the compositor does not send ONE focus
+  // notification for one involuntary pick. Mutter focuses its replacement, unsets the input focus while
+  // it hides the window being parked, and focuses the replacement again. A suppression spent by the
+  // first report is already gone when the third arrives, which is what the native suite measured
+  // against 390f7a1 -- the primary showing the empty workspace and `focusedOutput` on the other display
+  // all the same. The first report here is still the fake's own replacement pick, not a hand-rolled
+  // one; only the two Mutter adds while hiding are written out.
+  it('ignores every report of one involuntary pick, not only the first', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);
+    f.mapOn(2, 9);
+    f.flush();
+    f.focus(9);
+    f.engine.run([{type: 'workspace', target: number(6)}], 1);
+    expect([...f.tree().visible]).toEqual([[2, 5], [3, 1]]);
+    expect(f.engine.state().focusedOutput).toBe(2);               // the replacement pick, suppressed
+
+    f.focus(null);                                                // Mutter unsets the input focus...
+    expect(f.engine.state().focusedOutput).toBe(2);
+    f.focus(7);                                                   // ... and focuses its pick again
+    expect(f.tree().selection(1)).toEqual({kind: 'tiled', con: f.tree().find(7)});
+    expect(f.engine.state().focusedOutput).toBe(2);
+    expect(f.engine.state().activeWorkspace).toBe(5);
+    expect(f.engine.launcherAreaForTest()).toEqual(f.topology!.workAreas.get(2));
+  });
+
+  // What ends the suppression instead of a report count: its own premise. It holds only while that
+  // output still has nothing to focus, so a window opening on the newly shown workspace ends it -- the
+  // compositor has a choice there now, and the next focus report is informative again. This is the
+  // legitimate case that a durable suppression must not swallow.
+  it('stops suppressing once the newly shown workspace has a window of its own', () => {
     const f = fakeEngine(referenceText, desk);
     f.engine.start();
     f.mapOn(3, 7);
     f.mapOn(3, 8);
     f.flush();
     f.engine.run([{type: 'focus_output', target: 'left'}], 1);
-    f.engine.run([{type: 'workspace', target: number(6)}], 2);
-    f.focus(7);                                                  // the compositor's own pick: ignored
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);    // the laptop shows empty workspace 5
+    expect(f.engine.state().focusedOutput).toBe(2);
+    f.focus(7);                                                   // the involuntary pick, suppressed
     expect(f.engine.state().focusedOutput).toBe(2);
 
-    f.focus(8);                                                  // the user clicks the external
+    f.add(10, {monitor: 2});                                      // a window opens on workspace 5
+    f.flush();
+    expect(f.tree().location(10)?.workspace).toBe(5);
+    expect(f.tree().occupied(5)).toBe(true);
+
+    f.focus(8);                                                   // and then a click on the external
     expect(f.engine.state().focusedOutput).toBe(3);
     expect(f.engine.state().activeWorkspace).toBe(1);
-    expect(f.engine.run([{type: 'move_to_workspace', target: number(4)}], 3)).toBe('moved to workspace 4');
-    expect(f.tree().location(8)?.workspace).toBe(3);
+  });
+
+  // Overruled once, overruled for good: a failed clause clears the record instead of merely answering
+  // false, so coming back to the display showing that empty workspace does not resurrect a suppression
+  // the user has already walked past. Without the clear, the second report below is swallowed and the
+  // focused output sticks to a display the user has twice told it to leave.
+  it('does not resurrect the suppression when the user comes back to that display', () => {
+    const f = fakeEngine(referenceText, desk);
+    f.engine.start();
+    f.mapOn(3, 7);
+    f.mapOn(3, 8);
+    f.flush();
+    f.engine.run([{type: 'focus_output', target: 'left'}], 1);
+    f.engine.run([{type: 'workspace', target: number(6)}], 2);    // the laptop shows empty workspace 5
+    expect(f.engine.state().focusedOutput).toBe(2);
+
+    f.engine.run([{type: 'focus_output', target: 'right'}], 3);   // the user crosses to the external
+    f.focus(7);                                                   // and a report arrives while there
+    expect(f.engine.state().focusedOutput).toBe(3);
+    f.engine.run([{type: 'focus_output', target: 'left'}], 4);    // ... then back to the empty workspace
+    expect(f.engine.state().focusedOutput).toBe(2);
+
+    f.focus(8);                                                   // a click on the external, not a pick
+    expect(f.engine.state().focusedOutput).toBe(3);
+    expect(f.engine.state().activeWorkspace).toBe(1);
   });
 
   // D8's suppression records the output it was armed for, not a bare flag, and that is what makes it
