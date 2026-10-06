@@ -13,15 +13,30 @@
 #       --name-conflict disables and re-enables the extension THREE times, all of them in this window, so
 #       this is where a leak on disable() shows up and this is where the detector has to stay.
 #
-#   after the marker -- GNOME's own teardown.  The five messages below are allowed. They are GNOME
-#       tearing down its own search results, date menu and deferred-work queue in a race with its own
-#       collector; measured flake rate on --name-conflict before this split was 1/3, then two consecutive
-#       full-suite failures, then 1/2, with the SAME build passing and failing across attempts.
+#   after the marker -- GNOME's own teardown.  A critical here is attributed by the STACK TRACE GJS
+#       prints under it, not by the name of the object it mentions. With a trace block: fatal if and only
+#       if some frame of that block names this extension (OUR_FRAME, below). With no trace block at all:
+#       exactly the old rule, fatal unless the text matches one of the two named allowances -- which is
+#       the case that keeps libmutter's C-side criticals handled, since those carry no trace. Measured
+#       flake rate on --name-conflict before the scan was split was 1/3, then two consecutive full-suite
+#       failures, then 1/2, with the SAME build passing and failing across attempts.
 #
-# What this narrows, said rather than hidden: an actor leaked by this extension and collected only during
-# the final teardown, after the marker, is now allowed. The alternatives are worse -- allowlisting the GC
-# message by text loses the detector outright, and re-running the step on failure would hide a genuine
-# intermittent leak -- but the narrowing is real and this comment is the record of it.
+# What this narrows, said rather than hidden. THREE costs, two old and one new:
+#
+#   1. An actor leaked by this extension and collected only during the final teardown, after the marker,
+#      is allowed. The alternatives are worse -- allowlisting the GC message by text loses the detector
+#      outright, and re-running the step on failure would hide a genuine intermittent leak -- but the
+#      narrowing is real and this comment is the record of it.
+#   2. NEW, and the price of attributing by trace: a critical from OUR OWN code that GJS prints with NO
+#      stack trace, after the marker, is now allowed where a match on the object's name might have caught
+#      it. Whether that case occurs at all is NOT established here -- it is not claimed to be impossible,
+#      only unmeasured. The compensating control is the pre-marker scope, which is untouched and excuses
+#      nothing, and which is where --name-conflict does its three disable/enable cycles.
+#   3. Also new, and the narrower half of the same trade: a disposed-object critical that names an actor
+#      of ours but is raised entirely from GNOME's own frames is allowed, where matching `St.BoxLayout` by
+#      name would have failed the run. What is given up there is a check that was shown not to work --
+#      GNOME builds St.BoxLayout too, and that exact reading is what produced a false positive on
+#      GNOME's Background Apps toggle. See OUR_FRAME for the measurement.
 #
 # The marker's position in the file is trustworthy because GLib's default log writer writes each message
 # to the fd directly rather than through a libc buffer, so a critical already emitted is already in the
@@ -29,6 +44,12 @@
 # the gate greps only *-CRITICAL lines, which never take that path.)
 
 SHUTDOWN_MARKER='--- i3-shell harness: gnome-shell shutdown begins ---'
+
+# WHICH LINES ARE CRITICALS, in one place. `_critical_lines`, `upstream_hotplug_notes` and the trace
+# scanner in `_by_trace` all have to agree on this exactly, and three copies of one ERE are three things
+# to keep in step. Plain ERE, the same in grep -E and in awk: an alternation of subsystem prefixes, no
+# metacharacter that depends on the dialect.
+CRITICAL_SUBSYSTEMS='(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL'
 
 # THREE upstream Mutter assertions are excluded, by exact text, in BOTH scopes: this one, and the
 # hotplug pair after it. This one first. The suite
@@ -75,20 +96,50 @@ UPSTREAM_STACK_ASSERTION="meta_window_set_stack_position_no_sync: assertion 'win
 UPSTREAM_HOTPLUG_LOGICAL_MONITOR="meta_monitor_manager_get_logical_monitor_from_number: assertion '(unsigned int) number < g_list_length (manager->logical_monitors)' failed"
 UPSTREAM_HOTPLUG_WORK_AREA="meta_workspace_get_work_area_for_monitor: assertion 'logical_monitor != NULL' failed"
 
-# ALLOWED AFTER SHUTDOWN ONLY, each by the name of a GNOME-OWNED object.
+# ATTRIBUTION AFTER SHUTDOWN: the substring that marks a stack frame as THIS EXTENSION'S.
 #
-# Three GJS class names from GNOME Shell's own js/ui: the search list's MaxWidthBox and
-# ListSearchResults, and the date menu's EventsSection. GNOME disposes them from C during teardown while
-# its own JS still holds wrappers. This extension can never be confused with them: it registers no
-# GObject class at all (verified -- `rg 'registerClass' src/` finds nothing), so its own actors are
-# reported either by St type name (St.BoxLayout, St.Button, St.Widget) or, where it instantiates a class
-# GNOME itself registered, by that class's own Gjs_ name -- `PanelMenu.Button`, and
-# `QuickSettings.QuickToggle` and `QuickSettings.SystemIndicator` since the Quick Settings toggle landed,
-# which report as `Gjs_ui_quickSettings_*`. Neither kind is allowlisted, so both stay fatal in both
-# scopes: the allowance is by exact name and the three names it grants belong to objects this extension
-# never builds.
-GNOME_DISPOSED_WIDGETS='Gjs_ui_search_MaxWidthBox|Gjs_ui_search_ListSearchResults|Gjs_ui_dateMenu_EventsSection'
+# WHAT THIS REPLACED. Until now three GNOME object names were allowed in the post-marker scope by name --
+# `GNOME_DISPOSED_WIDGETS`, holding Gjs_ui_search_MaxWidthBox, Gjs_ui_search_ListSearchResults and
+# Gjs_ui_dateMenu_EventsSection -- on the argument that this extension registers no GObject class of its
+# own (still true: `rg 'registerClass' src/` finds nothing) and so would be reported by St type name,
+# St.BoxLayout / St.Button / St.Widget, or by `Gjs_ui_quickSettings_*` for the classes it instantiates
+# from GNOME's own code. The St half of that argument is false, and a full native run proved it: three
+# criticals after the marker -- a Gjs_status_backgroundApps_BackgroundAppsToggle, a
+# Gjs_ui_popupMenu_PopupMenuItem, and an `St.BoxLayout` built by GNOME's own popupMenu.js:934 -- every
+# frame of all three inside resource:///org/gnome/shell/..., GNOME's Background Apps toggle tearing down
+# its own menu, after every assertion of phase2-checks.py --name-conflict had passed. The name list was
+# also an open set over GNOME internals: each new GNOME object that happens to log during teardown fails
+# the suite. Attribution by trace is a closed set over code this project owns, and it is strictly stronger
+# for our own leaks -- it catches a leaked object of ANY type, not only the three names it used to list.
+#
+# GNOME_DISPOSED_WIDGETS IS GONE RATHER THAN KEPT AS A SECOND LINE, because nothing reaches it: every
+# "has been already disposed" critical GJS emits carries a dumpstack, so all three of those names arrive
+# WITH a trace and the trace decides. That is the code path, not the class -- measured directly, outside
+# any session: `o = new Gio.SimpleAction(...); o.run_dispose(); o.enabled = false` under plain gjs printed
+# the critical and a `== Stack trace` block under it. A filter nothing can reach is worse than no filter:
+# it reads as live attribution logic and invites a fourth name. If one of those three ever does appear
+# untraced the gate fails, and that is the signal to go and look at it, not to re-add a name.
+#
+# WHAT IDENTIFIES OUR FRAMES, measured rather than argued. GNOME Shell's own JS is loaded from a
+# GResource, so its frames read `resource:///org/gnome/...` and carry no filesystem path at all. This
+# extension is loaded from a directory, and every spelling that directory can have contains this
+# substring: the installed UUID is `i3-shell@troja` (Makefile EXTDIR), the nested harness symlinks that
+# same name inside its `/tmp/i3-shell-nested.XXXXXX` sandbox root (nested.sh), and the symlink's target is
+# this repo's own `.../i3-shell/dist`.
+#   * GJS prints a frame as the URI the module was imported from and does NOT resolve the symlink: an
+#     import of `<dir>/i3-shell@troja/extension.js` whose target path contained no `i3-shell` at all
+#     printed `#0 ... file:///<dir>/i3-shell@troja/extension.js:5`. So the UUID spelling is the one that
+#     actually shows up, and the sandbox root is a second, independent occurrence.
+#   * dist/extension.js is a single bundle with no sourceMappingURL (checked), so nothing rewrites those
+#     frames to src/ paths.
+#   * No frame in any of the four nested shell.logs from this session's failing runs contains it; all of
+#     their frames are resource:/// frames.
+# Only FRAME lines are tested, never the critical's own message text. The message names the object, and
+# reading ownership out of an object name is precisely the discriminator this change exists to remove.
+OUR_FRAME='i3-shell'
 
+# ALLOWED AFTER SHUTDOWN BY TEXT, and only when the critical carries no stack trace at all. Two of them.
+#
 # GNOME Shell's own deferred-work queue (js/ui/main.js `queueDeferredWork`), which it drains after the
 # work ids have been dropped. This extension never calls it -- verified, `rg 'queueDeferredWork' src/`
 # finds nothing; it defers through GLib.idle_add in src/extension.ts -- so any such line is GNOME's by
@@ -116,12 +167,52 @@ _after_shutdown() {
   awk -v marker="$SHUTDOWN_MARKER" 'seen { print } index($0, marker) { seen = 1 }' "$1"
 }
 
+# Splits post-marker criticals by WHO their stack trace blames. Reads a log scope on stdin and emits
+# whole critical lines, nothing else -- the trace blocks themselves are consumed here, which is also why
+# this has to run BEFORE `_critical_lines` throws the non-critical lines away.
+#
+#   _by_trace fatal  -- the criticals this gate must still judge: every one with no trace block, plus
+#                       every traced one with at least one frame of ours. GNOME_DEFERRED_WORK and
+#                       GC_SWEEPING are applied to THIS stream, so a text allowance can now only ever
+#                       excuse an untraced critical.
+#   _by_trace gnome  -- the criticals attribution excused: a trace block, and no frame of ours in it.
+# `gnome` is the mode that has to be spelled exactly; anything else is treated as `fatal`, so a mistyped
+# mode over-reports to shutdown_criticals instead of silently emptying it. (A mistyped `gnome` empties the
+# note, which criticals-selftest.sh catches; a gate that fails open would not be caught by anything.)
+#
+# A trace block is the `== Stack trace for context` line IMMEDIATELY after a critical plus the contiguous
+# `#N ` frame lines under it. Both halves of that are read off the real log rather than assumed:
+#   * nothing separates a critical from its trace header in /tmp/i3-shell-nested.egGsmS/shell.log, and
+#   * the frame run is NOT blank-line terminated -- the third trace's last frame (line 203 of that file)
+#     is followed directly by a libmutter-Message. The blank lines in that file belong to the NEXT
+#     message, because GLib's default handler prefixes each critical with a newline. So the block ends at
+#     the first line that is not a frame, and at end of file -- which is where the last real trace ends.
+# Requiring adjacency rather than searching forward for the next trace block is deliberate. gnome-shell
+# writes the critical and its dumpstack as separate writes, so another thread's message can land between
+# them; a forward search would then hand one critical another's trace. Here the critical simply looks
+# untraced, which routes it to the text rule and keeps it fatal -- the safe direction.
+_by_trace() {                   # _by_trace <fatal|gnome>
+  awk -v want="$1" -v pat="$CRITICAL_SUBSYSTEMS" -v mine="$OUR_FRAME" '
+    function decide() {
+      if (pending == "") return
+      if (traced && !ours) { if (want == "gnome") print pending }
+      else if (want != "gnome") print pending
+      pending = ""; traced = 0; ours = 0
+    }
+    $0 ~ pat                                                   { decide(); pending = $0; next }
+    pending != "" && !traced && /^== Stack trace for context/   { traced = 1; next }
+    pending != "" && traced && /^#[0-9]+[[:space:]]/            { if (index($0, mine)) ours = 1; next }
+                                                                { decide() }
+    END                                                        { decide() }
+  '
+}
+
 # Every critical on stdin, less the three always-excluded upstream assertions.
 # grep -E, not rg: a missing ripgrep exits 127, the condition reads false and the gate would pass
 # silently. The one ERE here is the subsystem alternation, which is plain ERE; the three exclusions are
 # matched as fixed strings, one -F each, because two of those texts contain ERE metacharacters.
 _critical_lines() {
-  grep -E '(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' |
+  grep -E "$CRITICAL_SUBSYSTEMS" |
     grep -vF "$UPSTREAM_STACK_ASSERTION" |
     grep -vF "$UPSTREAM_HOTPLUG_LOGICAL_MONITOR" |
     grep -vF "$UPSTREAM_HOTPLUG_WORK_AREA"
@@ -133,19 +224,38 @@ session_criticals() {
   _before_shutdown "$1" | _critical_lines || true
 }
 
-# Fatal criticals from GNOME's own teardown: everything that is not one of the five named allowances.
+# Fatal criticals from GNOME's own teardown: a traced critical with a frame of ours, or an untraced one
+# whose text matches neither named allowance.
 shutdown_criticals() {
   [[ -f "$1" ]] || return 0
-  _after_shutdown "$1" | _critical_lines |
-    grep -vE "$GNOME_DISPOSED_WIDGETS" | grep -vF "$GNOME_DEFERRED_WORK" | grep -vF "$GC_SWEEPING" || true
+  _after_shutdown "$1" | _by_trace fatal | _critical_lines |
+    grep -vF "$GNOME_DEFERRED_WORK" | grep -vF "$GC_SWEEPING" || true
 }
 
-# The allowed teardown criticals that actually appeared, so every allowance is reported and none of them
-# can quietly stop being needed.
+# The two text allowances, whenever they actually fired, so neither can quietly stop being needed. Reads
+# the `fatal` stream on purpose: a traced critical is already decided by attribution, so these texts can
+# only excuse an untraced one and this note only reports the cases where they did the work. Should the
+# GC-sweeping or deferred-work critical ever start arriving WITH a trace, this note goes quiet and the one
+# below picks it up -- and a GC-sweeping critical whose trace names us becomes fatal even after the
+# marker, which is stronger than the text rule ever was.
+# grep -F with two -e patterns, for the same reason the exclusions use -F: these are fixed texts.
 allowed_shutdown_notes() {
   [[ -f "$1" ]] || return 0
-  _after_shutdown "$1" | _critical_lines |
-    grep -E "$GNOME_DISPOSED_WIDGETS|$GNOME_DEFERRED_WORK|$GC_SWEEPING" || true
+  _after_shutdown "$1" | _by_trace fatal | _critical_lines |
+    grep -F -e "$GNOME_DEFERRED_WORK" -e "$GC_SWEEPING" || true
+}
+
+# The post-marker criticals that stack-trace attribution excused, reported for the same reason every other
+# allowance is: so it cannot go quiet unnoticed, and so the count is in the run's own output.
+#
+# WHAT THIS NOTE CANNOT TELL YOU, since the note is the record. It says that no frame of the trace GJS
+# printed names this extension -- nobody in our code was on the stack that logged. It does NOT say the
+# object was GNOME's. An actor leaked by this extension and disposed during teardown entirely from GNOME's
+# frames would be reported here, indistinguishable from GNOME's own widgets; cost 3 in the header. What
+# rules that case out is the pre-marker scope, not this message.
+gnome_traced_shutdown_notes() {
+  [[ -f "$1" ]] || return 0
+  _after_shutdown "$1" | _by_trace gnome | _critical_lines || true
 }
 
 # The excluded hotplug pair, whenever it actually appeared, so that allowance is reported too. Unlike the
@@ -155,6 +265,6 @@ allowed_shutdown_notes() {
 # patterns, for the same reason the exclusions use -F.
 upstream_hotplug_notes() {
   [[ -f "$1" ]] || return 0
-  grep -E '(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' "$1" |
+  grep -E "$CRITICAL_SUBSYSTEMS" "$1" |
     grep -F -e "$UPSTREAM_HOTPLUG_LOGICAL_MONITOR" -e "$UPSTREAM_HOTPLUG_WORK_AREA" || true
 }

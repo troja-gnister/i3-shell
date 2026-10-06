@@ -53,8 +53,19 @@ cleanup() {
   fi
   allowed=$(allowed_shutdown_notes "$LOG")
   if [[ -n "$allowed" ]]; then
-    echo 'note: GNOME teardown criticals present and allowed after shutdown (see criticals.sh):' >&2
+    echo 'note: untraced teardown criticals allowed by text after shutdown (see criticals.sh):' >&2
     printf '%s\n' "$allowed" >&2
+  fi
+  traced=$(gnome_traced_shutdown_notes "$LOG")
+  if [[ -n "$traced" ]]; then
+    # Worded as attribution and not as provenance, like the hotplug note above: what was checked is that
+    # no frame of the stack trace GJS printed with these names this extension, which is not the same claim
+    # as "the object was GNOME's". An actor of ours disposed from GNOME's own frames during teardown would
+    # be counted here too -- cost 3 in criticals.sh's header. The count is printed because it is the part
+    # that moves: a run where it jumps is a run where GNOME's teardown changed, or ours did.
+    echo "note: $(printf '%s\n' "$traced" | wc -l) teardown critical(s) allowed after shutdown because no" \
+      'stack-trace frame named this extension (see criticals.sh):' >&2
+    printf '%s\n' "$traced" >&2
   fi
   session=$(session_criticals "$LOG")
   if [[ -n "$session" ]]; then
