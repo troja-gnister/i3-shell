@@ -43,9 +43,15 @@ type IsAny<T> = 0 extends 1 & T ? true : false;
  * 2. an emitter with no `$signals` map keeps exactly today's permissiveness, because nothing can be known
  *    about it either -- `Main.layoutManager` is a hand-written stub keyed against `GObject.Object`'s map
  *    alone, and the shell's plain JS EventEmitters have no map at all;
- * 3. a signal the emitter's map does not name resolves to `never`, so every handler is rejected -- which
- *    also catches a misspelled signal name, something that today connects to nothing and fails silently
- *    for the life of the session;
+ * 3. a signal the emitter's map does not name resolves to `never`, so every handler is rejected. This
+ *    catches a misspelled ORDINARY signal name, which today connects to nothing and fails silently for
+ *    the life of the session -- but NOT a misspelled `notify::` one. Read that limit before trusting it:
+ *    `GObject.Object.SignalSignatures` carries `[key: \`notify::${string}\`]: (pspec: ParamSpec) => void`
+ *    (`gobject-2.0.d.ts:3641`), so the map admits ANY `notify::`-prefixed key. `notify::n-worksapces`
+ *    typechecks clean, exactly as it does today; `n-worksapces-notify` does not. So this repo's two
+ *    `notify::` sites -- `src/shell/workspaces.ts:13` and `src/extension.ts:299` -- get the handler's
+ *    SHAPE checked (the index signature's value type still forces `(source, pspec)`) and their NAME not
+ *    checked at all. Both verified against `tsc` on 2026-10-06;
  * 4. otherwise `GObject.SignalCallback` prepends the emitter to the signal's own arguments, which is what
  *    GJS really passes and what @girs's own `connect` overloads do. Reused rather than re-derived, so the
  *    two cannot drift.
@@ -119,6 +125,11 @@ export class SignalTracker {
    * Clutter passes `(actor, event)`: it threw on every event in the session, 25 unit tests passed against
    * it, both `tsc` programs were blind to it because the blindness was in THIS signature, and only a
    * native run found it. Use `connectUnchecked` below only for a signal the stubs genuinely omit.
+   *
+   * WHAT CAN STILL LOOK CHECKED AND NOT BE: the check is only ever as good as `object`'s STATIC type, so
+   * an emitter widened on its way in -- to `Connectable`, to `any`, or through a parameter or a field
+   * declared as either -- loses its `$signals` map and takes the permissive branch silently, with no
+   * diagnostic anywhere. Pass generated GObjects to this method at their own concrete types.
    */
   connect<O extends Connectable, K extends string>(object: O, signal: K, callback: HandlerFor<O, K>): number {
     // One widening, at the one boundary where it is unavoidable: `Connectable.connect` is declared with

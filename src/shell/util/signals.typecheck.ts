@@ -37,7 +37,8 @@ export function assertSignalTrackerChecksItsHandlers(tracker: SignalTracker): vo
     (_actor: Clutter.Actor, event: Clutter.Event) => event.type() === 0);
 
   // ---------------------------------------------------------------------------------------------------
-  // A misspelled signal name on a real GObject. Today this connects to nothing and fails silently for the
+  // A misspelled ORDINARY signal name on a real GObject -- ordinary meaning not `notify::`-prefixed, which
+  // is a separate and weaker case pinned below. Today this connects to nothing and fails silently for the
   // life of the session, with no error anywhere.
   // @ts-expect-error -- Meta.Display has `workareas-changed`, not `workarea-changed`.
   tracker.connect(global.display, 'workarea-changed', () => {});
@@ -46,6 +47,20 @@ export function assertSignalTrackerChecksItsHandlers(tracker: SignalTracker): vo
   // emitter being unreadable. Without this line the assertion above would also pass if `Meta.Display`
   // carried no usable signal map at all, which is exactly the vacuous-fixture failure mode.
   tracker.connect(global.display, 'workareas-changed', () => {});
+
+  // ---------------------------------------------------------------------------------------------------
+  // A GAP, PINNED SO IT CANNOT BE MISTAKEN FOR COVERAGE. `GObject.Object.SignalSignatures` carries
+  // `[key: `notify::${string}`]: (pspec: ParamSpec) => void` at `gobject-2.0.d.ts:3641`, so the map admits
+  // ANY `notify::`-prefixed key and a misspelled one is NOT caught. No `@ts-expect-error`: the whole point
+  // is that this compiles, today, with the signal name misspelled. If @girs ever drops that index
+  // signature this line starts failing, which is the notification to delete it and update the comments.
+  tracker.connect(global.workspace_manager, 'notify::n-worksapces', () => {});
+
+  // The handler's SHAPE is still checked on a `notify::` signal, because the index signature's value type
+  // is a real one. So this repo's two `notify::` sites are shape-checked and not name-checked, which is a
+  // narrower claim than "catches a misspelled signal name" and is the one that is true.
+  // @ts-expect-error -- GJS passes the emitter first, and `Meta.WorkspaceManager` is not a number.
+  tracker.connect(global.workspace_manager, 'notify::n-workspaces', (_pspec: number) => {});
 
   // Wrong argument type on a real signal: `accelerator-activated` is
   // `(display, action: number, device: Clutter.InputDevice, timestamp: number)`.
