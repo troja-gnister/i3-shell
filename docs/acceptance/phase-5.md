@@ -391,13 +391,21 @@ gnome-extensions enable i3-shell@troja
   one).
 - **A floating window moved by command now carries its frame, proportionally.** `move container to
   output`, `move container to workspace N`, a directional `move` across an output edge, `move workspace
-  to output` and a replug all give a floating window a frame on the output its workspace now lives on:
-  the size is unchanged and the centre keeps the same fraction of the work area, which is i3's own
-  `floating_fix_coordinates`. One divergence from i3: the position is clamped so the frame's top-left
+  to output` and a workspace shown on a different output after being parked all give a floating window a
+  frame on the output its workspace now lives on: the size is unchanged and the centre keeps the same
+  fraction of the work area, which is i3's own `floating_fix_coordinates`. Each of those five was
+  confirmed by execution. One divergence from i3: the position is clamped so the frame's top-left
   corner stays inside the destination work area, because i3-shell's destination may be a display you
   cannot see and `move container to output primary` is the documented rescue for that case. A window
   wider or taller than the destination therefore sits at its left or top edge and overhangs the far
   one, at its original size. (Was a Known Limitation through Phase 5; fixed 2026-10-06.)
+- **A replug is NOT one of them**, and the first version of the bullet above wrongly said it was. An
+  output that leaves takes its work area with it, so there is no source rectangle to scale a proportion
+  against and the pass skips the window; by the time the compositor reports the surviving monitor, that
+  monitor and the output showing the workspace agree, so the pass is silent for the same reason it leaves
+  a dragged window alone. Mutter relocates such a frame itself, which is why the window is still visible.
+  Measured, not inferred: with `NARROW` removed from the topology the pass applied nothing, before and
+  after the monitor report. (Task 1 fix round 1, finding I3.)
 - **GNOME's hot corner can swallow the pointer warp.** `workspace N` warps the pointer when the switch
   crosses displays (i3's `mouse_warping output` default, A61). Warping *out of* the top-left corner trips
   Mutter's pressure barrier, which opens the overview and takes the keyboard — mid-walk, from a key you

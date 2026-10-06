@@ -3,7 +3,7 @@ import {descendFocused, leaves, walk, type Con, type MonitorId, type NodeId, typ
 import {effectiveWorkspaceCount, resolveOutputArg, type OutputArg} from './tree/outputs';
 import {layoutWithRects, stackingOrder} from './tree/layout';
 import {cycleWorkspace} from './tree/cycle';
-import {fixFloatingCoordinates, originWithin} from './tree/floating';
+import {fixFloatingCoordinates} from './tree/floating';
 import {RectReconciler} from './runtime/reconcile';
 import {serializeTree, type TreeSnapshot, type WindowSnapshot} from './runtime/snapshot';
 import {decorationPlan, type DecorationPlan} from './runtime/decoration';
@@ -179,6 +179,15 @@ export class Engine {
   private _rowHeight = 0;
   private readonly _borderOverrides = new Map<WindowId, number>();
   private readonly _floatingRects = new Map<WindowId, Rect>();
+  /**
+   * Task 1 fix round 1: the output `_followFloatingFrames` has carried each floating frame TO, kept only
+   * until the compositor reports that monitor for the window. It is what stops a level-triggered pass
+   * from carrying the same frame twice, and it says "already carried", which is the fact that matters.
+   * Geometry cannot say it: a frame straddling an output boundary has its origin on the destination side
+   * before anything has moved it, and a window near the seam between a 1728-wide panel and a 1920-wide
+   * display is the ordinary case, not an exotic one.
+   */
+  private readonly _carriedFloating = new Map<WindowId, MonitorId>();
   /** window -> indexes into Config.rules that have already fired for it. */
   private readonly _firedRules = new Map<WindowId, Set<number>>();
   private readonly _frameReads = new Map<WindowId, {token: number; generation: number | undefined}>();
@@ -1065,9 +1074,13 @@ export class Engine {
    * D6 (`_rehomeFloating` above) is "the frame moved, follow it with the tree": the user drags a window
    * onto another display and its tree membership follows. This is "the tree moved, follow it with the
    * frame", and it is the half that was missing. `move container to output`, `move container to
-   * workspace N`, a directional `move` that crossed an output edge, `move workspace to output`, a
-   * workspace shown on a different output after being parked, and a replug all move a floating window's
-   * workspace without touching its frame. The measured symptom: the window stays drawn on the display it
+   * workspace N`, a directional `move` that crossed an output edge, `move workspace to output` and a
+   * workspace shown on a different output after being parked all move a floating window's workspace
+   * without touching its frame. (A replug is NOT in that list, and was wrongly claimed to be in the first
+   * round: an output that has left takes its work area with it, so there is no source to scale a
+   * proportion against, and the `source === undefined` arm below skips the window. Mutter relocates such a
+   * frame itself, and once it reports the surviving monitor the monitor and the output agree, so this pass
+   * is silent by design -- see the report for why covering it is not worth the state.) The measured symptom: the window stays drawn on the display it
    * left and then appears to VANISH when that display switches away from the workspace it now belongs
    * to. The commit's port calls were `["moveTo:1:0","decorations","decorations"]` -- no rect at all.
    *
@@ -1092,21 +1105,31 @@ export class Engine {
    * - **A fullscreen window is skipped.** Mutter owns a fullscreen window's geometry (main spec 19), and
    *   the layout pass above excludes it for the same reason; writing a rect here would fight the
    *   compositor and could leave the window the size of the output it came from.
-   * - **A rect a command queued in THIS commit is translated, not overwritten.** `_floatingRects` is read
-   *   before `info.rect`, so `move container to output right, move position center` centres the window on
-   *   the output it moved TO: `move position center` resolves `center` against the monitor Mutter still
-   *   reports, and this pass carries that answer across with it. Overwriting instead would silently
-   *   discard the user's own second command.
-   * - **A frame already standing in the destination is left alone**, which is what makes a
-   *   level-triggered pass safe to run on every commit. `info.monitor` is the compositor's answer and it
-   *   does not change the instant this writes a rect: moving the frame raises a geometry signal, the
-   *   engine commits again on it, and the monitor it reads is still the old one -- so without this the
-   *   pass would translate the SAME window a second time, and because the result is clamped each pass
-   *   drags it further into the destination's far corner. Measured before this guard existed: commit one
-   *   wrote x=2780, correctly, and the next wrote x=3000, the clamp's limit. `originWithin` is exactly
-   *   `fixFloatingCoordinates`'s postcondition, so one application is a fixed point. It is an addition to
-   *   the monitor test and not a replacement for it: on its own it would also yank back a window the user
-   *   deliberately parked half off the edge of its own output, every commit, forever.
+   * - **A rect already in `_floatingRects` is translated, not overwritten** -- `this._floatingRects.get(id)
+   *   ?? info.rect`. This is a defensive composition invariant with NO caller today and it is not pinned by
+   *   any test: every command drains `_floatingRects` through its own `commit()` before the next one runs,
+   *   so the map is empty whenever this pass reads it (measured, including from a `for_window` rule whose
+   *   commands run inside a drain). It is the correct read order for a map this pass itself writes, and if
+   *   a later task ever queues a rect and re-homes in one commit, composing is right and clobbering would
+   *   silently discard the user's own command. Round 1 justified it with `move container to output right,
+   *   move position center`; that sequence is REFUSED by the engine, because `move position` reads the
+   *   selection of the focused output's workspace and the move has just carried the window off it.
+   * - **A frame this pass has already carried to that output is left alone**, which is what makes a
+   *   level-triggered pass safe to run on every commit. Writing the frame raises a geometry signal the
+   *   engine commits on, and the compositor MAY not report the window's new monitor by then -- the fake
+   *   never does, and whether real Mutter does is unproven here, since nothing in this repo has observed
+   *   it natively (`Meta.Window` recomputes its monitor on a move, which is an inference about Mutter, not
+   *   a measurement). Without the record the pass would therefore translate the SAME window again on that
+   *   next commit, and because the result is clamped each pass drags it further into the destination's far
+   *   corner: measured, commit one wrote x=2780 and the next x=3000, the clamp's limit. `_carriedFloating`
+   *   is cleared the moment the compositor does report that monitor, and in `_forget`, so the suppression
+   *   lasts exactly as long as the uncertainty. It keys on "already carried" and NOT on where the frame
+   *   happens to be: round 1 asked `originWithin(current, destination)` instead, and a frame straddling
+   *   the boundary -- 400px wide at x=1900, which Mutter hands to the output on the right -- then got no
+   *   rect at all on `move container to output left`, leaving the window drawn on the display it was told
+   *   to leave. That is the defect this pass exists to fix, so the key had to be the fact and not a proxy.
+   * - It is an addition to the monitor test and not a replacement for it: the monitor test is what leaves
+   *   a window the user is mid-drag alone.
    */
   private _followFloatingFrames(tree: Tree, topology: Topology): void {
     // Shaped like the layout loop in `_layoutAndPublish`, deliberately and line for line: over
@@ -1120,14 +1143,19 @@ export class Engine {
       const destination = topology.workAreas.get(output.id)!;
       for (const id of tree.workspace(index).floating) {
         const info = this._windows.get(id);
-        if (!info || info.monitor === null || info.monitor === output.id || info.fullscreen) continue;
+        if (!info || info.monitor === null) continue;
+        // The compositor has confirmed the carry: the record has done its work and must go, or it would
+        // suppress the next genuine carry back to that same output.
+        if (this._carriedFloating.get(id) === info.monitor) this._carriedFloating.delete(id);
+        if (info.monitor === output.id || info.fullscreen) continue;
+        if (this._carriedFloating.get(id) === output.id) continue;
         // Reachable, unlike the two above: the compositor can name a monitor that has already left the
         // topology, and there is then no source work area to scale the frame against.
         const source = topology.workAreas.get(info.monitor);
         if (source === undefined) continue;
-        const current = this._floatingRects.get(id) ?? info.rect;
-        if (originWithin(current, destination)) continue;
-        this._floatingRects.set(id, fixFloatingCoordinates(current, source, destination));
+        this._floatingRects.set(id, fixFloatingCoordinates(this._floatingRects.get(id) ?? info.rect,
+          source, destination));
+        this._carriedFloating.set(id, output.id);
       }
     }
   }
@@ -1142,6 +1170,7 @@ export class Engine {
     this._unmaximizeAttempts.delete(id);
     this._forced.delete(id);
     this._floatingRects.delete(id);
+    this._carriedFloating.delete(id);
     this._borderOverrides.delete(id);
     this._firedRules.delete(id);
     this._reconciler.forget(id);

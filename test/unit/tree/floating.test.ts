@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {fixFloatingCoordinates, originWithin} from '../../../src/tree/floating';
+import {fixFloatingCoordinates} from '../../../src/tree/floating';
 
 /**
  * i3's own rule (src/floating.c, floating_fix_coordinates): a floating window that changes output keeps
@@ -52,55 +52,5 @@ describe('fixFloatingCoordinates', () => {
     const moved = fixFloatingCoordinates(
       {x: 0, y: 0, width: 200, height: 100}, {x: 0, y: 0, width: 0, height: 0}, NARROW);
     expect(moved).toEqual({x: 2460, y: 310, width: 200, height: 100});
-  });
-});
-
-/**
- * `originWithin` is the idempotency test `Engine._followFloatingFrames` needs: the pass runs on every
- * commit, and the compositor does not report the window's new monitor until some later one, so without a
- * way to recognise a frame it has ALREADY translated it would translate it again on each commit in
- * between -- and because the result is clamped, each pass drags the window further into the destination's
- * far corner. (Measured, before this existed: the first commit wrote the right rect, x=2780, and the very
- * next one wrote x=3000, the clamp's limit.)
- */
-describe('originWithin', () => {
-  const WIDE = {x: 0, y: 0, width: 1920, height: 1080};
-  const NARROW = {x: 1920, y: 0, width: 1280, height: 720};
-
-  it('is false for a frame still sitting on the output its workspace left', () => {
-    expect(originWithin({x: 1340, y: 490, width: 200, height: 100}, NARROW)).toBe(false);
-  });
-
-  it('is true for every frame fixFloatingCoordinates produces, which is what makes the pass a fixed point', () => {
-    // Four sources, because the postcondition has to hold for all of them or the engine pass translates
-    // some window forever: one ordinary, one in the far corner (pinned by the upper clamp), one the
-    // compositor reports OUTSIDE its own work area -- a window dragged off the edge, which gives a
-    // fraction above 1 -- and one larger than the destination (pinned by the lower clamp).
-    for (const source of [{x: 1340, y: 490, width: 200, height: 100},
-      {x: 1724, y: 1000, width: 400, height: 200},
-      {x: 5000, y: 3000, width: 200, height: 100},
-      {x: 100, y: 100, width: 4000, height: 3000}]) {
-      const moved = fixFloatingCoordinates(source, WIDE, NARROW);
-      expect(originWithin(moved, NARROW), JSON.stringify({source, moved})).toBe(true);
-    }
-  });
-
-  it('holds as a postcondition even for a window larger than the destination on both axes', () => {
-    // The case the clamp exists for, and the one an `originWithin` using the window's far edge or its
-    // centre would get wrong -- leaving the pass re-translating an oversized window forever.
-    const moved = fixFloatingCoordinates({x: 100, y: 100, width: 4000, height: 3000}, WIDE, NARROW);
-    expect(originWithin(moved, NARROW)).toBe(true);
-  });
-
-  it('is false for a frame straddling the boundary from the output it is leaving', () => {
-    // A window the compositor has already handed to NARROW but whose corner is still over WIDE: not yet
-    // translated by this rule, which is what lets the monitor guard rather than this one decide it.
-    expect(originWithin({x: 1850, y: 100, width: 200, height: 100}, NARROW)).toBe(false);
-  });
-
-  it('is independent per axis', () => {
-    const TALL = {x: 3200, y: 0, width: 1024, height: 1280};
-    expect(originWithin({x: 3300, y: 2000, width: 200, height: 100}, TALL)).toBe(false);
-    expect(originWithin({x: 3300, y: 200, width: 200, height: 100}, TALL)).toBe(true);
   });
 });

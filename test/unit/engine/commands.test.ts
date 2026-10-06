@@ -1344,25 +1344,29 @@ describe('a floating window moved by command follows the tree with its frame', (
     f.flush();
     f.applied.length = 0;
 
-    // The workspace is moved to output 1 first, and only then does the compositor report the window on a
-    // monitor that is gone, with a frame back over output 0 -- because Mutter relocates a window off a
-    // display that has just left. Both halves are needed to reach the source lookup at all: with the
-    // workspace still on output 0 the frame is already inside the destination and the pass stops one line
-    // earlier, which is how the first draft of this test passed whether the guard was there or not.
-    f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1);
+    // The window reaches output 1 by a DRAG, so D6 re-homes the tree and this pass has carried nothing --
+    // and only then does the compositor name a monitor that is gone. Both halves are needed to reach the
+    // source lookup at all: a window this pass had carried to output 1 would be held by its carry record
+    // one line earlier (and in fix round 1, with the geometric guard, a frame already inside the
+    // destination stopped it one line earlier still -- which is how the first draft of this test passed
+    // whether the guard was there or not).
+    f.change(1, {monitor: 1, rect: {x: 2000, y: 100, width: 200, height: 100}}, 'frame');
+    f.flush();
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
     f.applied.length = 0;
-    f.change(1, {monitor: 99, rect: {x: 100, y: 100, width: 200, height: 100}}, 'frame');
+
+    f.change(1, {monitor: 99}, 'frame');
     f.flush();
     expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
     expect(f.appliedRects().get(1)).toBeUndefined();
   });
 
   it('translates once, and not again on each commit that follows while Mutter still reports the old monitor', () => {
-    // The pass is level-triggered and runs on every commit, while `info.monitor` only catches up some
-    // commits later -- the engine's own geometry write raises a signal it commits on, with the monitor
-    // still stale. Without the already-in-the-destination guard the second pass re-translated the frame
-    // it had just moved and the clamp pinned it at x=3000 instead of 2780, so the window crept into the
-    // destination's far corner by itself.
+    // The pass is level-triggered and runs on every commit, while the compositor may not report the
+    // window's new monitor until a later one -- the engine's own geometry write raises a signal it commits
+    // on, and this fake never updates `monitor` at all. Without the carry record the second pass
+    // re-translated the frame it had just moved and the clamp pinned it at x=3000 instead of 2780, so the
+    // window crept into the destination's far corner by itself.
     const f = threeOutputs();
     f.engine.start();
     f.mapOn(0, 1, floatingOnWide);
@@ -1379,5 +1383,81 @@ describe('a floating window moved by command follows the tree with its frame', (
     f.flush();
     expect(f.windows.get(1)!.monitor).toBe(0);
     expect(f.appliedRects().get(1)).toBeUndefined();
+  });
+
+  it('carries a frame that straddles the boundary with its corner already over the destination', () => {
+    // Fix round 1, I1. The window the user has just dragged to the seam: 400 wide at x=1900, so 20px over
+    // WIDE and 380 over NARROW, which is why the compositor hands it to output 1 and D6 re-homes the tree
+    // there. Its top-left corner is now over NARROW while the window is NOT the one this pass carried, so
+    // a guard keyed on GEOMETRY mistook it for a frame already carried and wrote nothing at all on the
+    // move below -- the original defect, in the one geometry a 1728-wide panel beside a 1920-wide display
+    // makes routine. Keyed on "already carried" there is no such false negative.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.change(1, {monitor: 1, rect: {x: 1900, y: 100, width: 400, height: 200}}, 'frame');
+    f.flush();
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    f.applied.length = 0;
+
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'left'}], 1))
+      .toBe('move container to output');
+    expect(f.tree().location(1)).toEqual({workspace: 0, output: 0, floating: true});
+    // Centre x = 2100, which is 14.0625% across NARROW; the same fraction of WIDE is 270, less half the
+    // width = 70. Centre y = 200, 27.7...% of 720; the same fraction of 1080 is 300, less 100 = 200.
+    expect(f.appliedRects().get(1)).toEqual({x: 70, y: 200, width: 400, height: 200});
+  });
+
+  it('drops the carry record once the compositor confirms it, so a later move across carries again', () => {
+    // The walk: command the window across (carried, record held), the compositor catches up, the user
+    // drags it back by hand (D6 moves the tree, nothing carried), then commands it across again. If the
+    // record were never dropped it would still name output 1 and would suppress that second carry, and the
+    // window would stay drawn on the display it was told to leave -- the original defect, once per window.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1);
+    expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
+
+    // The compositor confirms the carry: the record has done its work.
+    f.change(1, {monitor: 1, rect: {x: 2780, y: 310, width: 200, height: 100}}, 'frame');
+    f.flush();
+    // Dragged back to output 0 by hand. D6 re-homes the tree; this pass carries nothing.
+    f.change(1, {monitor: 0, rect: {x: 1340, y: 490, width: 200, height: 100}}, 'frame');
+    f.flush();
+    expect(f.tree().location(1)).toEqual({workspace: 0, output: 0, floating: true});
+    // The hand that dragged it also focused it; the first command left the selection behind on output 0's
+    // workspace, so without this the command below has nothing to act on ("nothing moved").
+    f.focus(1);
+    f.flush();
+    f.applied.length = 0;
+
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 2))
+      .toBe('move container to output');
+    expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
+  });
+
+  it('does not let a carry record outlive the window it was kept for', () => {
+    // The record suppresses a second carry to the same output while the compositor has not confirmed the
+    // first. If `_forget` did not drop it, the next window to be given this id would inherit the
+    // suppression and get no frame at all -- the defect again, for one window, with no way to recover.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1);
+    expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
+
+    f.remove(1);
+    f.flush();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 2))
+      .toBe('move container to output');
+    expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
   });
 });
