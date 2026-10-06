@@ -30,7 +30,8 @@
 
 SHUTDOWN_MARKER='--- i3-shell harness: gnome-shell shutdown begins ---'
 
-# Exactly one upstream Mutter assertion is excluded, by exact text, in BOTH scopes. The suite
+# THREE upstream Mutter assertions are excluded, by exact text, in BOTH scopes: this one, and the
+# hotplug pair after it. This one first. The suite
 # deliberately maps a window fullscreen (phase2-checks.py scenario_fullscreen_at_map) and mutter 50.5
 # raises such a window before it is in the stack: xdg_toplevel.set_fullscreen ->
 # meta_window_make_fullscreen -> meta_window_make_fullscreen_internal -> meta_window_raise ->
@@ -40,6 +41,39 @@ SHUTDOWN_MARKER='--- i3-shell harness: gnome-shell shutdown begins ---'
 # a fullscreen window mapped alone does not produce it. Its presence is always reported.
 # Delete this filter when mutter fixes it; the scenario still passes without it.
 UPSTREAM_STACK_ASSERTION="meta_window_set_stack_position_no_sync: assertion 'window->stack_position >= 0' failed"
+
+# TWO MORE upstream Mutter assertions, excluded by exact text in BOTH scopes. phase5-checks.py --hotplug
+# removes an output and plugs it back in, and Mutter logs this pair -- twice, inside one millisecond --
+# while every scenario assertion around it passes, including the workspace going home to the second
+# output and keeping its children and percentages.
+#
+# WHY THESE ARE GNOME'S AND NOT OURS, measured rather than argued. src/shell/geometry.ts holds the only
+# call site in this project that reaches any Mutter work-area or logical-monitor API (grepped over src/
+# for work_area|workArea|get_monitor_geometry|logical_monitor: one hit). That call site was instrumented
+# to log the monitor number it passes and the live get_logical_monitors().length on every call, and the
+# hotplug scenario was run: 106 probe lines, every one with index < liveLogicalCount, and our FIRST
+# work-area call of the reconfiguration landed 39 ms AFTER the criticals were already in the log. So the
+# caller is not this extension; it is GNOME's own hotplug handling, reacting to the unplug before our
+# monitors-changed handler runs. What exactly it was doing there is not established -- relocating the two
+# windows that were on the removed output is the plausible guess, and it stays a guess.
+#
+# THE COST, stated rather than hidden. `meta_workspace_get_work_area_for_monitor: assertion
+# 'logical_monitor != NULL' failed` is also the exact text a bad call of OURS would print, so this
+# exclusion blinds the gate to that. The replacement for the lost detection is readTopology's
+# `index >= logicalCount` guard in src/shell/geometryTopology.ts, which rejects a monitor number Mutter's
+# logical-monitor list does not have BEFORE `workArea` is called with it, plus the unit test that pins it:
+# "never asks Mutter for the work area of a logical monitor number it no longer has" in
+# test/unit/shell/geometryTopology.test.ts, which asserts the number never reaches Mutter at all.
+#
+# FIXED STRINGS, one `grep -vF` each, never `grep -vE`. Both texts contain ERE metacharacters --
+# `(unsigned int)` and `(manager->logical_monitors)` -- and as an ERE those parentheses are groups, so the
+# pattern would also match lines without them: more than the one text each allowance covers, which is the
+# one error this file cannot afford. criticals-selftest.sh pins it with an ERE-lookalike line that must
+# still be reported. Their presence is always reported, via upstream_hotplug_notes below, so the
+# allowance cannot quietly stop being needed. Delete both filters when mutter fixes this; the scenario
+# passes without them -- it is only the gate that fails.
+UPSTREAM_HOTPLUG_LOGICAL_MONITOR="meta_monitor_manager_get_logical_monitor_from_number: assertion '(unsigned int) number < g_list_length (manager->logical_monitors)' failed"
+UPSTREAM_HOTPLUG_WORK_AREA="meta_workspace_get_work_area_for_monitor: assertion 'logical_monitor != NULL' failed"
 
 # ALLOWED AFTER SHUTDOWN ONLY, each by the name of a GNOME-OWNED object.
 #
@@ -82,14 +116,18 @@ _after_shutdown() {
   awk -v marker="$SHUTDOWN_MARKER" 'seen { print } index($0, marker) { seen = 1 }' "$1"
 }
 
-# Every critical on stdin, less the one always-excluded upstream assertion.
+# Every critical on stdin, less the three always-excluded upstream assertions.
 # grep -E, not rg: a missing ripgrep exits 127, the condition reads false and the gate would pass
-# silently. Both patterns are plain ERE.
+# silently. The one ERE here is the subsystem alternation, which is plain ERE; the three exclusions are
+# matched as fixed strings, one -F each, because two of those texts contain ERE metacharacters.
 _critical_lines() {
-  grep -E '(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' | grep -vF "$UPSTREAM_STACK_ASSERTION"
+  grep -E '(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' |
+    grep -vF "$UPSTREAM_STACK_ASSERTION" |
+    grep -vF "$UPSTREAM_HOTPLUG_LOGICAL_MONITOR" |
+    grep -vF "$UPSTREAM_HOTPLUG_WORK_AREA"
 }
 
-# Fatal criticals from the session proper. Nothing beyond the upstream assertion is allowed.
+# Fatal criticals from the session proper. Nothing beyond the three upstream assertions is allowed.
 session_criticals() {
   [[ -f "$1" ]] || return 0
   _before_shutdown "$1" | _critical_lines || true
@@ -108,4 +146,15 @@ allowed_shutdown_notes() {
   [[ -f "$1" ]] || return 0
   _after_shutdown "$1" | _critical_lines |
     grep -E "$GNOME_DISPOSED_WIDGETS|$GNOME_DEFERRED_WORK|$GC_SWEEPING" || true
+}
+
+# The excluded hotplug pair, whenever it actually appeared, so that allowance is reported too. Unlike the
+# teardown notes this reads the WHOLE log and not just one scope, because the pair is logged during the
+# session, before the marker -- which is exactly where nothing else is excused. inside.sh prints it; it
+# lives here so criticals-selftest.sh can prove the note fires without a session. -F with two -e
+# patterns, for the same reason the exclusions use -F.
+upstream_hotplug_notes() {
+  [[ -f "$1" ]] || return 0
+  grep -E '(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' "$1" |
+    grep -F -e "$UPSTREAM_HOTPLUG_LOGICAL_MONITOR" -e "$UPSTREAM_HOTPLUG_WORK_AREA" || true
 }

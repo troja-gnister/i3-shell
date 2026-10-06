@@ -106,6 +106,55 @@ check "inside.sh opens the shell log in append mode, or the marker gets overwrit
 check 'inside.sh never truncates the shell log on the gnome-shell redirect' \
   '0' "$(grep -cF 'gnome-shell "${ARGS[@]}" >"$LOG" 2>&1 &' "$ROOT/test/integration/inside.sh")"
 
+# 11. THE HOTPLUG EXCLUSION. `phase5-checks.py --hotplug` makes Mutter log this pair, twice in one
+#     millisecond, while every scenario assertion passes. Measurement attributes it to GNOME's own
+#     hotplug handling and not to this extension -- the full accounting is in criticals.sh. These two
+#     texts are excluded in BOTH scopes, so both halves of the split have to be checked.
+HOTPLUG_NUMBER="libmutter-CRITICAL **: 10:00:00.006: meta_monitor_manager_get_logical_monitor_from_number: assertion '(unsigned int) number < g_list_length (manager->logical_monitors)' failed"
+HOTPLUG_WORKAREA="libmutter-CRITICAL **: 10:00:00.007: meta_workspace_get_work_area_for_monitor: assertion 'logical_monitor != NULL' failed"
+# Any OTHER libmutter critical. The exclusion is by exact text, never by subsystem, so this one has to
+# survive the filter in the scope where nothing is excused.
+OTHER_MUTTER="libmutter-CRITICAL **: 10:00:00.008: meta_window_get_frame_rect: assertion 'window != NULL' failed"
+
+hotplug_before=$(log hotplug_before "$HOTPLUG_NUMBER" "$HOTPLUG_WORKAREA" "$SHUTDOWN_MARKER")
+check 'both hotplug assertions are excluded before shutdown' '' "$(session_criticals "$hotplug_before")"
+hotplug_after=$(log hotplug_after "$SHUTDOWN_MARKER" "$HOTPLUG_NUMBER" "$HOTPLUG_WORKAREA")
+check 'both hotplug assertions are excluded after shutdown' '' "$(shutdown_criticals "$hotplug_after")"
+
+# 12. What the exclusion must NOT swallow: a different libmutter critical in the session scope.
+other_before=$(log other_before "$HOTPLUG_NUMBER" "$OTHER_MUTTER" "$SHUTDOWN_MARKER")
+check 'a different libmutter critical is still fatal before shutdown' "$OTHER_MUTTER" \
+  "$(session_criticals "$other_before")"
+other_after=$(log other_after "$SHUTDOWN_MARKER" "$OTHER_MUTTER")
+check 'a different libmutter critical is still fatal after shutdown' "$OTHER_MUTTER" \
+  "$(shutdown_criticals "$other_after")"
+
+# 13. FIXED STRINGS, NOT ERE. Both excluded texts contain `(unsigned int)` and
+#     `(manager->logical_monitors)`, which as an ERE are groups that match the same words WITHOUT their
+#     parentheses. The line below is synthetic -- Mutter does not print it -- and exists for exactly one
+#     purpose: swapping either `grep -vF` in `_critical_lines` for `grep -vE` makes this check fail,
+#     because the filter would then match more than the one text it is allowed to match.
+ERE_LOOKALIKE="libmutter-CRITICAL **: 10:00:00.009: meta_monitor_manager_get_logical_monitor_from_number: assertion 'unsigned int number < g_list_length manager->logical_monitors' failed"
+ere_before=$(log ere_before "$ERE_LOOKALIKE" "$SHUTDOWN_MARKER")
+check 'the exclusion matches the literal text, not it as a regex' "$ERE_LOOKALIKE" \
+  "$(session_criticals "$ere_before")"
+
+# 14. The allowance is REPORTED whenever it is used, so it cannot quietly stop being needed. inside.sh
+#     prints the note from this function; the function lives here so the note is provable without a
+#     session. It reads the whole log, because the pair lands in the session scope.
+check 'the hotplug assertions are reported as a note when present' "$HOTPLUG_NUMBER
+$HOTPLUG_WORKAREA" "$(upstream_hotplug_notes "$hotplug_before")"
+check 'the hotplug note also fires for the pair after shutdown' "$HOTPLUG_NUMBER
+$HOTPLUG_WORKAREA" "$(upstream_hotplug_notes "$hotplug_after")"
+check 'a clean log produces no hotplug note' '' "$(upstream_hotplug_notes "$clean")"
+check 'a different libmutter critical is not reported as the hotplug note' '' \
+  "$(upstream_hotplug_notes "$other_after")"
+check 'a missing log produces no hotplug note' '' "$(upstream_hotplug_notes "$WORK/absent.log")"
+
+# 15. inside.sh must actually print the note. Only the controller can run a session, so pin the call.
+check 'inside.sh reports the hotplug allowance' \
+  '1' "$(grep -cF 'upstream_hotplug_notes "$LOG"' "$ROOT/test/integration/inside.sh")"
+
 if ((failures > 0)); then
   echo "$failures critical-gate assertion(s) failed" >&2
   exit 1

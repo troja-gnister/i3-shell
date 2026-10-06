@@ -43,6 +43,11 @@ cleanup() {
   if [[ -f "$LOG" ]] && grep -qF "$UPSTREAM_STACK_ASSERTION" "$LOG"; then
     echo 'note: known upstream mutter fullscreen-at-map assertion present and allowed (see criticals.sh)' >&2
   fi
+  hotplug=$(upstream_hotplug_notes "$LOG")
+  if [[ -n "$hotplug" ]]; then
+    echo 'note: known upstream mutter hotplug work-area assertions present and allowed (see criticals.sh):' >&2
+    printf '%s\n' "$hotplug" >&2
+  fi
   allowed=$(allowed_shutdown_notes "$LOG")
   if [[ -n "$allowed" ]]; then
     echo 'note: GNOME teardown criticals present and allowed after shutdown (see criticals.sh):' >&2
