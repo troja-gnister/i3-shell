@@ -179,6 +179,54 @@ describe('setTilingEnabled', () => {
     expect(f.calls.indexOf('settings.apply')).toBeLessThan(firstMove);
   });
 
+  it('returns a tree-excluded window from the attic when switched back on, not only the tiled ones', () => {
+    // The mirror of `_flushAttic` on the way back ON, and the founding bug of this project in the one
+    // direction the off switch made routine.
+    //
+    // While tiling is off the user has their own GNOME workspaces back, so index 1 is an ordinary
+    // workspace of theirs and a window can be sitting on it when the toggle goes back on -- the user put
+    // it there, or Mutter did when `restoreAll` changed the count. `settings.apply` then makes index 1 the
+    // attic again, a workspace Mutter refuses to render, and the rebuild rescues every window that ENTERS
+    // THE TREE because `_syncWindow` calls `_parkOrShow` for it. A minimized, sticky or skip-taskbar
+    // window takes the `excludedFromTree` branch, which calls `tree.remove` and nothing else: nothing
+    // moves it, and nothing is left that would. Audible and impossible to find.
+    //
+    // FOUR windows, and the three beside the subject are what make this test fail for one reason only:
+    //   - 2 is an ordinary tiled window in the SAME position (index 1 at the moment of ON). It is rescued
+    //     today, by `_parkOrShow`, so without it this could not tell "the rescue is missing for excluded
+    //     windows" from "the rescue is missing for everything".
+    //   - 4 is skip-taskbar and already LIVE, so a blanket "move every excluded window" would pass the
+    //     subject and fail here: the guard that asks only about a window not already live is pinned too.
+    //   - 1 is `parked()`'s own control, live and in the tree throughout.
+    const f = parked();
+    f.add(3, {skipTaskbar: true});
+    f.add(4, {skipTaskbar: true});
+    f.flush();
+    // Both are evicted from the tree, which is the whole difficulty: a tree walk cannot see either.
+    expect(f.tree().location(3)).toBeNull();
+    expect(f.tree().location(4)).toBeNull();
+
+    f.engine.setTilingEnabled(false);
+    // The engine is paused, so these native reports change nothing -- exactly like the user moving a
+    // window onto their own second workspace with the extension switched off.
+    f.change(2, {workspace: ATTIC_WORKSPACE}, 'workspace');
+    f.change(3, {workspace: ATTIC_WORKSPACE}, 'workspace');
+    expect(f.windows.get(4)!.workspace).toBe(LIVE_WORKSPACE);
+    f.calls.length = 0;
+
+    f.engine.setTilingEnabled(true);
+    // The control first, so one RED run shows both halves: the ordinary window IS rescued today.
+    expect(f.calls).toContain(`moveTo:2:${LIVE_WORKSPACE}`);
+    expect(f.windows.get(2)!.workspace).toBe(LIVE_WORKSPACE);
+    // The window that needs nothing done to it is left alone, as `_flushAttic`'s own skip does.
+    expect(f.calls).not.toContain(`moveTo:4:${LIVE_WORKSPACE}`);
+    // And the subject, which is the one that fails.
+    expect(f.calls).toContain(`moveTo:3:${LIVE_WORKSPACE}`);
+    expect(f.windows.get(3)!.workspace).toBe(LIVE_WORKSPACE);
+    // Still out of the tree: it is rescued as the excluded window it is, not by being tiled.
+    expect(f.tree().location(3)).toBeNull();
+  });
+
   it('is idempotent: switching off twice flushes once', () => {
     const f = parked();
     f.engine.setTilingEnabled(false);

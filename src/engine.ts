@@ -981,11 +981,42 @@ export class Engine {
       // such a window remember whichever workspace happened to be visible when it first appeared and
       // stick to that forever, rather than adopting normally -- onto whatever is current -- the first
       // time it actually becomes eligible for the tree.
-      this._minimized.set(id, this._minimized.get(id) ?? {
+      const remembered = this._minimized.get(id) ?? {
         floating: this._floating(info),
         workspace: existing?.workspace,
-      });
+      };
+      this._minimized.set(id, remembered);
       tree.remove(id);
+      // `_flushAttic`'s mirror, in the other direction: the attic has exactly one way out for a window
+      // the tree cannot see, and this is it.
+      //
+      // `_parkOrShow` returns a window to LIVE only as it ENTERS the tree, and this branch is the one
+      // that keeps it out. So an excluded window sitting on `ATTIC_WORKSPACE` -- a workspace Mutter
+      // refuses to render -- has nothing left that would ever move it: it is audible and impossible to
+      // find, which is the failure this whole project was started to fix. It is reachable on a fresh
+      // `enable()` (the user's own GNOME workspace 2 becomes the attic the moment `settings.apply`
+      // forces the count to two) and the Quick Settings toggle makes it routine, because every OFF hands
+      // the user their workspaces back and every ON takes them away again.
+      //
+      // Gated on `workspace === undefined`, which is NOT a proxy for anything: a remembered workspace
+      // means the window was in the tree when it was evicted, so wherever it is now is where the engine
+      // deliberately put it -- parked because that i3 workspace is hidden -- and `_parkOrShow` will bring
+      // it back when it rejoins. `undefined` means the opposite: it has no workspace to be hidden on at
+      // all (excluded from birth, or re-adopted after the tree was rebuilt), so the attic cannot be where
+      // it belongs and nothing will reconsider. In steady state the condition simply never fires: GNOME
+      // has two workspaces, a window is mapped onto the active one, and the engine never parks a window
+      // it has not first given a workspace.
+      //
+      // Only a window that is not already live is asked about -- matching `_flushAttic`'s and
+      // `_reconcileParking`'s own guard, and here it is termination rather than thrift: Mutter reports
+      // every workspace change back, so a move issued for a window already on LIVE re-enters this branch
+      // through the queued commit that report raises and issues the move again, forever. Dropping this
+      // clause does not fail a test, it hangs the suite.
+      if (remembered.workspace === undefined && info.workspace !== LIVE_WORKSPACE) {
+        if (!this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE))
+          this._ports.log.warn(`could not return window ${id} from the attic; it may stay hidden`);
+        if (this._disposed) return;
+      }
     } else {
       const evicted = this._minimized.get(id);
       if (evicted !== undefined) { this._manualFloating.set(id, evicted.floating); this._minimized.delete(id); }
