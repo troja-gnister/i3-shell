@@ -180,14 +180,20 @@ export class Engine {
   private readonly _borderOverrides = new Map<WindowId, number>();
   private readonly _floatingRects = new Map<WindowId, Rect>();
   /**
-   * Task 1 fix round 1: the output `_followFloatingFrames` has carried each floating frame TO, kept only
-   * until the compositor reports that monitor for the window. It is what stops a level-triggered pass
-   * from carrying the same frame twice, and it says "already carried", which is the fact that matters.
-   * Geometry cannot say it: a frame straddling an output boundary has its origin on the destination side
-   * before anything has moved it, and a window near the seam between a 1728-wide panel and a 1920-wide
-   * display is the ordinary case, not an exotic one.
+   * Task 1: for each floating frame `_followFloatingFrames` has carried, the output it was carried `from`
+   * and the output it was carried `to`. It is what stops a level-triggered pass from carrying the same
+   * frame twice, and it says "already carried", which is the fact that matters. Geometry cannot say it: a
+   * frame straddling an output boundary has its origin on the destination side before anything has moved
+   * it, and a window near the seam between a 1728-wide panel and a 1920-wide display is the ordinary case,
+   * not an exotic one.
+   *
+   * `from` is why the entry has two fields (fix round 2, I5). The record ends on the first report of any
+   * monitor OTHER than `from`, not on a report of `to`: a frame may never be observed at `to` at all -- a
+   * client can refuse the rect, and then the compositor goes on reporting the output the frame started on
+   * -- and keying the end on `to` alone left the suppression in place after the uncertainty had been
+   * resolved by some third output, which silently swallowed the next genuine carry back to `to`.
    */
-  private readonly _carriedFloating = new Map<WindowId, MonitorId>();
+  private readonly _carriedFloating = new Map<WindowId, {from: MonitorId; to: MonitorId}>();
   /** window -> indexes into Config.rules that have already fired for it. */
   private readonly _firedRules = new Map<WindowId, Set<number>>();
   private readonly _frameReads = new Map<WindowId, {token: number; generation: number | undefined}>();
@@ -1121,13 +1127,23 @@ export class Engine {
    *   it natively (`Meta.Window` recomputes its monitor on a move, which is an inference about Mutter, not
    *   a measurement). Without the record the pass would therefore translate the SAME window again on that
    *   next commit, and because the result is clamped each pass drags it further into the destination's far
-   *   corner: measured, commit one wrote x=2780 and the next x=3000, the clamp's limit. `_carriedFloating`
-   *   is cleared the moment the compositor does report that monitor, and in `_forget`, so the suppression
-   *   lasts exactly as long as the uncertainty. It keys on "already carried" and NOT on where the frame
-   *   happens to be: round 1 asked `originWithin(current, destination)` instead, and a frame straddling
-   *   the boundary -- 400px wide at x=1900, which Mutter hands to the output on the right -- then got no
-   *   rect at all on `move container to output left`, leaving the window drawn on the display it was told
-   *   to leave. That is the defect this pass exists to fix, so the key had to be the fact and not a proxy.
+   *   corner: measured, commit one wrote x=2780 and the next x=3000, the clamp's limit. It keys on "already
+   *   carried" and NOT on where the frame happens to be: round 1 asked `originWithin(current, destination)`
+   *   instead, and a frame straddling the boundary -- 400px wide at x=1900, which Mutter hands to the
+   *   output on the right -- then got no rect at all on `move container to output left`, leaving the window
+   *   drawn on the display it was told to leave. That is the defect this pass exists to fix, so the key had
+   *   to be the fact and not a proxy.
+   *
+   *   **Exactly when the suppression ends, and what it still covers that it should not.** It ends on the
+   *   first report of any monitor other than the `from` of the carry, on a carry to a different output, and
+   *   in `_forget`. It does NOT end while the compositor goes on reporting the output the frame was carried
+   *   from, and that is a real residual, not a theoretical one: a client that refuses the rect (the
+   *   README's `stubborn` clients) is reported on `from` indefinitely, and so is a window the user is still
+   *   dragging within `from` when the command lands. In both of those the next carry back to the same
+   *   output is suppressed, so the frame stays where the client left it until the window is carried
+   *   elsewhere or closed. Measured, and written down in `docs/acceptance/phase-5.md` with the rest of this
+   *   task's uncovered cases, because this comment is where a maintainer meets the trade: round 1 claimed
+   *   here that "the suppression lasts exactly as long as the uncertainty", and that was simply false.
    * - It is an addition to the monitor test and not a replacement for it: the monitor test is what leaves
    *   a window the user is mid-drag alone.
    */
@@ -1144,18 +1160,21 @@ export class Engine {
       for (const id of tree.workspace(index).floating) {
         const info = this._windows.get(id);
         if (!info || info.monitor === null) continue;
-        // The compositor has confirmed the carry: the record has done its work and must go, or it would
-        // suppress the next genuine carry back to that same output.
-        if (this._carriedFloating.get(id) === info.monitor) this._carriedFloating.delete(id);
+        // The compositor has moved on from where the carry started -- to the output it was carried to, or
+        // to any other -- so the carry is no longer in doubt and the record must go, or it would suppress
+        // the next genuine carry back to that same output. `!== from`, and not `=== to`, because a frame
+        // the client refused is never reported at `to` at all (fix round 2, I5).
+        if ((this._carriedFloating.get(id)?.from ?? info.monitor) !== info.monitor)
+          this._carriedFloating.delete(id);
         if (info.monitor === output.id || info.fullscreen) continue;
-        if (this._carriedFloating.get(id) === output.id) continue;
+        if (this._carriedFloating.get(id)?.to === output.id) continue;
         // Reachable, unlike the two above: the compositor can name a monitor that has already left the
         // topology, and there is then no source work area to scale the frame against.
         const source = topology.workAreas.get(info.monitor);
         if (source === undefined) continue;
         this._floatingRects.set(id, fixFloatingCoordinates(this._floatingRects.get(id) ?? info.rect,
           source, destination));
-        this._carriedFloating.set(id, output.id);
+        this._carriedFloating.set(id, {from: info.monitor, to: output.id});
       }
     }
   }

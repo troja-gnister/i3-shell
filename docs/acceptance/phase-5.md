@@ -399,6 +399,24 @@ gnome-extensions enable i3-shell@troja
   cannot see and `move container to output primary` is the documented rescue for that case. A window
   wider or taller than the destination therefore sits at its left or top edge and overhangs the far
   one, at its original size. (Was a Known Limitation through Phase 5; fixed 2026-10-06.)
+- **A frame the compositor keeps reporting on the output the carry started from is carried once, and not
+  again.** To avoid carrying the same frame twice (each pass clamping it further into the far corner), the
+  engine remembers the output it carried each floating frame *from* and *to*, and stops suppressing as soon
+  as the compositor reports that window on any output other than the one it started on. Two cases never
+  produce such a report, and in both the window keeps the frame its client left it with until it is carried
+  to a different output or closed. Measured, three outputs, with `move container to output`:
+  - a client that **refuses the rect** (the `stubborn` clients the README names): the carry is written and
+    ignored, the compositor goes on reporting the original output, and a later command back to the same
+    output writes nothing — `APPLIED=[]`, where the same walk with the refusal removed writes
+    `{x: 2070, y: 34}`. (Dragging it anywhere else first *does* clear the record, which is what the
+    `from` half of the record buys and what fix round 2 repaired: before it, any third output left the
+    record stale forever.)
+  - a **command pressed while the window is still being dragged on the output it is leaving**: the carry
+    lands (`applied [[1,{x:395,y:205,…}]]`), the drag's own motions then overwrite the frame, the monitor is
+    reported unchanged throughout, and nothing catches up after release — final state `monitor 1`,
+    `rect {x:1950,…}` (over the right-hand output) with the workspace on the left-hand one. The alternative
+    is to re-carry on every motion, which fights the pointer; i3 leaves a dropped window where it was
+    dropped, so this is a trade and not a pure defect.
 - **A replug is NOT one of them**, and the first version of the bullet above wrongly said it was. An
   output that leaves takes its work area with it, so there is no source rectangle to scale a proportion
   against and the pass skips the window; by the time the compositor reports the surviving monitor, that

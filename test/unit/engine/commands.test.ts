@@ -1439,6 +1439,40 @@ describe('a floating window moved by command follows the tree with its frame', (
     expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
   });
 
+  it('carries again once the compositor reports the frame anywhere other than where it started', () => {
+    // Fix round 2, I5. A client that refuses the frame -- the `stubborn` clients the README names -- never
+    // lets the carry land, so the compositor never reports the output the frame was carried TO. The record
+    // must still end, or it suppresses the next genuine carry back to that output forever: the original
+    // defect, for that window, with no catch-up. It ends on the first report of ANY monitor other than the
+    // one the frame was carried FROM, because that report already proves the frame is no longer where the
+    // carry started -- which is the whole of the uncertainty the record exists to cover.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+
+    // The carry is attempted and refused: a rect is written, the frame does not move, monitor stays 0.
+    f.refuseGeometry = true;
+    f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1);
+    f.refuseGeometry = false;
+    expect(f.windows.get(1)!.rect).toEqual({x: 1340, y: 490, width: 200, height: 100});
+
+    // The user drags it to output 2 by hand. D6 re-homes the tree; the record still names output 1.
+    f.change(1, {monitor: 2, rect: {x: 3300, y: 100, width: 200, height: 100}}, 'frame');
+    f.focus(1);
+    f.flush();
+    expect(f.tree().location(1)).toEqual({workspace: 2, output: 2, floating: true});
+    f.applied.length = 0;
+
+    // And commands it back to output 1 -- the output the stale record names.
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'left'}], 2))
+      .toBe('move container to output');
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    // Centre (3400, 150) is 19.53125% and 11.71875% across TALL; the same fractions of NARROW are 250 and
+    // 84.375, less half the width and height = 2070 and 34.
+    expect(f.appliedRects().get(1)).toEqual({x: 2070, y: 34, width: 200, height: 100});
+  });
+
   it('does not let a carry record outlive the window it was kept for', () => {
     // The record suppresses a second carry to the same output while the compositor has not confirmed the
     // first. If `_forget` did not drop it, the next window to be given this id would inherit the
