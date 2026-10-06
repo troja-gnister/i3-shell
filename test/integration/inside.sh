@@ -26,37 +26,38 @@ stop_process() {
   fi
   wait "$pid" 2>/dev/null || true
 }
-# Exactly one upstream Mutter assertion is excluded, by exact text. The suite
-# deliberately maps a window fullscreen (phase2-checks.py
-# scenario_fullscreen_at_map) and mutter 50.5 raises such a window before it is
-# in the stack: xdg_toplevel.set_fullscreen -> meta_window_make_fullscreen ->
-# meta_window_make_fullscreen_internal -> meta_window_raise -> meta_stack_raise,
-# while meta_window_wayland_is_stackable() is still false because the surface
-# has no buffer yet. That is before any first frame, so before this extension
-# has made a single call against the window. It is characterised rather than
-# ignored: the scenario asserts the complementary prediction, that a fullscreen
-# window mapped alone does not produce it. Its presence is always reported.
-# Delete this filter when mutter fixes it; the scenario still passes without it.
-UPSTREAM_STACK_ASSERTION="meta_window_set_stack_position_no_sync: assertion 'window->stack_position >= 0' failed"
-unexpected_criticals() {
-  [[ -f "$1" ]] || return 0
-  # grep -E, not rg: a missing ripgrep exits 127, the condition reads false and
-  # the gate would pass silently. Both patterns are plain ERE.
-  grep -E '(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' "$1" |
-    grep -vF "$UPSTREAM_STACK_ASSERTION" || true
-}
+# The critical-log gate lives in its own file so `criticals-selftest.sh` can exercise it against synthetic
+# logs with no nested session at all -- which matters, because only the controller runs this harness.
+# shellcheck source=test/integration/criticals.sh
+source "$I3SHELL_ROOT/test/integration/criticals.sh"
 
 cleanup() {
   local status=$?
   trap - EXIT
   # Reap the GTK client before the compositor and private bus go away.
   stop_process "$FIXTURE_PID" fixture
+  # The marker splits the log: everything above it is the session, where nothing new is excused;
+  # everything below it is GNOME tearing its own widgets down. See criticals.sh's header.
+  [[ -f "$LOG" ]] && mark_shutdown "$LOG"
   stop_process "$SHELL_PID" gnome-shell
   if [[ -f "$LOG" ]] && grep -qF "$UPSTREAM_STACK_ASSERTION" "$LOG"; then
-    echo 'note: known upstream mutter fullscreen-at-map assertion present and allowed (see inside.sh)' >&2
+    echo 'note: known upstream mutter fullscreen-at-map assertion present and allowed (see criticals.sh)' >&2
   fi
-  if [[ -n "$(unexpected_criticals "$LOG")" ]]; then
-    echo 'native criticals found in shell.log' >&2
+  allowed=$(allowed_shutdown_notes "$LOG")
+  if [[ -n "$allowed" ]]; then
+    echo 'note: GNOME teardown criticals present and allowed after shutdown (see criticals.sh):' >&2
+    printf '%s\n' "$allowed" >&2
+  fi
+  session=$(session_criticals "$LOG")
+  if [[ -n "$session" ]]; then
+    echo 'native criticals found in shell.log during the session' >&2
+    printf '%s\n' "$session" >&2
+    status=1
+  fi
+  teardown=$(shutdown_criticals "$LOG")
+  if [[ -n "$teardown" ]]; then
+    echo 'unexpected native criticals found in shell.log after shutdown' >&2
+    printf '%s\n' "$teardown" >&2
     status=1
   fi
   if [[ -f "$FIXTURE_LOG" ]] && grep -Eq 'fixture [[:alnum:]]+ failed|(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' "$FIXTURE_LOG"; then
@@ -68,10 +69,17 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# gnome-shell's stdout is opened in APPEND mode, and that is load-bearing for the shutdown marker.
+# cleanup() appends the marker with >>, which writes at EOF, while gnome-shell keeps its own file offset:
+# with a truncating `>` redirect its shutdown criticals land back at the marker's position and overwrite it
+# byte for byte (verified), the marker disappears, and criticals.sh's split silently degrades to "the whole
+# file is the session". The sandbox is a fresh mktemp -d per run, but truncate first anyway so that append
+# never inherits a previous file's contents.
+: >"$LOG"
 if [[ "$I3SHELL_VISIBLE" == 1 ]]; then
-  env -u DISPLAY WAYLAND_DISPLAY="$I3SHELL_PARENT_WAYLAND" gnome-shell "${ARGS[@]}" >"$LOG" 2>&1 &
+  env -u DISPLAY WAYLAND_DISPLAY="$I3SHELL_PARENT_WAYLAND" gnome-shell "${ARGS[@]}" >>"$LOG" 2>&1 &
 else
-  env -u DISPLAY -u WAYLAND_DISPLAY gnome-shell "${ARGS[@]}" >"$LOG" 2>&1 &
+  env -u DISPLAY -u WAYLAND_DISPLAY gnome-shell "${ARGS[@]}" >>"$LOG" 2>&1 &
 fi
 SHELL_PID=$!
 unset I3SHELL_PARENT_WAYLAND DISPLAY

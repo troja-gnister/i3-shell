@@ -15,6 +15,7 @@ restore_release() {
 }
 trap restore_release EXIT
 npm run build:test
+bash test/integration/criticals-selftest.sh
 bash test/integration/nested.sh -- bash test/integration/phase1-checks.sh
 bash test/integration/nested.sh -- python3 test/integration/phase2-checks.py
 bash test/integration/nested.sh --monitor 1920x1080 --monitor 1280x720 -- \
