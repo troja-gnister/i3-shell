@@ -296,7 +296,14 @@ describe('Engine', () => {
   // looking at. See the ruling in docs/superpowers/plans/2026-10-06-cleanup-and-toggle.md, Task 3.
   //
   // The engine cannot see `transient_for` (the adapter reduces it to kind: 'floating'), so "a dialog"
-  // here is a floating window whose Mutter monitor is its parent's. Fixture: the parent is on the
+  // here is a floating window whose Mutter monitor is its parent's.
+  //
+  // BLIND SPOT: these catch a D7 revert or a follow-Mutter's-monitor patch, NOT a real parent-following
+  // one. That patch must add `transientFor` to WindowInfo, and these fixtures never set it, so its new
+  // clause would see null and fall through to D7. Whoever adds `transientFor` must ALSO set it in these
+  // fixtures (parent = window 1) or these tests stay green.
+  //
+  // Fixture: the parent is on the
   // NON-focused output and the dialog's `monitor` names that same output, so "follow the parent" and
   // "follow Mutter's monitor" both answer workspace 1 while "follow the focus" answers workspace 0.
   describe('a transient opens where the user is, the way i3 places one', () => {

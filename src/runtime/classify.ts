@@ -5,8 +5,9 @@ import type {WindowFacts, WindowInfo, WindowKind} from './model';
  *
  * `transient` makes a window FLOAT and nothing else. It does not place the window: a transient joins the
  * FOCUSED workspace like any other new window (see `Engine._adoptionWorkspace`, D7). That is i3's
- * behaviour, measured rather than assumed -- i3 4.25.1's binary uses WM_TRANSIENT_FOR for exactly two
- * things, "This window is transient for another window, setting floating" and
+ * behaviour, measured rather than assumed -- every `transient_for` string in the installed i3 4.25.1
+ * binary was read (i3's source was not available, so this is strong evidence, not absolute proof); it
+ * uses WM_TRANSIENT_FOR for exactly two things, "This window is transient for another window, setting floating" and
  * `con_find_transient_for_window`, which answers `popup_during_fullscreen smart`. There is no
  * parent-following placement rule in i3 and there is none here.
  *
