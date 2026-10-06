@@ -105,6 +105,7 @@ function windowFacts(window: Meta.Window): WindowFacts {
   const [maxKnown, maxWidth, maxHeight] = window.get_max_size();
   return {
     type: windowType(window.get_window_type()),
+    // A boolean, not the parent: nothing places a window by its parent (see classifyWindow's comment).
     transient: window.get_transient_for() !== null,
     attached: window.is_attached_dialog(),
     resizable: isResizable({

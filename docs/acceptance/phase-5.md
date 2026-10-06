@@ -399,6 +399,11 @@ gnome-extensions enable i3-shell@troja
   cannot see and `move container to output primary` is the documented rescue for that case. A window
   wider or taller than the destination therefore sits at its left or top edge and overhangs the far
   one, at its original size. (Was a Known Limitation through Phase 5; fixed 2026-10-06.)
+- **A dialog opens on the workspace you are looking at, not on its parent's.** i3 does the same: it uses
+  `WM_TRANSIENT_FOR` to make the window float and to answer `popup_during_fullscreen`, and places the
+  dialog on the focused workspace like any other new window. So a background application that raises a
+  dialog puts it in front of you rather than on the workspace its main window is parked on. Deliberate,
+  and the opposite would put a modal grab on a window you cannot see.
 - **A frame the compositor keeps reporting on the output the carry started from is carried once, and not
   again.** To avoid carrying the same frame twice (each pass clamping it further into the far corner), the
   engine remembers the output it carried each floating frame *from* and *to*, and stops suppressing as soon
