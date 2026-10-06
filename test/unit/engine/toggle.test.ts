@@ -227,6 +227,22 @@ describe('setTilingEnabled', () => {
     expect(f.tree().location(3)).toBeNull();
   });
 
+  it('warns rather than desyncing when the excluded window refuses to leave the attic', () => {
+    // The twin of the OFF-path refusal test above, for the ON path's rescue. Same sentence deliberately:
+    // it is the same event, and the user reading the journal does not care which switch direction found it.
+    const f = parked();
+    f.add(3, {skipTaskbar: true});
+    f.flush();
+    f.engine.setTilingEnabled(false);
+    f.change(3, {workspace: ATTIC_WORKSPACE}, 'workspace');
+    f.refuseMove(3);
+    f.calls.length = 0;
+
+    f.engine.setTilingEnabled(true);
+    expect(f.calls).toContain('warn:could not return window 3 from the attic; it may stay hidden');
+    expect(f.windows.get(3)!.workspace).toBe(ATTIC_WORKSPACE);
+  });
+
   it('is idempotent: switching off twice flushes once', () => {
     const f = parked();
     f.engine.setTilingEnabled(false);
