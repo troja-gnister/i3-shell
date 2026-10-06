@@ -109,6 +109,66 @@ describe('setTilingEnabled', () => {
     expect(f.calls).toContain('launcher.close');
   });
 
+  it('hands the keyboard to the window that had it when switched off', () => {
+    // Fix round 1, native run. `modalCount == 0` and `grabbed == 0` both passed while the user still could
+    // not type: nothing was HOLDING the keyboard and nothing was receiving it either. With `_paused` set
+    // the engine stops managing focus, the launcher's actor is gone, and nothing hands the keyboard on --
+    // so the first thing the user meets after switching tiling off is a desktop they must click before
+    // they can type. One shot on the way out, then the engine really does stop.
+    const f = parked();
+    f.focus(1);
+    f.calls.length = 0;
+
+    f.engine.setTilingEnabled(false);
+    expect(f.calls).toContain('focus:1');
+  });
+
+  it('hands it to a window on another workspace when the one on screen is empty', () => {
+    // The case the native run was actually in, and the one a bare `_activateSelection()` cannot answer:
+    // the active workspace is empty, so its selection names no window at all -- while every window that
+    // WAS parked is on screen a moment later, because the flush put them all on the live workspace. The
+    // keyboard has to go to one of those, or the user is looking at their windows unable to type into any.
+    const f = parked();
+    expect(f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 3, name: '3'}}], 1))
+      .toBe('moved to workspace 3');
+    expect(f.tree().occupied(f.tree().activeWorkspace)).toBe(false);
+    f.calls.length = 0;
+
+    f.engine.setTilingEnabled(false);
+    expect(f.calls).toContain('focus:2');
+    // AFTER the flush, never before it: activating a window that is still in the attic asks Mutter to
+    // show a workspace no output is showing, which is the opposite of switching tiling off.
+    expect(f.calls.indexOf('focus:2'))
+      .toBeGreaterThan(f.calls.indexOf(`moveTo:2:${LIVE_WORKSPACE}`));
+  });
+
+  it('hands the keyboard over on the way back on only when nothing holds it', () => {
+    // The ON path adopts the compositor's focus rather than pushing its own (`_acceptFocus` of
+    // `windows.focused()`), which is right: while tiling was off the user was clicking windows, and
+    // whatever they left focused is what the rebuild must agree with. The hole is the state where the
+    // answer is "nothing", and then there is no focus to adopt and no command yet to push one.
+    const f = parked();
+    f.engine.setTilingEnabled(false);
+    f.focus(null);
+    f.calls.length = 0;
+
+    f.engine.setTilingEnabled(true);
+    expect(f.calls.filter(call => call.startsWith('focus:')).length).toBeGreaterThan(0);
+  });
+
+  it('does not take the keyboard away from the window the user left focused while off', () => {
+    // The gate's other half, and the reason the ON path is gated where the OFF path is not: the user
+    // spent the paused interval using GNOME normally, and a rebuild that re-asserted the tree's own
+    // selection would yank the keyboard off whatever they had just clicked.
+    const f = parked();
+    f.engine.setTilingEnabled(false);
+    f.focus(2);
+    f.calls.length = 0;
+
+    f.engine.setTilingEnabled(true);
+    expect(f.calls.filter(call => call.startsWith('focus:'))).toEqual([]);
+  });
+
   it('does not restore the workspace count and then re-force it from under the user', () => {
     // Fix round 1, I2: what the paused `commit()` is really for, now that the fake's `restoreAll()` puts
     // GNOME's own `num-workspaces` back the way the real settings port does.

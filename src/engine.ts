@@ -1531,16 +1531,66 @@ export class Engine {
     return true;
   }
 
-  private _activateSelection(timestamp: number): void {
-    const selection = this._tree?.selection();
+  /**
+   * The ONE way this engine pushes focus outward, unchanged in that respect.
+   *
+   * `workspace` defaults to the active one, which is every existing caller and the only shape the
+   * spec's rule describes. It is a parameter at all for `_handOffFocus` below, which has to reach the
+   * selection of a workspace that is not the active one -- and reaching it THROUGH this method is the
+   * point: `_expectedFocus` is maintained in one place, so the D8 suppression cannot be bypassed by a
+   * second route to `windows.activate`.
+   *
+   * Returns whether a window was actually activated, so a caller looking for *some* window to hand the
+   * keyboard to can tell "this workspace had nobody" from "done".
+   */
+  private _activateSelection(timestamp: number, workspace?: number): boolean {
+    const selection = this._tree?.selection(workspace);
     const id = selection?.kind === 'floating' ? selection.window : selection?.kind === 'tiled'
       ? descendFocused(selection.con)?.window : undefined;
     this._expectedFocus.clear();
-    if (id === undefined) return;
+    if (id === undefined) return false;
     this._expectedFocus.add(id);
     const activated = this._ports.windows.activate(id, timestamp);
-    if (this._disposed) return;
+    if (this._disposed) return activated;
     if (!activated) this._expectedFocus.delete(id);
+    return activated;
+  }
+
+  /**
+   * Give the keyboard to a window, once, on the way out of managing focus.
+   *
+   * Fix round 1, from the native run: switching tiling off left NOTHING focused. `modalCount == 0` and
+   * `grabbed == 0` both passed -- nothing was holding the keyboard -- and the user still had to click a
+   * window before they could type, because with `_paused` set the engine stops managing focus, the
+   * launcher's actor is gone, and nothing hands it on. "Nothing is holding it" and "something is
+   * receiving it" are different claims, and only the first was ever true here.
+   *
+   * The order of preference is the order of what the user was looking at:
+   *
+   * 1. the active workspace's own selection -- the window that had focus, i3's own answer;
+   * 2. the selection of each workspace an output is SHOWING, for the case the first one is empty;
+   * 3. the selection of any workspace at all, because by the time this runs the flush has put every
+   *    parked window on the live GNOME workspace, so "not visible" no longer means anything: the user is
+   *    looking at all of them.
+   *
+   * MUST run after `_flushAttic`, and that is not stylistic: activating a window still on
+   * ATTIC_WORKSPACE asks Mutter to show a workspace no output is showing, which is the exact opposite of
+   * what switching off is for.
+   *
+   * It cannot run twice. Its only caller is inside the OFF branch of `setTilingEnabled`, past the
+   * `enabled === !this._paused` early return, so a second OFF never reaches it ("is idempotent:
+   * switching off twice flushes once").
+   *
+   * No window is a legitimate answer -- an empty desktop has nothing to focus -- so it is silent.
+   */
+  private _handOffFocus(): void {
+    const tree = this._tree;
+    if (!tree) return;
+    if (this._activateSelection(0)) return;
+    for (const workspace of [...tree.visible.values(), ...tree.workspaces.keys()]) {
+      if (this._disposed) return;
+      if (this._activateSelection(0, workspace)) return;
+    }
   }
 
   /**
@@ -1772,6 +1822,11 @@ export class Engine {
       this._enterMode('default');
       this._flushAttic();
       if (this._disposed) return;
+      // 4b. Hand the keyboard to a window -- see `_handOffFocus`. After the flush, so the window it
+      // picks is one Mutter will actually render; before the ungrab only because nothing here depends on
+      // the order of those two.
+      this._handOffFocus();
+      if (this._disposed) return;
       this._ports.keys.ungrabAll();
       this._ports.settings.restoreAll();
       return;
@@ -1796,6 +1851,15 @@ export class Engine {
       // behind on the display the user told it to leave -- and a fresh enable starts with none.
       this._carriedFloating.clear();
     });
+    if (this._disposed) return;
+    // The ON path ADOPTS the compositor's focus rather than pushing its own -- `_layoutAndPublish`'s
+    // `isNew` branch ends in `_acceptFocus(windows.focused())` -- and that is right: the user spent the
+    // paused interval clicking windows, and whatever they left focused is what the rebuilt tree has to
+    // agree with. Re-asserting the tree's own selection here would take the keyboard off it.
+    //
+    // The hole is the state where the answer is "nothing": no focus to adopt, and no command yet to push
+    // one. `commit()` above is synchronous, so the tree the hand-off reads has already been rebuilt.
+    if (this._ports.windows.focused() === null) this._handOffFocus();
   }
 
   /**

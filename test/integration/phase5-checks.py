@@ -1628,6 +1628,41 @@ def switch_point(box, label):
     return (box['x'] + box['width'] // 2, box['y'] + box['height'] // 2)
 
 
+def typing_reaches_someone(key, titles, label):
+    """A bare key must arrive in SOME client's Entry, which is a DIFFERENT claim from "no grab survives".
+
+    Fix round 1. `modalCount == 0` and `grabbed == 0` prove nothing is HOLDING the keyboard, and both
+    passed natively while this failed: being received also requires that some window has focus, and with
+    the engine paused nothing handed it over -- the user had to click a window before they could type.
+    Asserting the two together made a focus defect report as a grab defect, so they are separate
+    assertions now and this one is named for what it tests.
+
+    Reports which window received it, because when it fails "which one, and what is it" is the whole
+    question; the context dumps every entry, both grab counts and Mutter's own facts for every window.
+    """
+    before = {name: entry_text(name) for name in titles}
+    press(key)
+    deadline = time.monotonic() + 10
+    seen = dict(before)
+    while time.monotonic() < deadline:
+        seen = {name: entry_text(name) for name in titles}
+        got = [name for name in titles if seen[name] == before[name] + key]
+        if got:
+            ok(label, f'{key!r} reached {got[0]}')
+            return got[0]
+        time.sleep(0.1)
+    fail(label, {'note': f'one of {sorted(titles)} receives {key!r}', 'before': before},
+         {'after': seen},
+         lambda: {'modalCount': mutter_reading()['modalCount'], 'grabbed': state()['grabbed'],
+                  'launcher': launcher_box(), 'toggle': toggle_box(),
+                  'byWorkspace': native_workspaces(),
+                  'windows': [{'title': w['title'], 'workspace': w['workspace'],
+                               'minimized': w['minimized'], 'skipTaskbar': w['skipTaskbar']}
+                              for w in mutter_reading()['windows']],
+                  'note': 'Engine._handOffFocus must give the keyboard to a live window at the end of '
+                          'the OFF path, after the flush; while paused nothing else will'})
+
+
 def create_child(title, parent, kind, label):
     """A fixture window with a parent: the only window this harness can produce that Mutter marks
     skip-taskbar.
@@ -1780,11 +1815,13 @@ def scenario_toggle_flushes_the_attic(primary_id, second_id):
            lambda: mutter_reading()['modalCount'], timeout=15, context=launcher_box)
     expect('toggle: the engine holds no accelerator', 0, lambda: state()['grabbed'], timeout=15,
            context=state)
-    if not fixture('Action', '(ss)', (CONTROL_WINDOW, 'present'))[0]:
-        fail('toggle: the fixture presented the control window',
-             {'title': CONTROL_WINDOW, 'ok': True}, {'title': CONTROL_WINDOW, 'ok': False})
-    typing_reaches('q', CONTROL_WINDOW, [],
-                   'toggle: a bare key reaches a client again, so nothing is holding the keyboard')
+
+    step('toggle: and the keyboard was handed on, so the user can type without clicking first')
+    # Split from the three assertions above (fix round 1): all of them passed natively while this one
+    # failed, which is the whole reason it is its own step. Nothing was holding the keyboard AND nothing
+    # was receiving it -- `Engine._handOffFocus` is what closes the second half.
+    typing_reaches_someone('q', TOGGLE_WINDOWS,
+                           'toggle: a bare key reaches a client, so switching OFF handed the keyboard on')
 
     step('toggle: the visible switch followed the programmatic change')
     expect('toggle: the switch shows OFF and the adapter agrees with the engine', (False, False),
@@ -1850,6 +1887,11 @@ def scenario_toggle_flushes_the_attic(primary_id, second_id):
            context=native_workspaces)
     expect('toggle: every fixture is live', {title: LIVE_WORKSPACE for title in TOGGLE_WINDOWS},
            fixture_workspaces, timeout=25, context=native_workspaces)
+    # The focus mirror. The ON path adopts the compositor's focus instead of pushing its own (see
+    # `Engine.setTilingEnabled`), so what it must not do is LOSE it: OFF handed the keyboard to a window,
+    # and switching back on has to leave the user still able to type.
+    typing_reaches_someone('w', TOGGLE_WINDOWS,
+                           'toggle: a bare key still reaches a client after the switch back ON')
 
     step('toggle: switching ON again is a no-op too')
     twice = set_tiling(True, 'toggle')
