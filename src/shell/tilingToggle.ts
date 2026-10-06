@@ -74,6 +74,36 @@ export class TilingToggle {
     if (this._toggle.checked !== enabled) this._toggle.checked = enabled;
   }
 
+  /**
+   * What ST has, for the native scenarios: the widget's own `checked`, this class's record of the
+   * engine's answer, and the on-screen box a real click has to land in.
+   *
+   * `checked` and `enabled` are reported SEPARATELY on purpose. They are the two halves of the one
+   * assumption this class is built to survive -- whether GNOME flips `checked` before or after it emits
+   * `clicked` -- so a native failure that shows them disagreeing names which half broke, where a single
+   * "is it on" would only say that something did.
+   *
+   * The box is in stage coordinates (`get_transformed_position`), which is what the compositor wants
+   * back when it is asked to put a pointer there; `width`/`height` are 0 and `mapped` false while the
+   * Quick Settings menu is shut, which is why `Debug.QuickSettingsMenu` exists.
+   *
+   * Reads nothing at all once the shell has destroyed the panel: every member access on a disposed
+   * actor is a GJS critical, and the nested harness fails the run on one.
+   */
+  debugState(): {checked: boolean; enabled: boolean; mapped: boolean;
+    x: number; y: number; width: number; height: number} {
+    if (this._destroyed)
+      return {checked: false, enabled: this._enabled, mapped: false, x: -1, y: -1, width: -1, height: -1};
+    const [x, y] = this._toggle.get_transformed_position();
+    const [width, height] = this._toggle.get_transformed_size();
+    return {
+      checked: this._toggle.checked,
+      enabled: this._enabled,
+      mapped: this._toggle.mapped,
+      x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height),
+    };
+  }
+
   destroy(): void {
     if (this._destroyed) return;
     this._toggle.destroy();

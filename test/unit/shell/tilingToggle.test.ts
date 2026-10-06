@@ -14,6 +14,8 @@ const CLICK_ORDERS = ['no-flip', 'flip-then-emit', 'emit-then-flip'] as const;
 
 interface ToggleLike {
   setChecked(enabled: boolean): void;
+  debugState(): {checked: boolean; enabled: boolean; mapped: boolean;
+    x: number; y: number; width: number; height: number};
   destroy(): void;
 }
 
@@ -21,9 +23,12 @@ interface FakeToggleActor {
   checked: boolean;
   checkedWrites: number;
   destroyCount: number;
+  mapped: boolean;
   destroy(): void;
   emit(signal: string): void;
   click(order?: ClickOrder): void;
+  set_position(x: number, y: number): void;
+  set_size(width: number, height: number): void;
 }
 
 // Loaded at runtime against the doubles above, not statically imported, for the reason
@@ -157,6 +162,47 @@ describe('TilingToggle', () => {
 
     toggle.setChecked(false);
     toggle.destroy();
+    expect(criticals).toEqual([]);
+  });
+
+  it('debugState reports the WIDGET\'s checked beside the engine\'s, and the box a click needs', () => {
+    // The two are reported separately because they are the two halves of the one assumption this class
+    // exists to survive, and the native scenario needs to tell them apart: here the widget is driven to
+    // the wrong answer directly, as GNOME would if it flipped `checked` itself, and `debugState` must
+    // still report the widget's value rather than this class's. A `checked` taken from `_enabled` would
+    // make the native snap-back assertion compare the engine with itself and pass with the switch stuck.
+    const toggle = new TilingToggle(() => {});
+    const a = actor();
+    a.set_position(1540, 120);
+    a.set_size(180, 64);
+
+    a.checked = false;
+    expect(toggle.debugState()).toEqual({checked: false, enabled: true, mapped: true,
+      x: 1540, y: 120, width: 180, height: 64});
+    toggle.setChecked(false);
+    expect(toggle.debugState()).toEqual({checked: false, enabled: false, mapped: true,
+      x: 1540, y: 120, width: 180, height: 64});
+    expect(criticals).toEqual([]);
+  });
+
+  it('debugState reports an unmapped widget, which is what a shut Quick Settings menu leaves', () => {
+    // A quick toggle is unmapped while the menu is closed, and a click at its box would then land on
+    // whatever is really there. The native scenario opens the menu and waits for `mapped` before
+    // clicking, so this value has to be the widget's own.
+    const toggle = new TilingToggle(() => {});
+    actor().mapped = false;
+    expect(toggle.debugState().mapped).toBe(false);
+  });
+
+  it('debugState touches no member of an actor the shell has already destroyed', () => {
+    // src/shell/indicator.ts's precedent again: a read of a disposed actor is a GJS critical, and the
+    // nested harness fails the whole run on one -- so a debug reader may not be the thing that trips it.
+    const toggle = new TilingToggle(() => {});
+    toggle.setChecked(false);
+    actor().destroy();
+
+    expect(toggle.debugState()).toEqual({checked: false, enabled: false, mapped: false,
+      x: -1, y: -1, width: -1, height: -1});
     expect(criticals).toEqual([]);
   });
 

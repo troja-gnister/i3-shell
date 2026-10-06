@@ -107,6 +107,24 @@ export class FakeActor {
     this._height = height;
   }
 
+  /**
+   * Clutter's `mapped`: false for an actor whose parent is hidden, which is every quick-settings item
+   * while the Quick Settings menu is shut. A test that cares sets it directly, since these doubles model
+   * no parent visibility chain.
+   */
+  mapped = true;
+
+  /** Stage coordinates. The doubles have one coordinate space, so this is the last set_position(). */
+  get_transformed_position(): [number, number] {
+    this.touch('get_transformed_position');
+    return [this._x, this._y];
+  }
+
+  get_transformed_size(): [number, number] {
+    this.touch('get_transformed_size');
+    return [this._width, this._height];
+  }
+
   connect(signal: string, callback: Handler): number {
     this.touch('connect');
     const id = this._next++;

@@ -248,16 +248,22 @@ export default class I3ShellExtension extends Extension {
     // its two actors and one teardown route, `destroy()` in disable(); it registers nothing with the
     // SignalTracker, exactly as src/shell/indicator.ts does not.
     //
-    // The second line is not decoration (fix round 1, I3): `TilingToggle` holds no state of its own beyond
-    // what the engine tells it, deliberately, so that nothing depends on what GNOME did to the widget's own
-    // `checked` around the click. This is how the engine's answer gets back -- including when the engine
-    // refuses, in which case the switch snaps back to the truth instead of showing a lie and inverting
-    // every click after it.
-    const toggle = new TilingToggle(enabled => {
+    // `applyTiling`'s second line is not decoration (fix round 1, I3): `TilingToggle` holds no state of its
+    // own beyond what the engine tells it, deliberately, so that nothing depends on what GNOME did to the
+    // widget's own `checked` around the click. That line is how the engine's answer gets back -- including
+    // when the engine refuses, in which case the switch snaps back to the truth instead of showing a lie
+    // and inverting every click after it.
+    const toggle = new TilingToggle(enabled => { applyTiling(enabled); });
+    this._toggle = toggle;
+    // Hoisted (`function`, not `const`) so it can name `toggle` while `toggle`'s own callback names it.
+    // ONE route from "tiling should be `enabled`" to the engine and back to the switch, which the test
+    // build's `Debug.SetTiling` also goes through: a second route that skipped the second line would let
+    // a scenario move the engine while leaving the visible switch free to disagree, and that disagreement
+    // is exactly what inverts every click afterwards.
+    function applyTiling(enabled: boolean): void {
       engine.setTilingEnabled(enabled);
       toggle.setChecked(engine.tilingEnabled);
-    });
-    this._toggle = toggle;
+    }
 
     const session = new SessionWatcher(tracker,
       closing.unlessClosing(() => { engine.onLocked(); }),
@@ -310,7 +316,7 @@ export default class I3ShellExtension extends Extension {
     // first $PATH scan and the first read of every installed .desktop file
     // would otherwise both land on the keystroke the user is waiting on.
     defer(() => catalogue.prime());
-    const debug = __I3SHELL_TEST__ ? new DebugObject(session, engine, launcher) : null;
+    const debug = __I3SHELL_TEST__ ? new DebugObject(session, engine, launcher, toggle, applyTiling) : null;
     this._dbus = new DBusControl(engine, debug, notify);
     log.info(`ready: ${engine.state().grabbed} bindings grabbed, config from ${engine.lastLoad.source} (${engine.lastLoad.path})`);
   }

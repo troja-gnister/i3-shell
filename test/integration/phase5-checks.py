@@ -9,7 +9,11 @@ Mutter does asynchronously, or reports success where Mutter reports nothing at a
   * a work area surviving an unplug is the display server's answer, not the engine's;
   * the pointer is the only evidence the user is on a display whose workspace has no window to focus,
     and a fake pointer crosses an output boundary synchronously where Mutter emits
-    `position-invalidated` on its own schedule.
+    `position-invalidated` on its own schedule;
+  * which GNOME workspace a window is really on is MUTTER's answer and nobody else's. Asking the
+    extension is circular -- `GetWindows` publishes the engine's own cached `info.workspace`, and the
+    attic flush decides what to move by reading that same cache -- so `Debug.MutterWindows` exists and
+    the toggle scenario reads `Meta.Window.get_workspace().index()` through it.
 
 Six of the scenarios are the brief's. Five more are the defects the user hit within minutes of logging
 into the Task 1-16 build, and one more (D8) is the defect they hit on the Phase 5 build itself -- the
@@ -17,15 +21,26 @@ focused output following Mutter's replacement focus off the display they were lo
 them is in exactly that gap; they are named `_defect_` so a reader can tell "this was specified" from
 "this was measured on a real desk". They must never regress.
 
+One more is the Quick Settings tiling toggle (`scenario_toggle_flushes_the_attic`). Switching tiling off
+flushes every parked window out of the attic, and every part of that flush was proven only against a
+fake: a window it misses is one Mutter refuses to render with nothing left running that would ever move
+it -- audible, impossible to find, and produced by this project's own off switch. It is also the only
+place where a real mouse click is injected, because what GNOME 50's `St.Button` does with `checked`
+around its own `clicked` emission is the one assumption `src/shell/tilingToggle.ts` cannot observe from
+inside.
+
 READING FAILURES. Nothing here raises a bare assert. `check`, `expect` and `fail` all print the step
 that was running, what was expected and what was actually observed, because the controller who runs
 this cannot re-run it cheaply. `diagnose()` dumps state, tree, windows, pointer and the shell log tail
 on the way out.
 
 TRUTHS ABOUT THIS ENVIRONMENT, so no assertion here contradicts one:
-  * GNOME holds exactly two native workspaces while the extension is enabled: LIVE_WORKSPACE is always
-    the active one, ATTIC_WORKSPACE holds hidden windows, because Mutter refuses to render a
-    non-active workspace. `GetWindows`'s `workspace` is that NATIVE index; `GetTree`'s workspace
+  * GNOME holds exactly two native workspaces while the extension is enabled AND tiling is switched on:
+    LIVE_WORKSPACE is always the active one, ATTIC_WORKSPACE holds hidden windows, because Mutter
+    refuses to render a non-active workspace. With tiling switched OFF the count is the user's own again
+    (`restoreAll` restores `num-workspaces` and `dynamic-workspaces` both), so no assertion here reads
+    a workspace COUNT while tiling is off -- "nothing is anywhere but LIVE" is the form that stays true
+    either way. `GetWindows`'s `workspace` is that NATIVE index; `GetTree`'s workspace
     `index` is the i3 one. They are never compared with each other.
   * `GetWindows` lists only windows that are in the tree, and publishes no "focused" flag. Which window
     Mutter actually focused is therefore read the only way a client can read it: a bare keypress reaches
@@ -1469,6 +1484,416 @@ def scenario_gesture_runs_its_binding(primary_id, second_id):
 
 
 # --------------------------------------------------------------------------
+# The Quick Settings tiling toggle, read from Mutter and not from the engine
+# --------------------------------------------------------------------------
+
+# src/engine.ts, _flushAttic and the excluded-window rescue in _syncWindow, warn with this when Mutter
+# refuses the move that was supposed to bring a window back. Counting it is how "every moveToWorkspace
+# return is checked" becomes an assertion rather than a claim.
+ATTIC_REFUSED = 'from the attic; it may stay hidden'
+
+# The fixtures the toggle scenario parks, and the one it must NOT disturb.
+PARKED_WINDOWS = ('QS one', 'QS two', 'QS min', 'QS dialog')
+CONTROL_WINDOW = 'QS control'
+TOGGLE_WINDOWS = (*PARKED_WINDOWS, CONTROL_WINDOW)
+
+
+def mutter_reading():
+    """What MUTTER says: how many workspaces there are, and which one it has each window on.
+
+    DELIBERATELY NOT `GetWindows`, and this is the whole point of the toggle scenario. `GetWindows`
+    publishes `info.workspace` out of the engine's own cache, `Engine._flushAttic` decides what to move
+    by reading that same cache, and the question being asked is precisely whether the cache agrees with
+    the compositor. A scenario built on `GetWindows` would pass with every single `moveToWorkspace`
+    silently refused -- it would be the engine confirming its own belief.
+
+    Every field here comes from `Meta.Window` and `global.workspace_manager`; see `DebugObject`'s
+    `MutterWindows` in src/shell/control.ts for why it walks two enumerations and unions them (the tab
+    list drops skip-taskbar windows at the source, which are among the ones the flush exists to rescue).
+    """
+    reading = json.loads(call('org.i3shell.Debug', 'MutterWindows')[0])
+    if 'error' in reading or 'windows' not in reading:
+        fail('the debug surface read Mutter', 'a reading with a window list', reading)
+    return reading
+
+
+def native_workspaces(reading=None):
+    """native workspace index -> every title Mutter has on it, ours and anyone else's."""
+    reading = mutter_reading() if reading is None else reading
+    grouped = {}
+    for window in reading['windows']:
+        grouped.setdefault(window['workspace'], []).append(window['title'])
+    return {index: sorted(titles) for index, titles in sorted(grouped.items())}
+
+
+def off_live(reading=None):
+    """Every window Mutter has anywhere but LIVE_WORKSPACE -- what an OFF has to leave empty.
+
+    Over EVERY window, not just the fixtures: a window stranded on a workspace nothing renders is
+    audible and impossible to find whoever opened it, and that failure is why this project exists.
+    """
+    reading = mutter_reading() if reading is None else reading
+    return sorted(w['title'] for w in reading['windows'] if w['workspace'] != LIVE_WORKSPACE)
+
+
+def fixture_workspaces(reading=None):
+    """title -> native workspace index, for this scenario's own fixtures only.
+
+    The premises are stated over our own windows; the conclusions (`off_live`) are stated over all of
+    them. A premise that accidentally depended on a stranger would be fragile; a conclusion that
+    excluded one would be weaker than the bug.
+    """
+    reading = mutter_reading() if reading is None else reading
+    return {w['title']: w['workspace'] for w in reading['windows'] if w['title'] in TOGGLE_WINDOWS}
+
+
+def native_window(title, reading=None):
+    reading = mutter_reading() if reading is None else reading
+    found = [w for w in reading['windows'] if w['title'] == title]
+    if len(found) != 1:
+        fail('Mutter has exactly one window with this title', {'title': title, 'count': 1},
+             {'title': title, 'count': len(found),
+              'titles': sorted(w['title'] for w in reading['windows'])})
+    return found[0]
+
+
+def set_tiling(enabled, label):
+    """Switch tiling through the very closure the Quick Settings click runs, and return the two Mutter
+    readings `Debug.SetTiling` brackets the call with.
+
+    Both readings are taken inside that one D-Bus call, so no main-loop turn separates them from the
+    flush. That is the only way a client can see the ORDER of the OFF path: the flush moves windows out
+    of the attic and `restoreAll()` then hands the user their workspace count back, and a flush that ran
+    after the restore would have aimed its moves at workspaces that no longer existed. Afterwards both
+    orders look identical, because Mutter has acted on the restored settings either way.
+    """
+    report = json.loads(call('org.i3shell.Debug', 'SetTiling', '(b)', (enabled,))[0])
+    for half in ('before', 'after'):
+        if half not in report:
+            fail(f'{label}: the debug surface switched tiling {"on" if enabled else "off"}',
+                 {'requested': enabled, 'readings': ['before', 'after']}, report)
+    return report
+
+
+def toggle_box():
+    """The Quick Settings switch as St has it: its own `checked`, the class's `enabled`, and its box.
+
+    `checked` is the WIDGET's property, which is the one thing about this feature no unit fake can
+    answer -- what GNOME 50's St.Button does with `checked` around its own `clicked` emission.
+    `enabled` beside it is what src/shell/tilingToggle.ts last recorded from the engine, so a failure
+    separates "the engine never answered" from "the answer never reached the widget".
+    """
+    box = json.loads(call('org.i3shell.Debug', 'TilingToggleBox')[0])
+    if 'error' in box or 'checked' not in box:
+        fail('the debug surface read the Quick Settings switch', 'a reading with a checked flag', box)
+    return box
+
+
+def quick_settings_menu(wanted_open, label):
+    """Open or close the Quick Settings menu. A quick toggle is unmapped, and unclickable, while it is
+    shut -- so this is the one synthesised part of a real click, and the press itself is not."""
+    if not call('org.i3shell.Debug', 'QuickSettingsMenu', '(b)', (wanted_open,))[0]:
+        fail(f'{label}: the Quick Settings menu {"opened" if wanted_open else "closed"}',
+             {'open': wanted_open}, {'open': not wanted_open, 'toggle': toggle_box()})
+
+
+def click(point, label):
+    x, y = point
+    if not call('org.i3shell.Debug', 'ClickAt', '(ii)', (int(x), int(y)))[0]:
+        fail(f'{label}: the debug surface clicked at this point', {'at': [x, y], 'ok': True},
+             {'at': [x, y], 'ok': False, 'pointer': pointer()})
+
+
+def switch_point(box, label):
+    """The centre of the visible switch, checked against Mutter's own primary monitor rectangle first.
+
+    A click is aimed at an absolute screen position, so a box at the origin because the actor is not
+    allocated yet -- or somehow off the primary display -- would land the press on whatever is really
+    there, and that would surface three assertions later as "the switch did nothing". Read from
+    DisplayConfig, not from a published work area, so the check does not depend on the engine at all.
+    """
+    primaries = [monitor for monitor in logical_monitors() if monitor['primary']]
+    if len(primaries) != 1:
+        fail(f'{label}: exactly one primary logical monitor holds the panel', 1,
+             {'count': len(primaries), 'logical': logical_monitors()})
+    monitor = primaries[0]
+    fits = (monitor['x'] <= box['x'] and monitor['y'] <= box['y']
+            and box['x'] + box['width'] <= monitor['x'] + monitor['width']
+            and box['y'] + box['height'] <= monitor['y'] + monitor['height']
+            and box['width'] >= 8 and box['height'] >= 8)
+    if not fits:
+        fail(f'{label}: the switch has a real box on the primary display to click',
+             {'inside': monitor, 'width': '>= 8', 'height': '>= 8'},
+             {'box': box, 'logical': logical_monitors()})
+    return (box['x'] + box['width'] // 2, box['y'] + box['height'] // 2)
+
+
+def create_child(title, parent, kind, label):
+    """A fixture window with a parent: the only window this harness can produce that Mutter marks
+    skip-taskbar.
+
+    No Wayland client can ask for the hint -- Mutter sets `skip_taskbar` for window types a GTK4
+    toplevel cannot request, and for an attached modal dialog, which is what this creates.
+    src/runtime/classify.ts states the same fact in its own comment, and the scenario asserts it rather
+    than assuming it.
+    """
+    normal_action_mode()
+    if not fixture('Create', '(sss)', (title, kind, parent))[0]:
+        fail(f'{label}: the fixture created {title} as a {kind} child of {parent}',
+             {'title': title, 'ok': True}, {'title': title, 'ok': False})
+    expect(f'{label}: {title} reaches its first frame and is tracked', True,
+           lambda: any(w['title'] == title for w in windows()), timeout=20,
+           context=lambda: {'gtkSize': list(fixture('Size', '(s)', (title,))),
+                            'tracked': sorted(w['title'] for w in windows())})
+
+
+def scenario_toggle_flushes_the_attic(primary_id, second_id):
+    """Switching tiling off at the Quick Settings switch must leave NOTHING on the attic workspace, and
+    Mutter is the only witness that can say so.
+
+    This is the founding bug of the whole project, reachable through its own off switch: a window on
+    ATTIC_WORKSPACE is one Mutter refuses to render, and once the engine has stopped committing there is
+    nothing left that would ever move it. The user can hear it and cannot find it. Every part of
+    `Engine._flushAttic` -- and of the excluded-window rescue that is its mirror on the way back ON --
+    was covered only by a unit fake before this scenario.
+
+    WHY NOTHING HERE ASKS THE EXTENSION. `GetWindows` publishes the engine's cached `info.workspace`,
+    and `_flushAttic` decides what to move by reading that same cache: asking it whether it moved a
+    window is circular, and a scenario built on it would pass with every move refused. Every workspace
+    assertion below goes through `Debug.MutterWindows`, which reads `Meta.Window.get_workspace().index()`
+    and `global.workspace_manager.get_n_workspaces()` off the compositor.
+
+    THE TRAP IS SET FIRST, AND ASSERTED. A toggle over an empty attic proves nothing at all, so four
+    windows are genuinely parked before the switch is touched -- including one minimized AFTER it was
+    parked, which is the case a tree walk cannot see (it has no tree membership left, so only
+    `Engine._windows` knows it is in there), and one modal dialog, which Mutter marks skip-taskbar. A
+    fifth window stays live on the other display as a control the flush must not disturb.
+
+    ORDER, WHICH IS THE OTHER HALF. The OFF path flushes the attic and only then restores the user's
+    workspace count, and after the fact both orders look the same. `Debug.SetTiling` therefore reports
+    Mutter either side of the call, from inside it: `before.nWorkspaces == after.nWorkspaces == 2` with
+    an empty attic in `after` says the moves landed while the attic still existed.
+
+    AND THE GRABS. The launcher is deliberately OPEN when tiling goes off, because a modal grab left
+    behind takes the keyboard away from the entire session -- the worst thing this feature can do. The
+    Shell's own `Main.modalCount` is the witness, and a bare keypress arriving in a client's Gtk.Entry is
+    the second one.
+    """
+    step('toggle: four windows on one hidden workspace, and a live control on the other display')
+    reset_windows()
+    create_on(second_id, CONTROL_WINDOW, 'toggle')
+    create_on(primary_id, 'QS one', 'toggle')
+    create_on(primary_id, 'QS two', 'toggle')
+    create_on(primary_id, 'QS min', 'toggle')
+    create_child('QS dialog', 'QS one', 'modal', 'toggle')
+    home = shown_on(primary_id)
+    expect('toggle: Mutter starts with every fixture on the live workspace',
+           {title: LIVE_WORKSPACE for title in TOGGLE_WINDOWS}, fixture_workspaces, timeout=20,
+           context=native_workspaces)
+    dialog = native_window('QS dialog')
+    check('toggle: Mutter marks the modal dialog skip-taskbar, which is this leg\'s premise '
+          '(src/runtime/classify.ts says it does, and no Wayland client can ask for the hint)',
+          dialog['skipTaskbar'], True, dialog)
+
+    step('toggle: switch the primary away, so Mutter really parks those four')
+    index = empty_workspace('toggle')
+    check('toggle: the switch away was accepted', run(f'workspace number {index + 1}'),
+          f'workspace {index + 1}')
+    expect('toggle: the primary now shows the empty workspace', index, lambda: shown_on(primary_id),
+           timeout=15, context=visible_map)
+    expect('toggle: Mutter has the four parked and the control still live',
+           {**{title: ATTIC_WORKSPACE for title in PARKED_WINDOWS}, CONTROL_WINDOW: LIVE_WORKSPACE},
+           fixture_workspaces, timeout=20, context=native_workspaces)
+
+    step('toggle: minimize one of them, so it leaves the tree while it is ALREADY in the attic')
+    # The case `Engine._flushAttic`'s own comment is about, and the one a tree walk cannot see. Minimized
+    # before the switch, a window keeps the workspace it remembers and is never parked at all; minimized
+    # after it, it sits on a workspace Mutter will not render with no tree membership left behind it.
+    if not fixture('Action', '(ss)', ('QS min', 'minimize'))[0]:
+        fail('toggle: the fixture minimized QS min', {'title': 'QS min', 'ok': True},
+             {'title': 'QS min', 'ok': False})
+
+    def min_facts():
+        found = native_window('QS min')
+        return {'workspace': found['workspace'], 'minimized': found['minimized']}
+
+    expect('toggle: Mutter reports QS min minimized AND still parked',
+           {'workspace': ATTIC_WORKSPACE, 'minimized': True}, min_facts, timeout=20,
+           context=native_workspaces)
+    check('toggle: and the tree has dropped it, so only Engine._windows knows it is in there',
+          'QS min' in leaf_titles(home), False,
+          lambda: {'workspace': home, 'leaves': leaf_titles(home)})
+
+    step('toggle: assert the trap, because a toggle over an empty attic proves nothing')
+    reading = mutter_reading()
+    parked = native_workspaces(reading).get(ATTIC_WORKSPACE, [])
+    check('toggle: the attic holds exactly the four windows the flush has to find', parked,
+          sorted(PARKED_WINDOWS), native_workspaces(reading))
+    if len(parked) < 3:
+        fail('toggle: at least three windows are parked before the switch is touched',
+             'three or more windows on the attic workspace',
+             {'parked': parked, 'byWorkspace': native_workspaces(reading)})
+    check('toggle: Mutter still has exactly the extension\'s two workspaces',
+          reading['nWorkspaces'], 2, reading)
+    check('toggle: and the control window is live, so the flush has something it must NOT move',
+          native_window(CONTROL_WINDOW, reading)['workspace'], LIVE_WORKSPACE)
+
+    step('toggle: open the launcher, then switch OFF while it is still holding the keyboard')
+    normal_action_mode()
+    run('launcher')
+    expect('toggle: the launcher is open and the Shell holds a modal grab', (True, True),
+           lambda: (launcher_box()['open'], mutter_reading()['modalCount'] > 0), timeout=15,
+           context=lambda: {'launcher': launcher_box(), 'modalCount': mutter_reading()['modalCount']})
+    offset = len(shell_log_text())
+    report = set_tiling(False, 'toggle')
+    before, after = report['before'], report['after']
+
+    step('toggle: the two readings taken INSIDE the call, before restoreAll could reach Mutter')
+    check('toggle: the flush began with the extension\'s two workspaces', before['nWorkspaces'], 2,
+          before)
+    check('toggle: and with the four windows still parked',
+          sorted(w['title'] for w in before['windows'] if w['workspace'] != LIVE_WORKSPACE),
+          sorted(PARKED_WINDOWS), before)
+    check('toggle: the attic was STILL THERE when the flush finished, so no move can have been aimed '
+          'at a workspace restoreAll had already taken away', after['nWorkspaces'], 2, after)
+    check('toggle: and NOTHING was left anywhere but the live workspace',
+          sorted(w['title'] for w in after['windows'] if w['workspace'] != LIVE_WORKSPACE), [],
+          {'after': after,
+           'note': 'every title here is a window the user can hear and cannot find: '
+                   'Engine._flushAttic did not bring it back'})
+    check('toggle: every window Mutter has is accounted for, live',
+          sorted(w['title'] for w in after['windows']), sorted(TOGGLE_WINDOWS), after)
+    check('toggle: and Mutter refused none of the moves', log_count(ATTIC_REFUSED, offset), 0,
+          lambda: shell_log_text()[offset:].splitlines()[-20:])
+
+    step('toggle: and it stays that way once Mutter has acted on the restored settings')
+    expect('toggle: nothing sits on any workspace but the live one', [], off_live, timeout=20,
+           context=native_workspaces)
+    if settled(lambda: off_live() != [], 2.0):
+        fail('toggle: and nothing drifts back off the live workspace afterwards', [], off_live(),
+             native_workspaces())
+    ok('toggle: the attic stays empty', 'for 2s after the switch')
+
+    step('toggle: no grab of any kind survives the switch')
+    expect('toggle: the launcher closed itself', False, lambda: launcher_box()['open'], timeout=15)
+    expect('toggle: the Shell holds no modal grab at all', 0,
+           lambda: mutter_reading()['modalCount'], timeout=15, context=launcher_box)
+    expect('toggle: the engine holds no accelerator', 0, lambda: state()['grabbed'], timeout=15,
+           context=state)
+    if not fixture('Action', '(ss)', (CONTROL_WINDOW, 'present'))[0]:
+        fail('toggle: the fixture presented the control window',
+             {'title': CONTROL_WINDOW, 'ok': True}, {'title': CONTROL_WINDOW, 'ok': False})
+    typing_reaches('q', CONTROL_WINDOW, [],
+                   'toggle: a bare key reaches a client again, so nothing is holding the keyboard')
+
+    step('toggle: the visible switch followed the programmatic change')
+    expect('toggle: the switch shows OFF and the adapter agrees with the engine', (False, False),
+           lambda: (toggle_box()['checked'], toggle_box()['enabled']), timeout=15, context=toggle_box)
+
+    step('toggle: switching OFF again is a no-op, not a second flush')
+    again = set_tiling(False, 'toggle')
+    check('toggle: the second OFF moved no window at all',
+          sorted([w['title'], w['workspace']] for w in again['after']['windows']),
+          sorted([w['title'], w['workspace']] for w in again['before']['windows']), again)
+    check('toggle: it left nothing off the live workspace',
+          sorted(w['title'] for w in again['after']['windows']
+                 if w['workspace'] != LIVE_WORKSPACE), [], again['after'])
+    check('toggle: and it re-grabbed nothing', state()['grabbed'], 0, state)
+
+    step('toggle: three REAL mouse clicks on the visible switch, which must alternate and never '
+         'go inert')
+    # The one assumption src/shell/tilingToggle.ts cannot observe from inside: whether GNOME 50's
+    # St.Button flips its own `checked` before or after it emits `clicked`. The adapter is written to be
+    # correct either way and never reads `checked` back, and these presses are the only measurement of
+    # that in the project -- a virtual pointer device's events, delivered by the compositor, not an
+    # `emit('clicked')`. Three of them, because the failure that ordering would cause is not a wrong
+    # first click but a switch that inverts or goes permanently inert afterwards.
+    quick_settings_menu(True, 'toggle')
+    expect('toggle: the switch is mapped with a box to click once the menu is open', True,
+           lambda: toggle_box()['mapped'] and toggle_box()['width'] > 0
+           and toggle_box()['height'] > 0, timeout=15, context=toggle_box)
+    for number, want in enumerate((True, False, True), start=1):
+        box = toggle_box()
+        check(f'toggle: click {number} starts with the switch showing {not want}', box['checked'],
+              not want, box)
+        point = switch_point(box, f'toggle: click {number}')
+        click(point, f'toggle: click {number}')
+        expect(f'toggle: click {number} left the switch and the adapter both reading {want}',
+               (want, want), lambda: (toggle_box()['checked'], toggle_box()['enabled']), timeout=20,
+               context=lambda: {'box': toggle_box(), 'clickedAt': list(point), 'pointer': pointer(),
+                                'grabbed': state()['grabbed'],
+                                'note': 'the click must reach St.Button and emit `clicked` exactly '
+                                        'once; nothing reads the widget\'s own `checked` to decide '
+                                        'what to ask for, so a doubled delivery would leave this at '
+                                        'the opposite value and a lost one at the same value'})
+        expect(f'toggle: click {number} left the engine with '
+               f'{"every binding" if want else "no binding"} grabbed',
+               DEFAULT_GRABS if want else 0, lambda: state()['grabbed'], timeout=20, context=state)
+        if want:
+            expect(f'toggle: click {number} gave Mutter the extension\'s two workspaces back', 2,
+                   lambda: mutter_reading()['nWorkspaces'], timeout=20, context=native_workspaces)
+        expect(f'toggle: click {number} left nothing off the live workspace', [], off_live,
+               timeout=20, context=native_workspaces)
+    quick_settings_menu(False, 'toggle')
+    expect('toggle: closing the Quick Settings menu leaves no modal grab behind', 0,
+           lambda: mutter_reading()['modalCount'], timeout=15, context=toggle_box)
+
+    step('toggle: the mirror -- switching back ON must strand nothing in the attic either')
+    # src/engine.ts's excluded-window rescue, which had unit coverage only. ON nulls the tree and
+    # re-adopts every window the port lists; a window the tree cannot see (minimized, sticky,
+    # skip-taskbar) has no remembered workspace, so the attic has exactly one way out for it and that
+    # branch is it. QS min is named explicitly because it is the one that is invisible to a tree walk.
+    expect('toggle: nothing is on any workspace but the live one after the switch back ON', [],
+           off_live, timeout=25, context=native_workspaces)
+    expect('toggle: and QS min -- minimized, so the tree cannot see it -- is live, not stranded',
+           {'workspace': LIVE_WORKSPACE, 'minimized': True}, min_facts, timeout=25,
+           context=native_workspaces)
+    expect('toggle: every fixture is live', {title: LIVE_WORKSPACE for title in TOGGLE_WINDOWS},
+           fixture_workspaces, timeout=25, context=native_workspaces)
+
+    step('toggle: switching ON again is a no-op too')
+    twice = set_tiling(True, 'toggle')
+    check('toggle: the second ON moved no window',
+          sorted([w['title'], w['workspace']] for w in twice['after']['windows']),
+          sorted([w['title'], w['workspace']] for w in twice['before']['windows']), twice)
+    mode_grabs('default', DEFAULT_GRABS)
+
+    step('toggle: locking while tiling is OFF must not turn it back on when the screen unlocks')
+    set_tiling(False, 'toggle')
+    expect('toggle: tiling is off before the lock', 0, lambda: state()['grabbed'], timeout=15)
+    call('org.i3shell.Debug', 'SimulateSessionMode', '(b)', (True,))
+    expect('toggle: the locked session holds no accelerator either', 0,
+           lambda: state()['grabbed'], timeout=15)
+    call('org.i3shell.Debug', 'SimulateSessionMode', '(b)', (False,))
+    # Engine.onUnlocked returns early while paused. Without that line the lock screen is a second,
+    # invisible ON switch: unlocking would re-grab every binding, re-apply the workspace count and leave
+    # the switch showing OFF over a running engine.
+    if settled(lambda: state()['grabbed'] != 0, 3.0):
+        fail('toggle: unlocking re-grabs nothing while tiling is off', 0, state()['grabbed'],
+             lambda: {'toggle': toggle_box(), 'byWorkspace': native_workspaces(),
+                      'note': 'Engine.onUnlocked must return early while _paused'})
+    ok('toggle: unlocking left tiling off', 'no accelerator for 3s')
+    check('toggle: and the switch still shows OFF', toggle_box()['checked'], False, toggle_box)
+    check('toggle: with nothing stranded off the live workspace', off_live(), [], native_workspaces())
+
+    step('toggle: the same lock and unlock DO restore the bindings once tiling is on again')
+    # Without this the assertion above would pass just as well in a session where SimulateSessionMode
+    # did nothing whatsoever.
+    set_tiling(True, 'toggle')
+    mode_grabs('default', DEFAULT_GRABS)
+    call('org.i3shell.Debug', 'SimulateSessionMode', '(b)', (True,))
+    expect('toggle: locking ungrabs every binding', 0, lambda: state()['grabbed'], timeout=15)
+    call('org.i3shell.Debug', 'SimulateSessionMode', '(b)', (False,))
+    expect('toggle: and unlocking grabs them all back', DEFAULT_GRABS, lambda: state()['grabbed'],
+           timeout=20, context=state)
+    expect('toggle: the switch is left showing ON', (True, True),
+           lambda: (toggle_box()['checked'], toggle_box()['enabled']), timeout=15, context=toggle_box)
+    expect('toggle: and the attic is empty at the end', [], off_live, timeout=20,
+           context=native_workspaces)
+    reset_windows()
+
+
+# --------------------------------------------------------------------------
 # Scenario 5 (brief, --settings): the overrides are restored on disable()
 # --------------------------------------------------------------------------
 
@@ -1602,7 +2027,8 @@ def live_session():
                      scenario_defect_already_active_reasserts_focus,
                      scenario_defect_occupied_workspace_stays_put,
                      scenario_defect_pin_survives_remote_number_press,
-                     scenario_gesture_runs_its_binding):
+                     scenario_gesture_runs_its_binding,
+                     scenario_toggle_flushes_the_attic):
         reset_workspaces(primary_id, second_id)
         scenario(primary_id, second_id)
     reset_windows()

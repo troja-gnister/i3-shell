@@ -16,10 +16,11 @@ as in i3 and sway.
 implemented; **Phase 5 — per-output workspaces — is implemented on the `phase-5` branch** and awaits its
 live walk: [docs/acceptance/phase-5.md](docs/acceptance/phase-5.md), A50–A66, deliberately unticked,
 because a second physical display, a real pointer and a real unplug are the only evidence for most of it.
-Verification at the time of writing: **1270 unit tests in 76 files**, both TypeScript programs, the
+Verification at the time of writing: **1278 unit tests in 76 files**, both TypeScript programs, the
 Layer 0 import gate, the tree lint, and the private nested integration suite under `test/integration/` —
 **637 assertions, exit 0, zero `LIMITATION` branches**, its first full green run for Phase 5 (2026-10-01,
-at `863a8ec`), covering real output removal and restore rather than skipping those branches.
+at `863a8ec`), covering real output removal and restore rather than skipping those branches. That
+assertion count predates the Quick Settings toggle's own native scenario, which has not been run yet.
 
 ---
 
@@ -405,7 +406,7 @@ workspace to the display you are looking at when nothing else is showing it. Bin
 ## Develop
 
 ```sh
-npm test                      # unit suite: pure core + adapter doubles, on Node (1270 tests, 76 files)
+npm test                      # unit suite: pure core + adapter doubles, on Node (1278 tests, 76 files)
 npm run typecheck             # two programs: tsconfig.json (src + GNOME types), tsconfig.test.json (tests + Layer 0)
 npm run check:layer0          # fails if Layer 0 imports gi:// / resource:// / src/shell
 npm run lint:tree             # eslint over src/tree and its tests
