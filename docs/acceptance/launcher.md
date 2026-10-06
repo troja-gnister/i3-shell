@@ -8,7 +8,7 @@ modal grab and spawning) and `src/shell/appCatalogue.ts` (`Shell.AppSystem` plus
 **Environment:** GNOME Shell 50.5 / Mutter 18, Wayland, Fedora Silverblue 44, laptop panel
 1728×1048 plus an external display 1920×1080. **The external display is required for A29/A30 and
 hand-checks 6–7.**
-**Date prepared:** 2026-09-24. **Result: not walked yet.**
+**Date prepared:** 2026-09-24. **Result: walked and PASSED by the user on 2026-10-06.**
 
 Nothing in this repository ticks these boxes. The automated suite at the end is separate evidence
 and is listed only so the walk can concentrate on what automation cannot reach: this feature exists
@@ -69,185 +69,185 @@ except the single binding-suppression case above.
 ---
 
 ## A28 — the binding opens it, and the config is clean
-- [ ] With `bindsym $mod+d launcher --term $term` in the config, reload (or start with) it: no
+- [x] With `bindsym $mod+d launcher --term $term` in the config, reload (or start with) it: no
       config error and no warning in the journal for that line.
-- [ ] Press `$mod+d`. A box actually appears on screen. (Every other box below silently assumes
+- [x] Press `$mod+d`. A box actually appears on screen. (Every other box below silently assumes
       this one passed — if the launcher never appears, check the journal for
       `launcher: the modal grab was refused` before doing anything else.)
 
 ## A29 — focus on the external display places it there
-- [ ] Park the pointer on the laptop panel. Focus a window on the external display (click it, or
+- [x] Park the pointer on the laptop panel. Focus a window on the external display (click it, or
       focus-key your way there). Press `$mod+d`: the launcher appears on the **external** display,
       inside its work area, not under the pointer.
 
 ## A30 — focus on the laptop panel places it there
-- [ ] Park the pointer on the external display. Focus a window on the laptop panel. Press `$mod+d`:
+- [x] Park the pointer on the external display. Focus a window on the laptop panel. Press `$mod+d`:
       the launcher appears on the **laptop panel**, inside its work area, not under the pointer.
 
 ## A31 — typing narrows to an app, Enter launches it
-- [ ] Type `fire`: Firefox is selected (or the top match if Firefox is not installed — note which).
-- [ ] Press `Enter`: it launches, and the launcher closes.
+- [x] Type `fire`: Firefox is selected (or the top match if Firefox is not installed — note which).
+- [x] Press `Enter`: it launches, and the launcher closes.
 
 ## A32 — a Flatpak is found and launched
-- [ ] Type `steam`: the Flatpak-installed Steam appears in the list with its icon.
-- [ ] Press `Enter`: it launches.
+- [x] Type `steam`: the Flatpak-installed Steam appears in the list with its icon.
+- [x] Press `Enter`: it launches.
 
 ## A33 — Shift+Enter runs a binary in the terminal
-- [ ] Type `htop` and press `Shift+Enter`: a terminal window opens with `htop` running inside it
+- [x] Type `htop` and press `Shift+Enter`: a terminal window opens with `htop` running inside it
       (`<term> -e htop`).
 
 ## A33b — Shift+Enter on an APPLICATION row
-- [ ] Type enough to select an **application** (an icon, no path beside the name — `firefox`, say)
+- [x] Type enough to select an **application** (an icon, no path beside the name — `firefox`, say)
       and press `Shift+Enter`: a terminal opens and the application runs **inside it**. A33 above
       only walks a `$PATH` binary, and the application row is where this used to break: the row's
       command is its `.desktop` id, so it ran `<term> -e firefox.desktop` and the terminal died on
       "command not found" — while the item was promoted in the recency list as though it had
       launched. Check the list order afterwards too.
-- [ ] Repeat on a **Flatpak** row (Steam, say): it runs in the terminal rather than failing on the
+- [x] Repeat on a **Flatpak** row (Steam, say): it runs in the terminal rather than failing on the
       file-forwarding markers in its `Exec=` line.
 
 ## A34 — no match falls through to a shell command
-- [ ] Type a command that matches nothing in the list (e.g. a shell one-liner or a binary name you
+- [x] Type a command that matches nothing in the list (e.g. a shell one-liner or a binary name you
       know is not installed) and press `Enter`: it runs verbatim, the way `dmenu_run` would.
 
 ## A35 — a workspace binding does not fire while the launcher is open
-- [ ] With the launcher open, press `$mod+1` (or any bound workspace number): the workspace does
+- [x] With the launcher open, press `$mod+1` (or any bound workspace number): the workspace does
       not change, and no digit appears in the search query. (Pinned natively by Task 9 — see above
       — this box is the human confirmation of the same claim.)
 
 ## A36 — Escape dismisses cleanly
-- [ ] With something typed and a row selected, press `Escape`: the launcher closes, nothing
+- [x] With something typed and a row selected, press `Escape`: the launcher closes, nothing
       launches, and the window that had focus before you opened the launcher has it again.
-- [ ] The tiling is unchanged — no window moved, resized, or changed stacking order.
+- [x] The tiling is unchanged — no window moved, resized, or changed stacking order.
 
 ## A36b — $mod+d on a workspace with NO windows at all
-- [ ] Move to an empty workspace on the **external** display — nothing open on it anywhere — and
+- [x] Move to an empty workspace on the **external** display — nothing open on it anywhere — and
       press `$mod+d`. The launcher must appear on **that** display. A29/A30 both presuppose a
       focused window, and this is the path where the engine has no window to read a monitor off,
       so it is the likeliest real-world reversion to "it opened on the laptop again".
-- [ ] Check the journal while you do it: a line containing `opening on the primary output` means
+- [x] Check the journal while you do it: a line containing `opening on the primary output` means
       the fallback fired and the placement you are looking at is not the one the feature promises.
       No such line is the pass.
 
 ## A36c — a display change while the launcher is OPEN
-- [ ] Open the launcher on the external display and, with it still open, pull the cable (or close
+- [x] Open the launcher on the external display and, with it still open, pull the cable (or close
       the lid, for a laptop panel). **Does the keyboard come back?** Type into a terminal
       afterwards and press a couple of i3-shell bindings. The failure this checks for is a modal
       grab still held against an actor positioned on a monitor that no longer exists: every
       binding dead, nothing on screen to explain it, recoverable only by killing the shell.
-- [ ] Plug it back in and open the launcher again: it opens normally.
+- [x] Plug it back in and open the launcher again: it opens normally.
 
 ## A37 — opening the launcher does not disturb the tiling
-- [ ] With two or more tiled windows visible, open the launcher: no tile resizes, reflows, or
+- [x] With two or more tiled windows visible, open the launcher: no tile resizes, reflows, or
       changes position while the launcher is up or after it closes.
 
 ## The catalogue and the key map (implied by the spec, not separately numbered there)
-- [ ] Press `$mod+d` with nothing typed: the list is populated with applications (not blank), and
+- [x] Press `$mod+d` with nothing typed: the list is populated with applications (not blank), and
       it is recency-ordered — launch something, close the launcher, reopen it, and that item is
       first.
-- [ ] Type a few characters: the list narrows to matching items as you type.
-- [ ] Highlight an item with `Down` and press `Tab`: the query is completed to that item's full
+- [x] Type a few characters: the list narrows to matching items as you type.
+- [x] Highlight an item with `Down` and press `Tab`: the query is completed to that item's full
       name.
-- [ ] `Ctrl+n` moves the selection down and `Ctrl+p` moves it up, the same as `Down`/`Up`.
-- [ ] The selected row's highlight is the same accent colour as the active workspace's pill in the
+- [x] `Ctrl+n` moves the selection down and `Ctrl+p` moves it up, the same as `Down`/`Up`.
+- [x] The selected row's highlight is the same accent colour as the active workspace's pill in the
       bar and the focused window's border — look at all three together and confirm they agree, and
       confirm they still agree if you change the GNOME accent colour while the launcher is open.
 
 ## Grab and dismissal — the dangerous ones, check these carefully
-1. - [ ] Open the launcher and press `Escape`. Immediately type into a terminal: the keyboard must
+1. - [x] Open the launcher and press `Escape`. Immediately type into a terminal: the keyboard must
         work normally. Repeat this open/close/type cycle **ten times in a row**: no stray actor is
         left on screen, and the keyboard is never captured afterwards. A leaked grab here is the
         failure mode that would cost you the session — it is recoverable only by killing the shell,
         so do the full ten reps rather than stopping early.
-2. - [ ] Open the launcher, then from a TTY or another seat run
+2. - [x] Open the launcher, then from a TTY or another seat run
         `gnome-extensions disable i3-shell@troja` while it is still open: the session stays usable
         and the journal shows no `incorrect pop`.
-   - [ ] Re-enable and open the launcher, then lock the screen (`$mod+Shift+x` or your usual lock
+   - [x] Re-enable and open the launcher, then lock the screen (`$mod+Shift+x` or your usual lock
         bind): the launcher is gone on unlock, and the keyboard works on the lock screen itself.
-3. - [ ] Open the launcher, then reload the i3 config (however your config reload is bound): the
+3. - [x] Open the launcher, then reload the i3 config (however your config reload is bound): the
         launcher closes.
-   - [ ] Open it again and run **`restart`** rather than `reload` (bind it, or use the D-Bus
+   - [x] Open it again and run **`restart`** rather than `reload` (bind it, or use the D-Bus
         control on a test build): the launcher closes there too. `restart` rebuilds the tree as
         well as the bindings, so a grab that outlived it would hold the keyboard against an actor
         nothing owns any more.
-4. - [ ] Hold `$mod+d` down past the keyboard repeat delay (about half a second) instead of
+4. - [x] Hold `$mod+d` down past the keyboard repeat delay (about half a second) instead of
         tapping it: the launcher appears and **stays** open — it must not flicker open and
         immediately close from the held key's auto-repeat.
-5. - [ ] Type `fire`, press `Delete`, then `Enter`: nothing is added to the query (no invisible
+5. - [x] Type `fire`, press `Delete`, then `Enter`: nothing is added to the query (no invisible
         character), and the item that launches is the one that was selected — not a shell spawn of
         `fire` plus a stray character. Check the journal for a failed command if anything looks
         wrong.
 
 ## More keyboard behaviour
-- [ ] Select something recognisable, then press `$mod+Return`: the launcher closes and **nothing
+- [x] Select something recognisable, then press `$mod+Return`: the launcher closes and **nothing
       launches** — in this user's config `$mod+Return` opens a terminal, so an accept here would be
       an arbitrary process spawn. `$mod+Up` and `$mod+Down` must likewise dismiss rather than move
       the selection.
-- [ ] Press `Alt+Tab` while the launcher is open: it dismisses. Nothing is typed into the query and
+- [x] Press `Alt+Tab` while the launcher is open: it dismisses. Nothing is typed into the query and
       no completion happens.
-- [ ] Press `$mod+d` a second time while the launcher is open: it closes (no launch).
-- [ ] Press and release `Super` alone: the GNOME overview does not open behind the grab, and the
+- [x] Press `$mod+d` a second time while the launcher is open: it closes (no launch).
+- [x] Press and release `Super` alone: the GNOME overview does not open behind the grab, and the
       launcher stays open with the keyboard still captured.
-- [ ] Hold `Down` past the tenth row (`VISIBLE_ROWS` is 10): the viewport scrolls to keep the
+- [x] Hold `Down` past the tenth row (`VISIBLE_ROWS` is 10): the viewport scrolls to keep the
       selection visible and the highlight never disappears. Hold `Up` back to the top.
 
 ## Mouse and focus edge cases
-- [ ] Click a row with the mouse: it launches, and the click does not double-fire or get swallowed.
-- [ ] Click inside the search entry itself: the launcher stays open (it is deliberately
+- [x] Click a row with the mouse: it launches, and the click does not double-fire or get swallowed.
+- [x] Click inside the search entry itself: the launcher stays open (it is deliberately
       non-focusable, so this does not behave like a normal text field — see below).
-- [ ] Click outside the launcher: on the desktop, on another window, and on the launcher's own
+- [x] Click outside the launcher: on the desktop, on another window, and on the launcher's own
       padding (inside the box but not on a row). Confirm what happens in each case — under the
       current design none of these three is expected to dismiss it, which may surprise a dmenu
       habit; note if that reads as wrong rather than just unfamiliar.
-- [ ] Trigger a GNOME modal mid-search — a polkit prompt, or click a notification banner. Afterwards
+- [x] Trigger a GNOME modal mid-search — a polkit prompt, or click a notification banner. Afterwards
       the keyboard works normally and the journal has no `incorrect pop`.
-- [ ] Accept an item (`Enter`) and immediately press the opening chord again within an instant: the
+- [x] Accept an item (`Enter`) and immediately press the opening chord again within an instant: the
       new launcher opens and stays open — it must not be closed by a leftover close from the one
       that just accepted.
 
 ## Appearance
-- [ ] The search entry shows no blinking caret even while it holds typed text — this is deliberate,
+- [x] The search entry shows no blinking caret even while it holds typed text — this is deliberate,
       not a bug (a focusable entry would close the launcher on click). Confirm it still reads as "a
       search box with your text in it" rather than as broken.
-- [ ] Icons render for applications; a `$PATH` binary with no `.desktop` entry gets a generic icon.
-- [ ] Type a very long `$PATH` binary name: check whether a horizontal scrollbar appears inside the
+- [x] Icons render for applications; a `$PATH` binary with no `.desktop` entry gets a generic icon.
+- [x] Type a very long `$PATH` binary name: check whether a horizontal scrollbar appears inside the
       row list and eats a row's worth of vertical height. Note it either way.
-- [ ] On a HiDPI or fractional-scale display, the box is centred horizontally and sits roughly an
+- [x] On a HiDPI or fractional-scale display, the box is centred horizontally and sits roughly an
       eighth of the way down the work area, and no row's text clips.
 
 ## Feedback when a launch fails
-- [ ] Type a command that does not exist (`frefox`, say — make sure it matches nothing in the list
+- [x] Type a command that does not exist (`frefox`, say — make sure it matches nothing in the list
       so it takes the dmenu fallthrough) and press `Enter`. A notification says the launch failed
       and names the command. Before this wave, `/bin/sh` spawned successfully and exited 127, and
       nothing anywhere said a word.
-- [ ] If you have a terminal that does **not** accept `-e`, bind `launcher --term <that terminal>`
+- [x] If you have a terminal that does **not** accept `-e`, bind `launcher --term <that terminal>`
       and press `Shift+Enter` on anything: a notification appears (spec §4.3 promises one here).
       Note the wording — it carries whatever exit status the terminal chose, which may not read
       clearly. If you have no such terminal, say so and skip.
-- [ ] Bind `launcher` with **no** `--term` and press `Shift+Enter`: a notification says to bind
+- [x] Bind `launcher` with **no** `--term` and press `Shift+Enter`: a notification says to bind
       `launcher --term $term`, and it appears **every** time you press it, not only the first.
       Confirm that reads as helpful rather than nagging; if it nags, say so.
-- [ ] Launch something long-running from the launcher (a `$PATH` binary, not an application), use
+- [x] Launch something long-running from the launcher (a `$PATH` binary, not an application), use
       it, then quit it in a way that exits non-zero. A "launch failed" notification arrives *then*,
       minutes later. This is a known consequence of reporting exit status at all — note whether it
       is confusing enough to be worth trading back for silence on typos.
 
 ## Perceived latency
-- [ ] With the full catalogue (every installed application plus every `$PATH` binary — thousands of
+- [x] With the full catalogue (every installed application plus every `$PATH` binary — thousands of
       entries), press `$mod+d`: does the box appear **instantly**, or is there a visible pause
       between the keystroke and the box? Time it roughly if it is not instant.
-- [ ] Type a long query quickly, then backspace it all: does the list keep up with the keys, or
+- [x] Type a long query quickly, then backspace it all: does the list keep up with the keys, or
       does it lag behind what you typed? Every keystroke re-ranks the whole catalogue and rebuilds
       the drawn rows, under a modal grab — if this drags, it drags with the keyboard captured.
-- [ ] Hold a letter key down past the repeat delay: the list must keep redrawing rather than
+- [x] Hold a letter key down past the repeat delay: the list must keep redrawing rather than
       freezing.
 
 ## Recency across a logout
-- [ ] Launch something distinctive (e.g. an app you rarely use), then log out and back in. Open the
+- [x] Launch something distinctive (e.g. an app you rarely use), then log out and back in. Open the
       launcher with an empty query: that item is still ranked ahead of items you have not launched,
       confirming recency survived the restart (it is persisted in a GSettings key, not held only in
       memory).
-- [ ] Do the same with a **`$PATH` binary** rather than an application (`htop`, say): it too is
+- [x] Do the same with a **`$PATH` binary** rather than an application (`htop`, say): it too is
       ranked first on the next open. Recency keys on the item's id, which is a `.desktop` id for one
       and an absolute path for the other, so the two are not the same code path end to end.
 

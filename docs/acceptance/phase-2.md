@@ -22,58 +22,58 @@ Open two terminals (`$mod+Return`) unless a check says otherwise. `$mod` is `Sup
 ---
 
 ## A8 — opening and closing tiles
-- [ ] On an empty workspace, open one window: it fills the whole work area (below the top panel).
-- [ ] Open a second: the two split the screen into equal left/right halves, no gap, no overlap.
-- [ ] Close the right one (`$mod+Shift+q`): the survivor grows back to the full work area.
-- [ ] Open and immediately close a third window: nothing is left behind, the survivor keeps the
+- [x] On an empty workspace, open one window: it fills the whole work area (below the top panel).
+- [x] Open a second: the two split the screen into equal left/right halves, no gap, no overlap.
+- [x] Close the right one (`$mod+Shift+q`): the survivor grows back to the full work area.
+- [x] Open and immediately close a third window: nothing is left behind, the survivor keeps the
       full work area, and no `i3-shell` error appears in the journal.
 
 ## A9 — where the next window lands
-- [ ] With two tiles and the right one focused, press `$mod+v`, then open a window: it appears
+- [x] With two tiles and the right one focused, press `$mod+v`, then open a window: it appears
       *below* the focused tile; the right half is now split top/bottom, the left half unchanged.
-- [ ] With that new window focused, press `$mod+h`, then open another: it appears *beside* it,
+- [x] With that new window focused, press `$mod+h`, then open another: it appears *beside* it,
       inside the lower-right quarter.
 
 ## A10 — directional focus and moving windows
 Arrange `A | (B over C)` as in A9 and focus `C`.
-- [ ] `$mod+l` focuses `B`; `$mod+l` again wraps back to `C`.
-- [ ] `$mod+j` focuses `A`; `$mod+j` again wraps to the right column.
-- [ ] `$mod+semicolon` moves focus right, wrapping at the workspace edge.
-- [ ] `$mod+Shift+j` with `C` focused lifts it out of the column: three columns side by side.
-- [ ] `$mod+Shift+semicolon` puts it back into the column; typing goes to `C` throughout.
-- [ ] Repeat the two focus checks with the arrow keys (`$mod+Left/Down/Up/Right`).
+- [x] `$mod+l` focuses `B`; `$mod+l` again wraps back to `C`.
+- [x] `$mod+j` focuses `A`; `$mod+j` again wraps to the right column.
+- [x] `$mod+semicolon` moves focus right, wrapping at the workspace edge.
+- [x] `$mod+Shift+j` with `C` focused lifts it out of the column: three columns side by side.
+- [x] `$mod+Shift+semicolon` puts it back into the column; typing goes to `C` throughout.
+- [x] Repeat the two focus checks with the arrow keys (`$mod+Left/Down/Up/Right`).
 
 ## A11 — parent containers
-- [ ] With `C` focused, `$mod+a` selects the container holding `B` and `C` (no window title bar
+- [x] With `C` focused, `$mod+a` selects the container holding `B` and `C` (no window title bar
       changes; the next command acts on both).
-- [ ] `$mod+Shift+j` moves `B` and `C` together to the left half; `A` takes the right half.
-- [ ] `$mod+e` flips that container between vertical and horizontal; both windows follow.
-- [ ] Clicking inside `C` does not silently reduce the selection to `C` alone before you move it.
+- [x] `$mod+Shift+j` moves `B` and `C` together to the left half; `A` takes the right half.
+- [x] `$mod+e` flips that container between vertical and horizontal; both windows follow.
+- [x] Clicking inside `C` does not silently reduce the selection to `C` alone before you move it.
 
 ## A12 — resize mode
-- [ ] `$mod+r` shows `resize` next to the pills.
-- [ ] `k` and `l` grow/shrink the focused tile's height in 10% steps; the neighbour above or below
+- [x] `$mod+r` shows `resize` next to the pills.
+- [x] `k` and `l` grow/shrink the focused tile's height in 10% steps; the neighbour above or below
       takes the difference and nothing else moves.
-- [ ] `semicolon` and `j` do the same for width.
-- [ ] While in resize mode, those keys never type into a focused terminal.
-- [ ] `Escape`, `Return` and `$mod+r` each leave the mode.
+- [x] `semicolon` and `j` do the same for width.
+- [x] While in resize mode, those keys never type into a focused terminal.
+- [x] `Escape`, `Return` and `$mod+r` each leave the mode.
 
 ## A13 — floating windows
-- [ ] A dialog (for example GIMP's export dialog, or `Files` → Properties) floats above the tiles
+- [x] A dialog (for example GIMP's export dialog, or `Files` → Properties) floats above the tiles
       and does not change the tiling underneath.
-- [ ] A modal dialog and a fixed-size window (for example `gnome-calculator` in basic mode) also
+- [x] A modal dialog and a fixed-size window (for example `gnome-calculator` in basic mode) also
       float automatically.
-- [ ] `$mod+Shift+space` on a tiled window floats it; the remaining tiles re-fill the work area.
-- [ ] `$mod+space` toggles focus between the floating window and the tiled group, both ways.
-- [ ] `$mod+Shift+space` again returns it to the tree at the position next to the focused tile.
-- [ ] A splash screen (for example LibreOffice starting) is left alone by i3-shell.
+- [x] `$mod+Shift+space` on a tiled window floats it; the remaining tiles re-fill the work area.
+- [x] `$mod+space` toggles focus between the floating window and the tiled group, both ways.
+- [x] `$mod+Shift+space` again returns it to the tree at the position next to the focused tile.
+- [x] A splash screen (for example LibreOffice starting) is left alone by i3-shell.
 
 ## A14 — lock, re-enable and monitors
-- [ ] Lock the screen and unlock: every window is exactly where it was, the mode label is gone,
+- [x] Lock the screen and unlock: every window is exactly where it was, the mode label is gone,
       the pills are visible.
-- [ ] `gnome-extensions disable i3-shell@troja` leaves the windows where they are; enabling again
+- [x] `gnome-extensions disable i3-shell@troja` leaves the windows where they are; enabling again
       adopts them and re-tiles without losing any window.
-- [ ] **Laptop alone (`eDP-1`):** tiles fill the built-in display's work area.
+- [x] **Laptop alone (`eDP-1`):** tiles fill the built-in display's work area.
 
 > **Before the multi-display boxes, read this.** With GNOME's default
 > `org.gnome.mutter workspaces-only-on-primary = true`, Mutter marks every window on a **secondary**
@@ -94,13 +94,13 @@ Arrange `A | (B over C)` as in A9 and focus `C`.
 > guidance. This paragraph is kept as the record of what the Phase 2 walk was actually run
 > against.
 
-- [ ] **Dock with an external display, with `workspaces-only-on-primary=false` set:** windows already
+- [x] **Dock with an external display, with `workspaces-only-on-primary=false` set:** windows already
       open stay on their displays, both outputs tile independently, and `$mod+1..0` switches
       workspaces on both. *(With the GNOME default left in place, expect windows on the external
       display to be untracked — that is the Phase 4 item, not a failure of this phase.)*
-- [ ] **Undock (or close the lid):** the external display's windows move to the internal one and
+- [x] **Undock (or close the lid):** the external display's windows move to the internal one and
       nothing is lost. *(Same caveat: only meaningful with `workspaces-only-on-primary=false`.)*
-- [ ] **Re-dock:** the external display comes back as an empty workspace area; windows do not jump
+- [x] **Re-dock:** the external display comes back as an empty workspace area; windows do not jump
       back on their own. Cross-monitor focus/movement commands, workspace-per-monitor policy and
       full dock/lid fidelity are **Phase 4** and are not expected to work here.
 
@@ -114,13 +114,13 @@ suppresses IBus to stay deterministic (see below). Check them first — they are
 > it does not block acceptance. Please also record **whether it fails every time or only
 > after some logins**: the evidence says the losing set varies between sessions.
 
-- [ ] `$mod+semicolon` really moves focus right, and does **not** open the emoji picker.
+- [x] `$mod+semicolon` really moves focus right, and does **not** open the emoji picker.
       IBus claims `<Super>semicolon` through `org.freedesktop.ibus.panel.emoji hotkey`, using the
       same external-grab mechanism i3-shell uses, and i3-shell's override scan does not cover the
       IBus schema.
-- [ ] `$mod+space` really toggles tiled/floating focus, and does **not** switch input source.
+- [x] `$mod+space` really toggles tiled/floating focus, and does **not** switch input source.
       IBus also claims `<Super>space` through `org.freedesktop.ibus.general.hotkey triggers`.
-- [ ] If either fails, note whether it fails every time or only after a login (the automated
+- [x] If either fails, note whether it fails every time or only after a login (the automated
       evidence suggests the losing subset varies per session).
 
 ## Automated evidence (not acceptance)

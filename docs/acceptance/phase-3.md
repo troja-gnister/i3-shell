@@ -57,69 +57,69 @@ below are the ones in `examples/i3-shell.config`: `$mod+a` focus parent, `$mod+w
 ---
 
 ## A15 — every tiled window has a border
-- [ ] With two tiles open, **both** have a visible border — not just the focused one.
-- [ ] The focused window's border is your GNOME accent colour (Settings → Appearance), and the
+- [x] With two tiles open, **both** have a visible border — not just the focused one.
+- [x] The focused window's border is your GNOME accent colour (Settings → Appearance), and the
       unfocused one's is grey.
-- [ ] Change the accent colour in Settings without touching anything else: the focused border
+- [x] Change the accent colour in Settings without touching anything else: the focused border
       follows it live, with no relogin.
-- [ ] Put `client.focused  #13BEAA  #13BEAA  #FFFFFF  #13BEAA  #13BEAA` in `~/.config/i3/config`,
+- [x] Put `client.focused  #13BEAA  #13BEAA  #FFFFFF  #13BEAA  #13BEAA` in `~/.config/i3/config`,
       run `i3msg reload`: the focused border is now that colour and stops following the accent.
       Remove the line and reload again to get the accent back.
-- [ ] Move focus between the two tiles: the colours swap immediately, and nothing is left behind
+- [x] Move focus between the two tiles: the colours swap immediately, and nothing is left behind
       on the window that lost focus.
-- [ ] Make a window fullscreen (`$mod+f`): it has no border at all while fullscreen, and gets one
+- [x] Make a window fullscreen (`$mod+f`): it has no border at all while fullscreen, and gets one
       back when you leave fullscreen. While it is fullscreen, nothing else on that monitor is drawn
       either — no borders on the tiles behind it, no tab rows (see the limitations below).
-- [ ] With a second monitor attached and no fullscreen window on it: making a window fullscreen on
+- [x] With a second monitor attached and no fullscreen window on it: making a window fullscreen on
       the first monitor leaves the second monitor's borders, rows and bar completely untouched.
 
 ## A16 — `$mod+a` visibly outlines the selected container
-- [ ] Arrange `A | (B over C)` (`$mod+v` before opening the third window), focus `C`, press
+- [x] Arrange `A | (B over C)` (`$mod+v` before opening the third window), focus `C`, press
       `$mod+a`: an outline appears around `B` and `C` together — that is the container the next
       command will act on.
-- [ ] `$mod+a` again widens the outline to the whole workspace.
-- [ ] Clicking inside a window, or focusing one with `$mod+l`, removes the outline (the selection
+- [x] `$mod+a` again widens the outline to the whole workspace.
+- [x] Clicking inside a window, or focusing one with `$mod+l`, removes the outline (the selection
       is a window again).
-- [ ] The outline is drawn along the container's edge, not across the middle of either window.
+- [x] The outline is drawn along the container's edge, not across the middle of either window.
       (St draws a border *inside* the actor's rectangle, so the ring does cover the outermost
       couple of pixels of the windows at that edge — that is expected, not a failure.)
 
 ## A17 — a tabbed container
-- [ ] With two tiles, press `$mod+w`: one row of tabs appears across the top of the container, one
+- [x] With two tiles, press `$mod+w`: one row of tabs appears across the top of the container, one
       tab per window, each showing that window's title.
-- [ ] The selected tab is highlighted and the others are not.
-- [ ] The windows start **below** the row: no tab is drawn over a window, and no window is
+- [x] The selected tab is highlighted and the others are not.
+- [x] The windows start **below** the row: no tab is drawn over a window, and no window is
       covered by the row.
-- [ ] Clicking a tab focuses that window (typing goes to it afterwards).
-- [ ] Open a third window inside the container: a third tab appears and the row does not get
+- [x] Clicking a tab focuses that window (typing goes to it afterwards).
+- [x] Open a third window inside the container: a third tab appears and the row does not get
       taller.
-- [ ] Close one of them: its tab goes, and the remaining windows keep the same geometry rule
+- [x] Close one of them: its tab goes, and the remaining windows keep the same geometry rule
       (rect minus one row).
-- [ ] Set a noticeably larger interface font with
+- [x] Set a noticeably larger interface font with
       `gsettings set org.gnome.desktop.interface font-name 'Cantarell 16'`: the row gets taller
       **and the windows move down with it** — the tab text is never clipped. Put the font back
       with `gsettings reset org.gnome.desktop.interface font-name`. (Use that command, not
       Accessibility → Large Text: see the limitation below.)
 
 ## A18 — a stacked container
-- [ ] With three tiles, press `$mod+s`: **three** title rows appear, stacked one above the other,
+- [x] With three tiles, press `$mod+s`: **three** title rows appear, stacked one above the other,
       all visible at once — not one row with three tabs.
-- [ ] The rows carry the three window titles, and the selected one is highlighted.
-- [ ] The windows start below **all three** rows, and the visible window fills what is left.
-- [ ] Clicking a row focuses that window.
-- [ ] `$mod+e` returns the container to a split: every row disappears and the windows grow back to
+- [x] The rows carry the three window titles, and the selected one is highlighted.
+- [x] The windows start below **all three** rows, and the visible window fills what is left.
+- [x] Clicking a row focuses that window.
+- [x] `$mod+e` returns the container to a split: every row disappears and the windows grow back to
       the full rectangle, side by side.
 
 ## A19 — border widths
-- [ ] `i3msg "border pixel 8"` on a focused window: that window's border gets visibly thicker and
+- [x] `i3msg "border pixel 8"` on a focused window: that window's border gets visibly thicker and
       the other windows' borders do not change.
-- [ ] `i3msg "border none"`: the border disappears, and the window still tiles in the same place.
-- [ ] `i3msg "border toggle"` brings it back at the configured width, and again removes it.
-- [ ] `i3msg "border normal"` behaves the same as `pixel` — there is no title bar for i3-shell to
+- [x] `i3msg "border none"`: the border disappears, and the window still tiles in the same place.
+- [x] `i3msg "border toggle"` brings it back at the configured width, and again removes it.
+- [x] `i3msg "border normal"` behaves the same as `pixel` — there is no title bar for i3-shell to
       draw, so `normal` is a width, not a style.
-- [ ] Change `default_border pixel 2` to `default_border pixel 6` in the config and `i3msg reload`:
+- [x] Change `default_border pixel 2` to `default_border pixel 6` in the config and `i3msg reload`:
       windows you have not overridden individually get the wider border.
-- [ ] With `$mod+a` selecting a container, `i3msg "border pixel 8"` changes every window in that
+- [x] With `$mod+a` selecting a container, `i3msg "border pixel 8"` changes every window in that
       container at once.
 
 ## A20 — a bar on every non-primary monitor
@@ -135,30 +135,30 @@ below are the ones in `examples/i3-shell.config`: `$mod+a` focus parent, `$mod+w
 > is a defect for that walk rather than its setup. `docs/acceptance/phase-3b.md` is the current
 > guidance. This paragraph is kept as the record of what the Phase 3A walk was run against.
 
-- [ ] Dock an external display: a bar appears at the top of **that** monitor showing the same
+- [x] Dock an external display: a bar appears at the top of **that** monitor showing the same
       workspace pills as the panel on the primary, with the same active workspace highlighted.
-- [ ] The primary monitor still shows GNOME's own panel and does **not** grow a second bar.
-- [ ] Switching workspaces (`$mod+1`…`$mod+4` in `examples/i3-shell.config`; whatever your own
+- [x] The primary monitor still shows GNOME's own panel and does **not** grow a second bar.
+- [x] Switching workspaces (`$mod+1`…`$mod+4` in `examples/i3-shell.config`; whatever your own
       config binds) moves the highlight on every bar at once.
-- [ ] Clicking a pill on the external monitor's bar switches the workspace.
-- [ ] `$mod+r` (resize mode): the mode label appears on every bar, and leaving the mode removes it
+- [x] Clicking a pill on the external monitor's bar switches the workspace.
+- [x] `$mod+r` (resize mode): the mode label appears on every bar, and leaving the mode removes it
       from every bar.
-- [ ] Windows tiled on the external monitor start **below** its bar — nothing is hidden underneath
+- [x] Windows tiled on the external monitor start **below** its bar — nothing is hidden underneath
       it, and there is no gap either.
-- [ ] Undock: no bar or strut is left behind on the primary, and its work area is unchanged.
-- [ ] Re-dock: the bar comes back, once, with the current pills already on it.
+- [x] Undock: no bar or strut is left behind on the primary, and its work area is unchanged.
+- [x] Re-dock: the bar comes back, once, with the current pills already on it.
 
 ## A21 — disabling removes everything
-- [ ] `gnome-extensions disable i3-shell@troja`: every border, every container outline, every title
+- [x] `gnome-extensions disable i3-shell@troja`: every border, every container outline, every title
       row and every secondary-monitor bar disappears in one go.
-- [ ] Each monitor's work area returns to full height — maximize a window on the external display
+- [x] Each monitor's work area returns to full height — maximize a window on the external display
       and it now reaches the top of that monitor.
-- [ ] The windows themselves stay exactly where they were; nothing is moved or closed by disabling.
-- [ ] `gnome-extensions enable i3-shell@troja` re-adopts the windows, and the chrome comes back
+- [x] The windows themselves stay exactly where they were; nothing is moved or closed by disabling.
+- [x] `gnome-extensions enable i3-shell@troja` re-adopts the windows, and the chrome comes back
       without duplicates (one border per window, one bar per monitor).
-- [ ] Lock the screen and unlock: no chrome is left drawn over the lock screen, and everything is
+- [x] Lock the screen and unlock: no chrome is left drawn over the lock screen, and everything is
       back afterwards.
-- [ ] Log out with the extension enabled and log back in: no `i3-shell` error, and no GJS
+- [x] Log out with the extension enabled and log back in: no `i3-shell` error, and no GJS
       `CRITICAL` about a disposed actor, appears in the journal for the shutdown.
 
 ---

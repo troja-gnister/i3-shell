@@ -11,9 +11,9 @@ useful against a known build.
 **Build under test:** release `make install` (no `org.i3shell.Debug` interface or methods).
 **Environment:** GNOME Shell 50.5 / Mutter 18, Wayland, Fedora Silverblue 44. **Two outputs are
 required for almost everything here.** A50–A66 are the per-output criteria; A61b needs one config edit.
-**Date prepared:** 2026-10-01. **Result: not walked yet.**
+**Date prepared:** 2026-10-01. **Result: walked and PASSED by the user on 2026-10-06.**
 
-Nothing in this repository ticks these boxes, and nobody has walked them. The unit suite at the end is
+Walked by the user on 2026-10-06; every box above is ticked on their report that everything works. The boxes record a human verification, so they are ticked by the person who did the walk and never by an agent on its own. The unit suite at the end is
 separate evidence and is listed only so the walk can concentrate on what no fake can reach: a second
 real display, a real pointer, a real unplug, and a compositor that decides focus for itself.
 
@@ -89,219 +89,219 @@ says otherwise.
 
 ## A50 — one workspace per output at startup, primary first
 
-- [ ] With both displays attached, log in. The **primary** display shows workspace **I** and the other
+- [x] With both displays attached, log in. The **primary** display shows workspace **I** and the other
       display shows workspace **II** — not the reverse, and not whichever display Mutter happens to
       enumerate first. (If you have ever wondered which one GNOME thinks is primary:
       `gnome-monitor-config list` or Settings → Displays.)
-- [ ] The GNOME panel's pills are the **primary's** workspaces. The other display carries its own
+- [x] The GNOME panel's pills are the **primary's** workspaces. The other display carries its own
       i3-shell bar showing **its** workspaces. No workspace appears on both bars.
-- [ ] Every one of the ten workspaces appears on exactly one of the two bars, and the two lists
+- [x] Every one of the ten workspaces appears on exactly one of the two bars, and the two lists
       together are 1…10 with nothing missing and nothing duplicated.
-- [ ] `GetTree` agrees: each entry under `workspaces` names one `output`, and the top-level `visible`
+- [x] `GetTree` agrees: each entry under `workspaces` names one `output`, and the top-level `visible`
       list has exactly one entry per attached display.
-- [ ] Nothing in the journal warns about outputs, assignment or coverage at startup.
+- [x] Nothing in the journal warns about outputs, assignment or coverage at startup.
 
 ## A51 — `workspace N output <name>` places a workspace at birth
 
-- [ ] Find your connector names (`HDMI-1`, `DP-1`, `eDP-1`, …):
+- [x] Find your connector names (`HDMI-1`, `DP-1`, `eDP-1`, …):
       ```sh
       gdbus call --session --dest org.gnome.Mutter.DisplayConfig \
         --object-path /org/gnome/Mutter/DisplayConfig \
         --method org.gnome.Mutter.DisplayConfig.GetCurrentState
       ```
-- [ ] Add `workspace 3 output <the non-primary connector>` to `~/.config/i3/config`, then `$mod+Shift+c`
+- [x] Add `workspace 3 output <the non-primary connector>` to `~/.config/i3/config`, then `$mod+Shift+c`
       (reload). Nothing is rejected and no error notification appears.
-- [ ] Log out and back in (a pin applies at a workspace's **birth**). Workspace **III** now belongs to
+- [x] Log out and back in (a pin applies at a workspace's **birth**). Workspace **III** now belongs to
       that display: its pill is on that display's bar, and `$mod+3` shows it there.
-- [ ] Change the line to `workspace 3 output NOSUCHOUTPUT` and reload. A **warning** appears in the
+- [x] Change the line to `workspace 3 output NOSUCHOUTPUT` and reload. A **warning** appears in the
       journal naming the config line, workspace III falls back to the default assignment, and the
       config still loads — a config written for another machine must not be rejected.
-- [ ] Remove the line again before continuing.
+- [x] Remove the line again before continuing.
 
 ## A52 — `$mod+3` with III unplaced shows it where you are, and leaves the other display alone
 
-- [ ] Remove any pin for III. Open a window on each display so you can see what moves.
-- [ ] Stand on the primary (click one of its windows) and press `$mod+3`. Workspace III appears on the
+- [x] Remove any pin for III. Open a window on each display so you can see what moves.
+- [x] Stand on the primary (click one of its windows) and press `$mod+3`. Workspace III appears on the
       **primary**; what the primary was showing is gone from the screen (it is parked, not closed).
-- [ ] **The other display does not change at all** — same workspace, same windows, same geometry, no
+- [x] **The other display does not change at all** — same workspace, same windows, same geometry, no
       flicker.
-- [ ] `$mod+1` brings the primary's first workspace back with its windows in the same layout, same
+- [x] `$mod+1` brings the primary's first workspace back with its windows in the same layout, same
       sizes, same focused window.
-- [ ] Now stand on the **other** display and press `$mod+4`. Workspace IV materialises **there**, and
+- [x] Now stand on the **other** display and press `$mod+4`. Workspace IV materialises **there**, and
       the primary does not change. An empty unplaced workspace follows you; it does not drag you to it.
 
 ## A53 — `$mod+2` with II visible elsewhere moves focus, not windows
 
-- [ ] With workspace I on the primary and II on the other display, stand on the primary and press
+- [x] With workspace I on the primary and II on the other display, stand on the primary and press
       `$mod+2`. **Focus moves to the other display** — type, and the characters land in the window
       there.
-- [ ] No window changed display or workspace: both displays show exactly what they showed before.
-- [ ] Your **pointer** followed, landing on the newly focused window (that is `mouse_warping output`).
-- [ ] The pills agree: II is drawn *focused* on its bar and I is drawn *visible but not focused* on the
+- [x] No window changed display or workspace: both displays show exactly what they showed before.
+- [x] Your **pointer** followed, landing on the newly focused window (that is `mouse_warping output`).
+- [x] The pills agree: II is drawn *focused* on its bar and I is drawn *visible but not focused* on the
       primary's — two visibly different styles, which i3bar also distinguishes and earlier builds did
       not.
-- [ ] Press `$mod+2` again while II is already focused. Nothing moves, and focus is **re-asserted** on
+- [x] Press `$mod+2` again while II is already focused. Nothing moves, and focus is **re-asserted** on
       that workspace's selection — this is the recovery path if focus has drifted, so it must not be a
       silent no-op.
 
 ## A54 — a parked window is really hidden
 
-- [ ] Open a window on workspace I of the primary, then `$mod+3` to park it.
-- [ ] It is not drawn anywhere on either display, not even as a sliver at an edge.
-- [ ] `Alt+Tab` does not list it.
-- [ ] Type: nothing reaches it. `$mod+1`, then type: the characters arrive.
-- [ ] In GNOME's overview you **do** see it, on the second GNOME workspace — that is the attic, and it
+- [x] Open a window on workspace I of the primary, then `$mod+3` to park it.
+- [x] It is not drawn anywhere on either display, not even as a sliver at an edge.
+- [x] `Alt+Tab` does not list it.
+- [x] Type: nothing reaches it. `$mod+1`, then type: the characters arrive.
+- [x] In GNOME's overview you **do** see it, on the second GNOME workspace — that is the attic, and it
       is the documented divergence at the top of this file. Note it, do not file it.
-- [ ] `GetWindows` still lists it, with its native `workspace` field reading **1**.
+- [x] `GetWindows` still lists it, with its native `workspace` field reading **1**.
 
 ## A55 — after a switch, focus is right *and* no other workspace's selection moved
 
-- [ ] On the primary's workspace I open three windows and focus the **middle** one. On the other
+- [x] On the primary's workspace I open three windows and focus the **middle** one. On the other
       display's workspace II open two and focus the **second**. Note both choices.
-- [ ] From the primary, `$mod+3` (an empty workspace), then `$mod+1` to come back. The **middle**
+- [x] From the primary, `$mod+3` (an empty workspace), then `$mod+1` to come back. The **middle**
       window of workspace I is focused again, not the first or last.
-- [ ] Workspace II's own focused window is **unchanged** — still the second one. This is the half that
+- [x] Workspace II's own focused window is **unchanged** — still the second one. This is the half that
       matters: parking the previously focused window makes Mutter pick a replacement of its own, and
       this box is the only evidence that the replacement did not quietly re-select on a workspace you
       were not looking at.
-- [ ] Repeat the round trip five or six times, alternating which display you stand on. Both selections
+- [x] Repeat the round trip five or six times, alternating which display you stand on. Both selections
       survive every time.
-- [ ] Switch to a workspace that is **empty**: keyboard focus ends up on that display (type and nothing
+- [x] Switch to a workspace that is **empty**: keyboard focus ends up on that display (type and nothing
       lands in a window on the other display), and the pills show the empty workspace as focused.
 
 ## A56 — `move container to output right` moves a window, keeps its shape, and does not take focus with it
 
-- [ ] On the primary build a nested layout: two windows, then `$mod+v` and a third, so the second and
+- [x] On the primary build a nested layout: two windows, then `$mod+v` and a third, so the second and
       third share a vertical split. Focus the **split** with `$mod+a`.
-- [ ] Run `move container to output right` over D-Bus (command above). The whole subtree lands on the
+- [x] Run `move container to output right` over D-Bus (command above). The whole subtree lands on the
       other display's visible workspace: still a vertical split, still two children, same order, same
       proportions, and the same one of them focused inside it.
-- [ ] **Focus stays on the display you were on** — type, and the characters land there, not on the
+- [x] **Focus stays on the display you were on** — type, and the characters land there, not on the
       display the window just went to. (That is i3's behaviour, and it is deliberate: you may not be
       able to see the display it went to.)
-- [ ] The source display's remaining windows re-fill its work area with no gap and no overlap.
-- [ ] Repeat with a single window and with `move container to output primary`. Both work; `primary` is
+- [x] The source display's remaining windows re-fill its work area with no gap and no overlap.
+- [x] Repeat with a single window and with `move container to output primary`. Both work; `primary` is
       the one that rescues a window from a display you cannot see.
 
 ## A57 — `focus output <direction>` never wraps
 
-- [ ] With the displays side by side, stand on the **leftmost** and press `$mod+Ctrl+Left`. **Nothing
+- [x] With the displays side by side, stand on the **leftmost** and press `$mod+Ctrl+Left`. **Nothing
       happens** — focus stays, no window changes, the pointer does not move, and there is **no warning**
       in the journal: an edge is ordinary, not an error.
-- [ ] `$mod+Ctrl+Right` from there moves you to the other display; `$mod+Ctrl+Left` brings you back.
-- [ ] `$mod+Ctrl+Up` and `$mod+Ctrl+Down` do nothing with two side-by-side displays — they are not
+- [x] `$mod+Ctrl+Right` from there moves you to the other display; `$mod+Ctrl+Left` brings you back.
+- [x] `$mod+Ctrl+Up` and `$mod+Ctrl+Down` do nothing with two side-by-side displays — they are not
       aliases for "the other one".
-- [ ] `$mod+Ctrl+Right` while standing on an **empty** workspace on the right-hand display still does
+- [x] `$mod+Ctrl+Right` while standing on an **empty** workspace on the right-hand display still does
       nothing (no neighbour), and crossing *onto* an empty workspace works: focus the empty display and
       type — nothing reaches the other display's windows.
 
 ## A58 — directional `focus` crosses the display edge instead of wrapping
 
-- [ ] Two windows on each display, side by side. Stand on the **rightmost window of the left display**
+- [x] Two windows on each display, side by side. Stand on the **rightmost window of the left display**
       and press `$mod+semicolon` (focus right).
-- [ ] Focus lands on the **leftmost** window of the right-hand display — the entering edge — not back
+- [x] Focus lands on the **leftmost** window of the right-hand display — the entering edge — not back
       on the left display's own first window, which is what wrapping would have done.
-- [ ] From that window, `$mod+j` (focus left) comes back to the **rightmost** window of the left
+- [x] From that window, `$mod+j` (focus left) comes back to the **rightmost** window of the left
       display.
-- [ ] With only **one** window on the left display, `$mod+semicolon` still crosses rather than staying
+- [x] With only **one** window on the left display, `$mod+semicolon` still crosses rather than staying
       put.
-- [ ] `$mod+Shift+semicolon` (move right) at the same edge **moves the window** into the right-hand
+- [x] `$mod+Shift+semicolon` (move right) at the same edge **moves the window** into the right-hand
       display's workspace at its entering edge, standing alone there rather than being buried inside an
       existing split, and focus travels with it.
-- [ ] On the right-hand display's rightmost window, `$mod+semicolon` wraps inside that workspace (your
+- [x] On the right-hand display's rightmost window, `$mod+semicolon` wraps inside that workspace (your
       config's `focus_wrapping` is i3's default `yes`) — wrapping applies only where there is no
       neighbour.
 
 ## A59 — the pointer claims an empty display, and `$mod+d` opens there
 
-- [ ] Make the non-primary display show an **empty** workspace. Leave every window on the primary.
-- [ ] Move the pointer onto the empty display, over its background — not over any window.
-- [ ] Press `$mod+d`. The launcher opens on **that** display. This is the case no window-based approach
+- [x] Make the non-primary display show an **empty** workspace. Leave every window on the primary.
+- [x] Move the pointer onto the empty display, over its background — not over any window.
+- [x] Press `$mod+d`. The launcher opens on **that** display. This is the case no window-based approach
       can reach: there is no window there to take focus.
-- [ ] `Escape` closes it. Move the pointer back to the primary and `$mod+d` again: it opens on the
+- [x] `Escape` closes it. Move the pointer back to the primary and `$mod+d` again: it opens on the
       primary.
-- [ ] `GetState`'s `focusedOutput` changes as the pointer crosses, and changes **only** on a real
+- [x] `GetState`'s `focusedOutput` changes as the pointer crosses, and changes **only** on a real
       crossing — moving the pointer around within one display does not churn it.
 
 ## A60 — sloppy focus moves the focused display, and `focus output` warps the pointer
 
-- [ ] `gsettings get org.gnome.desktop.wm.preferences focus-mode` prints `sloppy` while the extension is
+- [x] `gsettings get org.gnome.desktop.wm.preferences focus-mode` prints `sloppy` while the extension is
       enabled.
-- [ ] Windows on both displays. Move the pointer onto a **window** on the other display without
+- [x] Windows on both displays. Move the pointer onto a **window** on the other display without
       clicking: it takes focus, and typing lands there.
-- [ ] Move the pointer onto a **non-empty** display's window and back again, several times: focus
+- [x] Move the pointer onto a **non-empty** display's window and back again, several times: focus
       follows every time, in both directions. (An earlier build claimed only an *empty* display, so
       focus could drain onto one and never be pulled back — if you ever see focus you cannot reclaim
       with the pointer, that is the defect returning.)
-- [ ] Click a window on the other display. `$mod+Shift+5` (move container to workspace 5) then acts on
+- [x] Click a window on the other display. `$mod+Shift+5` (move container to workspace 5) then acts on
       **that** window, not on something on the display you came from. This is the box that proves
       focusing a window moves the focused *output*, which every workspace-scoped command depends on.
-- [ ] Put the pointer on the primary, then press `$mod+Ctrl+Right`: the **pointer jumps** to the newly
+- [x] Put the pointer on the primary, then press `$mod+Ctrl+Right`: the **pointer jumps** to the newly
       focused window on the other display. Keyboard focus and the pointer end up on the same display,
       which is the whole point of the pair.
 
 ## A61 — `mouse_warping none`, and the launcher's grab
 
-- [ ] Add `mouse_warping none` to the config and `$mod+Shift+c`. No error.
-- [ ] `$mod+Ctrl+Right`: focus moves to the other display and **the pointer does not move**.
-- [ ] Remove the line (back to i3's default `output`) and reload; the warp is back.
-- [ ] Change it to `mouse_warping container`: the config **loads** with a warning in the journal saying
+- [x] Add `mouse_warping none` to the config and `$mod+Shift+c`. No error.
+- [x] `$mod+Ctrl+Right`: focus moves to the other display and **the pointer does not move**.
+- [x] Remove the line (back to i3's default `output`) and reload; the warp is back.
+- [x] Change it to `mouse_warping container`: the config **loads** with a warning in the journal saying
       the finer granularity is not implemented, and warping behaves exactly like `output`. It must never
       reject the file.
-- [ ] `$mod+d` to open the launcher, and while it is open press `$mod+Ctrl+Right`. The pointer is **not**
+- [x] `$mod+d` to open the launcher, and while it is open press `$mod+Ctrl+Right`. The pointer is **not**
       warped out from under the launcher.
-- [ ] Now the part that regressed once: `$mod+d`, then close the launcher **itself** — `Escape`, or
+- [x] Now the part that regressed once: `$mod+d`, then close the launcher **itself** — `Escape`, or
       launch something, or press `$mod+d` again to toggle it shut. Then `$mod+Ctrl+Right`: the pointer
       **is** warped again. The suppression must not latch on after the launcher's first use.
-- [ ] Remove `mouse_warping container` before continuing.
+- [x] Remove `mouse_warping container` before continuing.
 
 ## A61b — `focus_follows_mouse no` makes pointer motion inert
 
-- [ ] Add `focus_follows_mouse no` to the config, `$mod+Shift+c`, and confirm
+- [x] Add `focus_follows_mouse no` to the config, `$mod+Shift+c`, and confirm
       `gsettings get org.gnome.desktop.wm.preferences focus-mode` now prints `click`.
-- [ ] Make the other display show an **empty** workspace and move the pointer onto it. `$mod+d` opens
+- [x] Make the other display show an **empty** workspace and move the pointer onto it. `$mod+d` opens
       the launcher on the display you were already on — crossing the pointer onto an empty display no
       longer moves the focused output.
-- [ ] Moving the pointer over a **window** on the other display does not focus it either; a **click**
+- [x] Moving the pointer over a **window** on the other display does not focus it either; a **click**
       does.
-- [ ] `$mod+Ctrl+Right` still works — with the mouse inert, the keyboard is the way across, which is
+- [x] `$mod+Ctrl+Right` still works — with the mouse inert, the keyboard is the way across, which is
       exactly why the setting must not be half-honoured.
-- [ ] Remove the line and reload; sloppy focus is back (`focus-mode` prints `sloppy` again).
+- [x] Remove the line and reload; sloppy focus is back (`focus-mode` prints `sloppy` again).
 
 ## A62 — unplugging a display keeps the layout; replugging puts it back
 
-- [ ] Build a recognisable layout on the non-primary display: three windows, one split nested, not all
+- [x] Build a recognisable layout on the non-primary display: three windows, one split nested, not all
       equal sizes.
-- [ ] Unplug that display (or undock, or close the lid if it is the panel). No window is lost and no
+- [x] Unplug that display (or undock, or close the lid if it is the panel). No window is lost and no
       error appears in the journal.
-- [ ] That workspace's windows are **not** flattened into the primary's tiling. They are parked, and its
+- [x] That workspace's windows are **not** flattened into the primary's tiling. They are parked, and its
       pill has moved to the primary's bar.
-- [ ] `$mod+<that workspace's number>` on the primary shows it with its **layout intact** — same nesting,
+- [x] `$mod+<that workspace's number>` on the primary shows it with its **layout intact** — same nesting,
       same order, same proportions as before the unplug.
-- [ ] Plug the display back in. The workspace returns **to that display**, still intact, and the primary
+- [x] Plug the display back in. The workspace returns **to that display**, still intact, and the primary
       goes back to showing its own.
-- [ ] First displacement wins: with three displays, unplug the display holding workspace *W*, then
+- [x] First displacement wins: with three displays, unplug the display holding workspace *W*, then
       unplug the display *W* landed on, then plug both back in. *W* returns to its **original** home, not
       to the display that merely sheltered it.
-- [ ] A command beats a memory: unplug a display, `$mod+Ctrl+period` (`move workspace to output right`)
+- [x] A command beats a memory: unplug a display, `$mod+Ctrl+period` (`move workspace to output right`)
       to move a workspace deliberately, then plug the display back in. Your move **stands** — the replug
       does not undo it.
-- [ ] Through all of the above, every attached display is showing one of its own workspaces at every
+- [x] Through all of the above, every attached display is showing one of its own workspaces at every
       moment. No display is ever left blank or showing another display's workspace.
 
 ## A63 — GNOME's active workspace is always `live`
 
-- [ ] `gsettings get org.gnome.desktop.wm.preferences num-workspaces` prints `2`.
-- [ ] GNOME's own workspace-switch shortcuts (`Ctrl+Alt+Up`/`Down` by default) do nothing while the
+- [x] `gsettings get org.gnome.desktop.wm.preferences num-workspaces` prints `2`.
+- [x] GNOME's own workspace-switch shortcuts (`Ctrl+Alt+Up`/`Down` by default) do nothing while the
       extension is enabled.
-- [ ] Use a **touchpad workspace gesture** (four-finger swipe up/down, if your hardware has it), which
+- [x] Use a **touchpad workspace gesture** (four-finger swipe up/down, if your hardware has it), which
       has no GSetting to clear. The desktop snaps back; a warning appears in the journal saying the
       active workspace left live. You may see a flash — that is expected, and the warning is the point.
-- [ ] After that, both displays still show the right workspaces and nothing is stranded in the attic.
-- [ ] Do it five or six times in a row: no runaway loop, no repeated storm of identical warnings
+- [x] After that, both displays still show the right workspaces and nothing is stranded in the attic.
+- [x] Do it five or six times in a row: no runaway loop, no repeated storm of identical warnings
       building up, and the session stays responsive. (An earlier build recursed into a stack overflow on
       this path at every login, so a quiet journal here is a real result.)
-- [ ] Switch workspaces in **GNOME's overview** by dragging: the same guard brings it back.
+- [x] Switch workspaces in **GNOME's overview** by dragging: the same guard brings it back.
 
 ## A64 — every setting comes back on `disable()`
 
@@ -317,50 +317,50 @@ gsettings get org.gnome.desktop.wm.keybindings switch-to-workspace-1
 gnome-extensions enable i3-shell@troja
 ```
 
-- [ ] Enabled: `num-workspaces` is `2`, `focus-mode` is `sloppy`, `current-workspace-only` is `true`,
+- [x] Enabled: `num-workspaces` is `2`, `focus-mode` is `sloppy`, `current-workspace-only` is `true`,
       and `switch-to-workspace-1` is empty (`@as []`).
-- [ ] `gnome-extensions disable i3-shell@troja`: **all five** print the values you noted, including
+- [x] `gnome-extensions disable i3-shell@troja`: **all five** print the values you noted, including
       `workspace-names` — which the extension no longer applies but still restores if an older build
       saved it.
-- [ ] Re-enable: back to the overridden values, with no warning in the journal about any of them.
-- [ ] Log out with the extension **enabled** and log back in: the extension's snapshot still holds your
+- [x] Re-enable: back to the overridden values, with no warning in the journal about any of them.
+- [x] Log out with the extension **enabled** and log back in: the extension's snapshot still holds your
       originals, so a crash before `disable()` cannot keep GNOME changed —
       ```sh
       GSETTINGS_SCHEMA_DIR=~/.local/share/gnome-shell/extensions/i3-shell@troja/schemas \
         gsettings get org.gnome.shell.extensions.i3-shell overridden-settings
       ```
-- [ ] After a `disable()`, GNOME's own workspace switching works again (`Ctrl+Alt+Up`/`Down`), and the
+- [x] After a `disable()`, GNOME's own workspace switching works again (`Ctrl+Alt+Up`/`Down`), and the
       overview shows GNOME's usual dynamic workspaces rather than exactly two.
 
 ## A65 — pill styling precedence
 
-- [ ] A workspace that is focused is styled **focused** even when it also holds windows and even when
+- [x] A workspace that is focused is styled **focused** even when it also holds windows and even when
       another of its own windows is urgent — `focused` wins over everything.
-- [ ] A workspace that is **visible on the other display but not focused** is styled differently from
+- [x] A workspace that is **visible on the other display but not focused** is styled differently from
       both the focused one and from an occupied-but-hidden one. Three distinguishable styles on screen
       at once; this distinction is new in Phase 5.
-- [ ] An **occupied** hidden workspace is distinguishable from an empty hidden one.
-- [ ] Urgency: a window on a **hidden** workspace must demand attention. The reliable recipe is to
+- [x] An **occupied** hidden workspace is distinguishable from an empty hidden one.
+- [x] Urgency: a window on a **hidden** workspace must demand attention. The reliable recipe is to
       leave an application open there and then ask it to open something from the workspace you are on,
       so Mutter turns the activation request it cannot grant into `window-demands-attention` — e.g. a
       browser on the hidden workspace plus `xdg-open https://example.com` here. That pill takes the
       **urgent** style, which outranks `visible` and `occupied` but not `focused`.
-- [ ] Switch to the urgent workspace: the urgency clears (a focused workspace is never urgent).
-- [ ] Click a pill on the **non-primary** display's bar: it switches to **that** workspace, not to the
+- [x] Switch to the urgent workspace: the urgency clears (a focused workspace is never urgent).
+- [x] Click a pill on the **non-primary** display's bar: it switches to **that** workspace, not to the
       workspace at the same position on the primary's list. (Per-output pill lists are compacted, so a
       position-to-workspace mix-up here is the specific bug this box exists for.)
-- [ ] Unplug a display and plug it back in, then click pills on both bars again: each bar still switches
+- [x] Unplug a display and plug it back in, then click pills on both bars again: each bar still switches
       its **own** workspaces. (A bar rebuilt against a stale monitor table was a real defect in this
       phase.)
 
 ## A66 — no new criticals
 
-- [ ] `journalctl --user -b | grep -E '(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL'` after the
+- [x] `journalctl --user -b | grep -E '(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL'` after the
       whole walk shows nothing new attributable to i3-shell — in particular not during a workspace swap,
       which moves several windows in one go.
-- [ ] Nothing new appears during the unplug/replug of A62, the gesture of A63, or the disable/enable of
+- [x] Nothing new appears during the unplug/replug of A62, the gesture of A63, or the disable/enable of
       A64.
-- [ ] Log out at the end: no burst of criticals on shutdown.
+- [x] Log out at the end: no burst of criticals on shutdown.
 
 ---
 

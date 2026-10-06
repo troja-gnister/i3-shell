@@ -9,7 +9,7 @@ display did not tile" is only useful against a known build.
 **Build under test:** release `make install` (no `org.i3shell.Debug` interface or methods).
 **Environment:** GNOME Shell 50.5 / Mutter 18, Wayland, Fedora Silverblue 44. **An external display
 is required for A22–A25 and A27.**
-**Date prepared:** 2026-09-23. **Result: not walked yet.**
+**Date prepared:** 2026-09-23. **Result: walked and PASSED by the user on 2026-10-06.**
 
 Nothing in this repository ticks these boxes. The automated suite at the end is separate evidence and
 is listed only so the walk can concentrate on what automation cannot reach: this phase exists because
@@ -86,13 +86,13 @@ the `gsettings reset` above, which sets up A22, and the `gsettings set` in A22's
 ---
 
 ## A22 — the extension owns `workspaces-only-on-primary`
-- [ ] With the extension enabled, `gsettings get org.gnome.mutter workspaces-only-on-primary`
+- [x] With the extension enabled, `gsettings get org.gnome.mutter workspaces-only-on-primary`
       prints `false`.
-- [ ] `gnome-extensions disable i3-shell@troja`: the same command now prints `true` again — the
+- [x] `gnome-extensions disable i3-shell@troja`: the same command now prints `true` again — the
       value you reset it to before starting.
-- [ ] `gnome-extensions enable i3-shell@troja`: back to `false`, and no warning about the setting
+- [x] `gnome-extensions enable i3-shell@troja`: back to `false`, and no warning about the setting
       appears in the journal.
-- [ ] Log out with the extension enabled and log back in: the key is `false`, and the extension's
+- [x] Log out with the extension enabled and log back in: the key is `false`, and the extension's
       own snapshot names it with your original value inside — a crash before `disable()` must not
       silently keep GNOME changed. The snapshot lives in the extension's schema, which is not on
       `gsettings`' default search path (README):
@@ -100,54 +100,54 @@ the `gsettings reset` above, which sets up A22, and the `gsettings set` in A22's
       GSETTINGS_SCHEMA_DIR=~/.local/share/gnome-shell/extensions/i3-shell@troja/schemas \
         gsettings get org.gnome.shell.extensions.i3-shell overridden-settings
       ```
-- [ ] Set it by hand to `true` while the extension is running
+- [x] Set it by hand to `true` while the extension is running
       (`gsettings set org.gnome.mutter workspaces-only-on-primary true`): the extension does not
       fight you for it, windows on the external display leave the tiling (that is A26's mechanism,
       reached the long way round), and setting it back to `false` returns them. Nothing crashes and
       no window is lost.
 
 ## A23 — a window moved to the external display tiles there
-- [ ] Dock the external display. Drag a terminal from the internal display onto it: it **tiles** on
+- [x] Dock the external display. Drag a terminal from the internal display onto it: it **tiles** on
       the external monitor — it snaps to that monitor's work area, below i3-shell's bar there, and
       does not stay where you dropped it.
-- [ ] It is still tracked: `$mod+Return` on the external display opens a second terminal and the two
+- [x] It is still tracked: `$mod+Return` on the external display opens a second terminal and the two
       split that monitor's work area between them; focus keys move between them.
-- [ ] Open a window while the external display is focused: it tiles there too, not on the internal
+- [x] Open a window while the external display is focused: it tiles there too, not on the internal
       one.
-- [ ] The internal display's remaining tiles re-fill its work area when the window leaves.
-- [ ] Nothing in the journal says a window was dropped, and no `i3-shell` warning appears for the
+- [x] The internal display's remaining tiles re-fill its work area when the window leaves.
+- [x] Nothing in the journal says a window was dropped, and no `i3-shell` warning appears for the
       move.
 
 ## A24 — moving it back tiles it on the internal display again
-- [ ] Drag that window back to the internal display: it tiles there, beside whatever is focused.
-- [ ] Do the round trip three or four times, alternating displays: the window keeps tiling every
+- [x] Drag that window back to the internal display: it tiles there, beside whatever is focused.
+- [x] Do the round trip three or four times, alternating displays: the window keeps tiling every
       time, and never ends up floating, stuck, or invisible. **This is the box this whole phase
       exists for** — before it, the first move dropped the window permanently and the move back
       could not even be noticed.
-- [ ] The external display's remaining tiles re-fill its work area each time.
-- [ ] After the last move, `$mod+Shift+q` closes that window normally (it is still a window
+- [x] The external display's remaining tiles re-fill its work area each time.
+- [x] After the last move, `$mod+Shift+q` closes that window normally (it is still a window
       i3-shell knows about, not an orphan).
 
 ## A25 — unplugging the display does not lose the window
-- [ ] With a window tiled on the external display, unplug it (or undock): the window appears on the
+- [x] With a window tiled on the external display, unplug it (or undock): the window appears on the
       internal display, tiled, and not behind anything.
-- [ ] Plug the display back in: nothing is lost, no duplicate window appears, and the window is
+- [x] Plug the display back in: nothing is lost, no duplicate window appears, and the window is
       still usable. (Contents do **not** migrate back on their own — Phase 2's A14 already recorded
       that.)
-- [ ] Close the lid with the external display attached, then open it again: no window is lost and no
+- [x] Close the lid with the external display attached, then open it again: no window is lost and no
       `i3-shell` error appears in the journal for either transition.
 
 ## A26 — pinning a window to all workspaces
-- [ ] With two tiles open, pin one of them (`Alt+Space` → **Always on Visible Workspace**): it
+- [x] With two tiles open, pin one of them (`Alt+Space` → **Always on Visible Workspace**): it
       leaves the tiling, and the other tile grows to fill the whole work area.
-- [ ] The pinned window is still there, still usable, and still follows you to every workspace —
+- [x] The pinned window is still there, still usable, and still follows you to every workspace —
       that is GNOME doing its job, not i3-shell losing the window.
-- [ ] Un-pin it (`Alt+Space` → the same item, now unchecked): it returns to the tiling **beside the
+- [x] Un-pin it (`Alt+Space` → the same item, now unchecked): it returns to the tiling **beside the
       focused window**, as if newly opened. It does not come back to the slot it left, and that is
       deliberate.
-- [ ] Pin it, switch workspaces, un-pin it there: it joins *that* workspace's tiling beside the
+- [x] Pin it, switch workspaces, un-pin it there: it joins *that* workspace's tiling beside the
       focused window.
-- [ ] Pin a window, **then** minimize it: it is out of the tiling and the other tile keeps the whole
+- [x] Pin a window, **then** minimize it: it is out of the tiling and the other tile keeps the whole
       work area. Un-minimize it (from the overview or `Alt+Tab`): it is back on screen and **still**
       out of the tiling, because it is still pinned. Now un-pin it: only now does it rejoin, beside
       the focused window, exactly once — no duplicate leaf, no empty slot left behind.
@@ -155,14 +155,14 @@ the `gsettings reset` above, which sets up A22, and the `gsettings set` in A22's
       be focused, so neither `Alt+Space` nor a title-bar menu can reach *Always on Visible Workspace*
       while it is minimized — hence pin first and un-pin last. This is the only box that walks two
       exclusion reasons at once, which is what the OR in the membership predicate exists for.)
-- [ ] Do the pin/un-pin cycle five or six times on the same window: it lands in the tiling every
+- [x] Do the pin/un-pin cycle five or six times on the same window: it lands in the tiling every
       time, and the journal shows no repeated `i3-shell` warning building up.
 
 ## A27 — no hand-edited GSetting anywhere in the above
-- [ ] Everything in A23–A26 worked without your setting `workspaces-only-on-primary` yourself. (The
+- [x] Everything in A23–A26 worked without your setting `workspaces-only-on-primary` yourself. (The
       `gsettings reset` in the setup and the deliberate `set true` in A22's last box are the only
       writes in this document; both are there to *test* the ownership, not to enable it.)
-- [ ] On a machine where that key has never been touched — or after
+- [x] On a machine where that key has never been touched — or after
       `gsettings reset org.gnome.mutter workspaces-only-on-primary` with the extension disabled —
       enabling i3-shell is enough to make the external display tile. Phase 2's A14 and Phase 3A's
       A20 both told you to set it by hand first; that instruction is now obsolete, and those two
