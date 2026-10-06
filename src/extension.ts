@@ -286,7 +286,9 @@ export default class I3ShellExtension extends Extension {
       bars.monitorsChanged();
       engine.setRowHeight(measureRowHeight());
     };
-    tracker.connect(Main.layoutManager, 'monitors-changed', closing.unlessClosing(() => {
+    // `monitors-changed` is real on Main.layoutManager; @girs's layout.d.ts is hand-written and declares
+    // no SignalSignatures, so the class carries only GObject.Object's map. See connectUnchecked.
+    tracker.connectUnchecked(Main.layoutManager, 'monitors-changed', closing.unlessClosing(() => {
       remeasure();
       engine.onMonitorsChanged();
     }));
