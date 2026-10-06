@@ -455,6 +455,13 @@ export class Engine {
    * pointer ONTO the focused output (the measured dump reads `"pointer": [960, 556]`, the centre of the
    * focused output's work area), so a lapse on any crossing would have broken D8 on the very run that
    * found it. Crossing back onto the display you are already on says nothing about another one.
+   *
+   * It deliberately does not consult `tree.visible`, unlike the return three lines below: the clear
+   * writes no output, so it cannot leave the focused output pointing at a display with no visible entry,
+   * and `coverOutputs` keeps a live output from lacking one anyway -- `onPointerMonitorIndex` forwards
+   * only ids from `_topology.monitors`, and the topology and `visible` are written in the same
+   * `_layoutAndPublish` pass. So the one shape where this clears without the move below compensating is
+   * unreachable rather than merely unfixtured.
    */
   onPointerOutput(output: MonitorId): void {
     if (!this._started || this._disposed || this._suspended) return;

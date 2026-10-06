@@ -1122,11 +1122,22 @@ describe('workspace and focus on two displays (Task 19)', () => {
   // pointer over the window, so the crossing reported by src/shell/pointer.ts is the evidence -- and it
   // arrives even when `focus_follows_mouse no` forbids acting on it.
   describe('a pointer crossing ends the involuntary-focus suppression', () => {
-    // THREE outputs. With two, the user's own crossing moves the focused output to the display the
-    // reported window is on, so "the crossing ended the suppression" and "the crossing moved the focused
-    // output" give the same answer -- which is exactly the fixture trap the D8 report records removing
-    // from its own lapse test. Here the pointer crosses onto output 2 while the stray report names a
-    // window on output 3, so only the lapse can explain the outcome.
+    // What discriminates here is the INTERMEDIATE `expect(focusedOutput).toBe(1)` after the crossing, not
+    // the output count. An implementation that ended the suppression by *moving* the focused output (i.e.
+    // one that ignored `focus_follows_mouse`) fails there, with `expected 2 to be 1`, and never reaches
+    // the final assertion.
+    //
+    // Fix round 1, I1: these tests used to claim the third output was load-bearing -- that a
+    // focused-output move would make the final assertion answer 2. Measured, that is false twice over:
+    // such an implementation dies at the intermediate assertion first, and had it got past it the answer
+    // would be 3 anyway, because once the stale record no longer equals `focusedOutput` clause 1 of
+    // `_involuntaryFocus` fails, the report is honoured and D5 claims output 3 by itself. The reviewer
+    // reduced the fixture to two outputs and all four tests passed on HEAD and failed identically under
+    // every mutation below. The rationale had been copied from the D8 report, where the lapse genuinely
+    // WAS a focused-output move and a third output did separate the two answers; this lapse writes no
+    // output at all, so that trap cannot arise. Three outputs are kept only because they match the D8
+    // lapse test next door and keep "the display crossed to" and "the display reported" visibly distinct
+    // in the fixture -- no assertion here depends on the count.
     const threeOutputs = (text: string) => fakeEngine(text, {
       monitors: [{id: 1, index: 0}, {id: 2, index: 1}, {id: 3, index: 2}], primary: 1, workspaceCount: 10,
     });
@@ -1190,6 +1201,41 @@ describe('workspace and focus on two displays (Task 19)', () => {
       f.focus(null);
       f.focus(7);
       expect(f.engine.state().focusedOutput).toBe(3);
+    });
+
+    // Fix round 1, I3: the one reachable difference this change makes for a `focus_follows_mouse yes`
+    // user -- the default, and the user's own config -- and it is a strict improvement, not the
+    // redundancy the first report claimed. D8 rules that "a failed clause clears the record for good
+    // rather than merely answering false, so a focused output that wanders away and comes back cannot
+    // resurrect a suppression the user has already overruled". A pointer crossing was the one way to
+    // wander away that did NOT clear it: rule 4 moved `focusedOutput`, so clause 1 would merely have
+    // answered false at the next report -- but if the user came back by command before any report
+    // arrived, the record equalled `focusedOutput` again and the suppression was resurrected. The
+    // existing `does not resurrect the suppression when the user comes back to that display` drives that
+    // path with `focus_output` on both legs and so never reached this hole.
+    //
+    // What discriminates: the `focus_output` BACK onto output 1 between the crossing and the report.
+    // Without it the crossing's own move of `focusedOutput` would fail clause 1 all by itself and the
+    // report would be honoured with or without the clear, so the test would pass either way.
+    it('does not let a command back onto that display resurrect the suppression after a crossing', () => {
+      const f = threeOutputs('bindsym Mod4+q kill');     // the default: focus_follows_mouse yes
+      f.engine.start();
+      f.mapOn(3, 7);
+      f.mapOn(1, 8);
+      f.focus(8);
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: 5, name: '5'}}], 1);
+      expect(f.engine.state().focusedOutput).toBe(1);    // armed for output 1, showing empty workspace 4
+
+      f.engine.onPointerOutput(2);                      // the user wanders off to the middle display
+      expect(f.engine.state().focusedOutput).toBe(2);
+      f.engine.run([{type: 'focus_output', target: {name: 'fixture-1'}}], 2);   // ... and comes back
+      expect(f.engine.state().focusedOutput).toBe(1);
+      expect(f.tree().visible.get(1)).toBe(4);           // nothing re-armed: `visible` never changed
+      expect(f.tree().occupied(4)).toBe(false);          // ... and clause 2 would still hold
+
+      f.focus(null);
+      f.focus(7);
+      expect(f.engine.state().focusedOutput).toBe(3);    // overruled once, overruled for good
     });
   });
 });
