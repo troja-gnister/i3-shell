@@ -412,6 +412,8 @@ gnome-extensions enable i3-shell@troja
 
 ## Automated evidence (not acceptance)
 
+Phase 4's own criteria (A38-A49) are walked separately, in `docs/acceptance/phase-4.md`.
+
 **Unit suite: 1160 tests in 71 files**, green at the tip of `phase-5`, alongside both TypeScript
 programs, the Layer 0 import gate and the tree lint. **Nested integration suite: 637 assertions, exit 0,
 zero `LIMITATION` branches**, green at `863a8ec` on 2026-10-01 — the first end-to-end native pass of
