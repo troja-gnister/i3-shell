@@ -359,7 +359,14 @@ gnome-extensions enable i3-shell@troja
       whole walk shows nothing new attributable to i3-shell — in particular not during a workspace swap,
       which moves several windows in one go.
 - [x] Nothing new appears during the unplug/replug of A62, the gesture of A63, or the disable/enable of
-      A64.
+      A64. The unplug/replug is not silent, and this is what to expect rather than file: the nested
+      suite's `--hotplug` scenario passes every assertion, and mutter logs a pair of criticals while it
+      runs — `meta_monitor_manager_get_logical_monitor_from_number: assertion '(unsigned int) number <
+      g_list_length (manager->logical_monitors)' failed` and `meta_workspace_get_work_area_for_monitor:
+      assertion 'logical_monitor != NULL' failed`, twice, inside one millisecond. Instrumenting this
+      project's only work-area call site showed them landing 39 ms *before* the extension's first
+      work-area call of the reconfiguration, so they belong to GNOME's own hotplug handling;
+      `test/integration/criticals.sh` excludes both by exact text and reports them whenever they appear.
 - [x] Log out at the end: no burst of criticals on shutdown.
 
 ---
