@@ -143,6 +143,32 @@ export class Engine {
   private _loaded!: LoadedConfig;
   private _mode = 'default';
   private _locked = false;
+  /**
+   * Task 2: tiling is switched OFF at the Quick Settings toggle. A second, independent pause cause
+   * BESIDE `_locked`, composed with it through `_suspended` below -- never folded into it.
+   *
+   * Two causes rather than one because they have different exits. A lock ends when the screen unlocks; a
+   * toggle ends only when the user clicks it again, so unlocking a screen that was locked while tiling
+   * was off must not turn tiling back on. One shared flag would do exactly that.
+   *
+   * Per-session, deliberately not persisted. The extension's GSettings would be the mechanism, and a
+   * persisted "off" would survive a logout into a session with no pills, no bindings and no visible
+   * reason why the user's config is being ignored -- while `enable()` is also the one path that has to
+   * work when everything else has failed. A fresh session is i3-shell on.
+   */
+  private _paused = false;
+  /**
+   * "The engine must not act." Either pause cause answers it, and every site that asks the question has
+   * to get one answer, or the two causes would disagree about whether a swipe runs or a mode re-grabs.
+   * The two places that mean specifically "the SCREEN is locked" -- the launcher's locked refusal message
+   * and `onUnlocked`'s own early return -- keep reading `_locked` directly, because they are about the
+   * lock and not about acting. `commit()` is the third: see the comment there, which is about acting but
+   * deliberately only about the toggle.
+   */
+  private get _suspended(): boolean {
+    return this._locked || this._paused;
+  }
+
   private _started = false;
   private _disposed = false;
   private _closing = false;
@@ -413,10 +439,11 @@ export class Engine {
    * the pointer here would leave a documented setting half-effective in its least visible half.
    *
    * Fix round 1, folded item 4: gated on `_locked` too, for the same reason the `launcher` command is
-   * -- pointer motion over a lock screen must not reassign the focused output underneath it.
+   * -- pointer motion over a lock screen must not reassign the focused output underneath it. Task 2
+   * widened that to `_suspended`: tiling switched off at the toggle must not reassign it either.
    */
   onPointerOutput(output: MonitorId): void {
-    if (!this._started || this._disposed || this._locked || !this._config.focusFollowsMouse) return;
+    if (!this._started || this._disposed || this._suspended || !this._config.focusFollowsMouse) return;
     const tree = this._tree;
     if (!tree || tree.focusedOutput === output) return;
     // An output with no visible entry is not one the focus can sit on: `activeWorkspace` reads
@@ -621,7 +648,12 @@ export class Engine {
 
   /** Native callbacks may enqueue work, but never mutate a tree during its traversal. */
   private commit(change: () => boolean | void = () => {}): void {
-    if (!this._started || this._disposed || this._closing) return;
+    // `_paused` and not `_suspended`: the engine commits freely over a lock screen today (it keeps
+    // reconciling geometry so the session is correct the moment it unlocks), and nothing about Task 2
+    // changes that. Tiling switched off is the opposite -- no layout, no geometry, no decorations, no
+    // parking -- and this one line is what makes it so for every path, including every deferred
+    // continuation, rather than at each of commit()'s thirty callers.
+    if (!this._started || this._disposed || this._closing || this._paused) return;
     this._queued.push(change);
     if (this._committing) return;
     this._committing = true;
@@ -1592,13 +1624,15 @@ export class Engine {
    * most of them will never write a `bindgesture` line, so a bare swipe must cost nothing and say nothing.
    * Which direction means `workspace next` lives entirely in that config -- nothing here knows.
    *
-   * The `_locked` guard is the one thing this does that `onBinding` does not need. `onLocked()` drops
-   * every accelerator grab, so a binding physically cannot fire over a lock screen; the stage
-   * subscription a swipe arrives on has no equivalent and stays live, which would otherwise make the lock
-   * screen the one place where gestures still ran commands.
+   * The `_suspended` guard is the one thing this does that `onBinding` does not need. `onLocked()` and
+   * `setTilingEnabled(false)` both drop every accelerator grab, so a binding physically cannot fire over
+   * a lock screen or with tiling switched off; the stage subscription a swipe arrives on has no
+   * equivalent and stays live, which would otherwise make those the two places where gestures still ran
+   * commands. (`run()` would refuse the paused case a second time; this keeps the gesture from ever
+   * reaching it, and keeps both pause causes answering the question the same way.)
    */
   onSwipe(direction: 'left' | 'right', timestamp: number): void {
-    if (this._locked) return;
+    if (this._suspended) return;
     const gesture = this._config.gestures.get(`swipe:${direction}`);
     if (!gesture) return;
     const {commands, diagnostics} = parseCommands(gesture.command);
@@ -1610,6 +1644,10 @@ export class Engine {
   /** Executes commands in order; returns a short human-readable result (also the D-Bus reply). */
   run(commands: Command[], timestamp: number): string {
     if (this._disposed) return 'stopped';
+    // Commands are refused outright rather than silently dropped by the paused `commit()`. `reload` and
+    // `restart` do real work OUTSIDE commit() -- they load a config and push settings -- so letting them
+    // run while paused would leave a config half-applied with no layout behind it.
+    if (this._paused) return 'tiling is switched off';
     const commandFrames = new Map<WindowId, Rect>();
     const messages = commands.map(c => this._runOne(c, timestamp, commandFrames)).filter(m => m !== '');
     return messages.length > 0 ? messages.join('; ') : 'ok';
@@ -1627,6 +1665,9 @@ export class Engine {
   onUnlocked(): void {
     if (!this._started || this._disposed) return;
     this._locked = false;
+    // Review Focus 3: tiling is switched off at the toggle, so unlocking restores the lock's own state
+    // and nothing more. Without this, the lock screen is a second, invisible ON switch.
+    if (this._paused) return;
     this._ports.indicator.setVisible(true);
     if (this._disposed) return;
     this._ports.keys.setBindings(this._modeBindings('default'));
@@ -1637,6 +1678,98 @@ export class Engine {
         if (this._disposed) return false;
       }
     });
+  }
+
+  get tilingEnabled(): boolean {
+    return !this._paused;
+  }
+
+  /**
+   * The Quick Settings toggle. OFF is a pause, not a disable -- the toggle has to survive it or there is
+   * no way back on, so every object stays alive and `commit()` simply stops running.
+   *
+   * OFF, in this order, and the order is the substance:
+   *
+   * 1. Close the launcher. It holds a modal grab, and a grab left behind takes the keyboard away from the
+   *    whole session -- the same reason `reload`, `restart` and `onLocked` all close it first.
+   * 2. Set `_paused`, BEFORE `_enterMode`, so the mode reset below does not re-grab what step 5 drops.
+   * 3. Hide the pills and empty the decorations. The renderer is told explicitly rather than left to
+   *    infer teardown from a commit that will never come, which is the contract the `decorations` port
+   *    comment states: it receives a fresh plan on every commit, including the one that empties it.
+   * 4. Flush the attic -- see `_flushAttic`. BEFORE step 6.
+   * 5. Drop every accelerator grab, so the user's own key bindings belong to GNOME again.
+   * 6. Restore the GSettings this extension overrode, through the port's existing `restoreAll()`.
+   *
+   * ON re-adopts everything the way a fresh enable does, which is the path `restart` already uses and
+   * which `A14 re-enable adopts the live windows in MRU order and retiles them` covers: clear `_paused`,
+   * re-apply the settings (so GNOME is back to live + attic BEFORE anything is parked against it), re-grab
+   * unless the screen is locked, then null the tree inside a commit so `_layoutAndPublish` rebuilds it and
+   * adopts every window the port lists in `'startup'` mode -- each on its own monitor's workspace, which
+   * is D7's ruling for adoption that predates the tree and is exactly what this is.
+   */
+  setTilingEnabled(enabled: boolean): void {
+    if (!this._started || this._disposed) return;
+    if (enabled === !this._paused) return;
+    if (!enabled) {
+      this._ports.launcher.close();
+      this._paused = true;
+      this._ports.indicator.setVisible(false);
+      this._ports.decorations.apply({borders: [], frames: [], titleRows: []});
+      this._enterMode('default');
+      this._flushAttic();
+      if (this._disposed) return;
+      this._ports.keys.ungrabAll();
+      this._ports.settings.restoreAll();
+      return;
+    }
+    this._paused = false;
+    this._ports.indicator.setVisible(!this._locked);
+    this._ports.settings.apply(this._config, this._workspaceCount);
+    if (this._disposed) return;
+    if (!this._locked) this._ports.keys.setBindings(this._modeBindings('default'));
+    if (this._disposed) return;
+    this.commit(() => {
+      this._tree = null;
+      this._manualFloating.clear();
+      this._minimized.clear();
+      this._raiseOrders.clear();
+      this._lastFocus = null;
+      this._shownOnFocusedOutput = null;
+      // Task 1's carry records, cleared here and not in `_flushAttic`: each one suppresses ONE repeat
+      // translation of a floating frame while the compositor is still reporting the output the frame was
+      // carried away from, and that uncertainty cannot outlive a pause of arbitrary length. Keeping them
+      // across an ON could only suppress a genuine later carry back to the same output -- a frame left
+      // behind on the display the user told it to leave -- and a fresh enable starts with none.
+      this._carriedFloating.clear();
+    });
+  }
+
+  /**
+   * Every window the engine parked goes back to the live GNOME workspace.
+   *
+   * This is the substantive half of switching off. An i3 workspace no output is showing has its windows
+   * on `ATTIC_WORKSPACE`, which Mutter refuses to render -- that refusal IS the hiding primitive. Leaving
+   * them there with the engine no longer committing would leave them invisible and unreachable with
+   * nothing running to bring them back: the "audible but invisible window" failure this project was
+   * started to fix, caused by its own off switch.
+   *
+   * It iterates `_windows`, the engine's own record of every window it tracks, NOT the tree. A window
+   * that is minimized, sticky or skip-taskbar is evicted from the tree and held in `_minimized`, and if it
+   * was parked before it was evicted it is sitting in the attic with no tree membership at all. A
+   * tree walk would leave exactly those windows behind, and a minimized window is the commonest thing on
+   * a desktop. `_windows` is also the view every other reader in this file uses for a native workspace
+   * (`_reconcileParking` compares against the same field), so this adds no second source of truth.
+   *
+   * Only a window that is not already live is asked about, matching `_reconcileParking`'s own guard: a
+   * flush that re-asserted every window's workspace would be one port call per window for no change.
+   */
+  private _flushAttic(): void {
+    for (const [id, info] of this._windows) {
+      if (info.workspace === LIVE_WORKSPACE) continue;
+      if (!this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE))
+        this._ports.log.warn(`could not return window ${id} from the attic; it may stay hidden`);
+      if (this._disposed) return;
+    }
   }
 
   private _copyFlatPills(): PillState[] {
@@ -1659,7 +1792,7 @@ export class Engine {
       return false;
     }
     this._mode = name;
-    if (!this._locked)
+    if (!this._suspended)
       this._ports.keys.setBindings(this._modeBindings(name));
     this._ports.indicator.setMode(name === 'default' ? null : name);
     return true;
@@ -1704,7 +1837,7 @@ export class Engine {
       this._ports.settings.apply(config, count);
       if (this._disposed) return;
       this._mode = 'default';
-      if (!this._locked) {
+      if (!this._suspended) {
         const report = this._ports.keys.setBindings(this._modeBindings('default'));
         if (this._disposed) return;
         if (report.failed.length > 0)
@@ -1714,7 +1847,7 @@ export class Engine {
       if (this._disposed) return;
       this._pushColors();
       if (this._disposed) return;
-      this._ports.indicator.setVisible(!this._locked);
+      this._ports.indicator.setVisible(!this._suspended);
       if (this._disposed) return;
 
       if (warnings.length > 0)
@@ -2210,6 +2343,9 @@ export class Engine {
       case 'mode':
         return this._enterMode(command.name) ? `mode ${command.name}` : `mode "${command.name}" is not defined`;
       case 'launcher': {
+        // No `_paused` twin for this: `run()` refuses every command before `_runOne` is reached, so a
+        // second refusal here would be unreachable code. `_applyRules` is the only other caller and it
+        // runs from inside a commit, which is itself paused.
         if (this._locked) return 'launcher: refused while the session is locked';
         const area = this._launcherArea();
         if (!area) {
