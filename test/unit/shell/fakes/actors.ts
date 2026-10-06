@@ -26,6 +26,8 @@ export function resetActors(): void {
   layout.untracked.length = 0;
   layout.removed.length = 0;
   uiGroup.children.splice(0);
+  quickSettings.present = true;
+  quickSettings.external.length = 0;
 }
 
 type Handler = (...args: unknown[]) => unknown;
@@ -475,6 +477,57 @@ export const panel = {
   activities,
 };
 
+/**
+ * Main.panel.statusArea.quickSettings. `present` is settable so a test can model the session modes in
+ * which GNOME has not built it: the stubs type it `quickSettings?: QuickSettings`, so the extension has
+ * to survive its absence rather than take `enable()` down with it.
+ */
+export const quickSettings = {
+  present: true,
+  external: [] as FakeActor[],
+};
+
+const quickSettingsImpl = {
+  addExternalIndicator(indicator: FakeActor, _colSpan?: number): void {
+    indicator.touch('addExternalIndicator');
+    quickSettings.external.push(indicator);
+  },
+};
+
+/** The `resource:///org/gnome/shell/ui/quickSettings.js` module, for the two classes this repo uses. */
+export const fakeQuickSettings = {
+  QuickToggle: class FakeQuickToggle extends FakeActor {
+    /**
+     * How many times `checked` was WRITTEN, not what it is. `checked` is a GObject property on the real
+     * St.Button, and a property write is the access that matters here twice over: GJS logs a critical for
+     * one made to a disposed actor (hence `touch`), and a redundant one is what `setChecked`'s own
+     * equality guard exists to avoid -- unobservable through the value alone, since the value is the same
+     * either way.
+     */
+    checkedWrites = 0;
+    private _checked: boolean;
+
+    constructor(props: Record<string, unknown> = {}) {
+      super('QuickToggle', props);
+      this._checked = props.checked === true;
+    }
+
+    get checked(): boolean { return this._checked; }
+
+    set checked(value: boolean) {
+      this.touch('checked');
+      this.checkedWrites++;
+      this._checked = value;
+    }
+  },
+  SystemIndicator: class FakeSystemIndicator extends FakeActor {
+    readonly quickSettingsItems: FakeActor[] = [];
+    constructor() {
+      super('SystemIndicator');
+    }
+  },
+};
+
 /** One entry of Main.layoutManager.monitors: the fields chrome placement reads. */
 export interface FakeMonitor {
   index: number;
@@ -553,7 +606,12 @@ export const fakeMain = {
   },
   panel: {
     addToStatusArea(_name: string, button: FakeActor): void { panel.button = button; },
-    statusArea: {activities},
+    statusArea: {
+      activities,
+      get quickSettings(): typeof quickSettingsImpl | undefined {
+        return quickSettings.present ? quickSettingsImpl : undefined;
+      },
+    },
   },
   layoutManager: {
     uiGroup,

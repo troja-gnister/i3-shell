@@ -19,6 +19,7 @@ import {spawnShell} from './shell/exec';
 import {ShellAccent} from './shell/accent';
 import {Decorations} from './shell/decorations';
 import {Indicator} from './shell/indicator';
+import {TilingToggle} from './shell/tilingToggle';
 import {KeyBinder} from './shell/keys';
 import {Launcher} from './shell/launcher';
 import type {RecencyStore} from './shell/launcher';
@@ -40,6 +41,7 @@ export default class I3ShellExtension extends Extension {
   private _engine: Engine | null = null;
   private _keys: KeyBinder | null = null;
   private _indicator: Indicator | null = null;
+  private _toggle: TilingToggle | null = null;
   private _bars: MonitorBars | null = null;
   private _decorations: Decorations | null = null;
   private _accent: ShellAccent | null = null;
@@ -241,6 +243,13 @@ export default class I3ShellExtension extends Extension {
     });
     this._engine = engine;
 
+    // The Quick Settings switch. Constructed AFTER the engine, because its callback drives the engine,
+    // and before the session watcher, so a lock arriving during enable finds it already built. It owns
+    // its two actors and one teardown route, `destroy()` in disable(); it registers nothing with the
+    // SignalTracker, exactly as src/shell/indicator.ts does not.
+    const toggle = new TilingToggle(enabled => { engine.setTilingEnabled(enabled); });
+    this._toggle = toggle;
+
     const session = new SessionWatcher(tracker,
       closing.unlessClosing(() => { engine.onLocked(); }),
       closing.unlessClosing(() => { engine.onUnlocked(); indicator.hideActivities(); }));
@@ -318,6 +327,8 @@ export default class I3ShellExtension extends Extension {
     this._keys = null;
     this._indicator?.destroy();
     this._indicator = null;
+    this._toggle?.destroy();
+    this._toggle = null;
     this._bars?.destroy();
     this._bars = null;
     this._decorations?.destroy();

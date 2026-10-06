@@ -256,6 +256,27 @@ accelerators can also fail to arrive**, differing between sessions, even though 
 IBus absent every probed accelerator worked every time. If a binding silently does nothing, suspect this
 first.
 
+## Switching tiling off
+
+A **Tiling** switch sits in GNOME's Quick Settings (the system menu, top right). Turning it off:
+
+- drops every key grab, so your `bindsym` lines belong to GNOME again;
+- restores every GNOME setting i3-shell overrode, including `num-workspaces`;
+- hides the workspace pills and every border, frame and tab bar;
+- **brings every hidden window back.** i3-shell hides a workspace by parking its windows on a second
+  GNOME workspace Mutter will not render. Switching off returns all of them to the live workspace, so
+  nothing is left invisible with nothing running to bring it back.
+
+While it is off, commands are refused rather than queued — including over D-Bus, so `i3-msg`-style calls
+answer `tiling is switched off` instead of half-applying a `reload`.
+
+Turning it on again re-adopts every window on screen and tiles them, the same way enabling the
+extension does. The switch is **not remembered**: every new session starts with tiling on. It is not the
+same as disabling the extension — the switch itself would disappear with it, and there would be no way
+back on.
+
+If the screen locks while tiling is off, unlocking leaves it off.
+
 ## Control it like i3-msg
 
 ```sh
