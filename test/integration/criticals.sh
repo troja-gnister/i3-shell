@@ -10,7 +10,7 @@
 #       FATAL here, because it is also the signature of an actor leak ("most likely caused by not
 #       destroying a Clutter actor or Gtk+ widget with ::destroy signals connected") and this extension
 #       creates bars, borders, a launcher actor and a Quick Settings toggle. phase2-checks.py
-#       --name-conflict disables and re-enables the extension FOUR times, all of them in this window, so
+#       --name-conflict disables and re-enables the extension THREE times, all of them in this window, so
 #       this is where a leak on disable() shows up and this is where the detector has to stay.
 #
 #   after the marker -- GNOME's own teardown.  The five messages below are allowed. They are GNOME

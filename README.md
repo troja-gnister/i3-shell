@@ -413,7 +413,7 @@ the conflict above is not covered). Release builds must never contain the `org.i
 
 **The suite fails a run when GNOME Shell logs a CRITICAL, and that gate is scanned in two scopes.** The
 harness appends a marker to `shell.log` immediately before it signals gnome-shell, and criticals logged
-*before* the marker still fail the run — so every mid-run `disable()` is covered, including the four
+*before* the marker still fail the run — so every mid-run `disable()` is covered, including the three
 disable/enable cycles of the `--name-conflict` step. *After* the marker, where GNOME is tearing down its
 own widgets, five named GNOME-owned messages are excused and reported as notes instead. One of them is
 `Attempting to call back into JSAPI during the sweeping phase of GC`, which is **also the signature of an
