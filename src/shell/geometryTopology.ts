@@ -10,15 +10,34 @@ export interface TopologySource<M, W> {
   /**
    * How many logical monitors Mutter has RIGHT NOW -- `MetaMonitorManager.get_logical_monitors().length`.
    *
-   * This exists because `indexForConnector` and `workArea` are two separate questions to Mutter and a
-   * reconfiguration can land between them. `get_monitor_for_connector` answers out of the MONITOR list
-   * (an active monitor's logical-monitor number), while `get_work_area_for_monitor` indexes the LOGICAL
-   * monitor list, and mid-reconfigure the first can still name a number the second no longer has. That
-   * is not a theory: `--hotplug` produced
-   * `meta_monitor_manager_get_logical_monitor_from_number: assertion '(unsigned int) number <
-   * g_list_length (manager->logical_monitors)' failed`, and `readTopology`'s own `index < 0` guard rules
-   * out the only other way that check can fail. Asking Mutter how many it has is the only way to tell,
-   * because the number is not wrong in any way its own value reveals.
+   * It exists because `indexForConnector` and `workArea` ask about two DIFFERENT lists.
+   * `get_monitor_for_connector` answers out of the monitor list, returning that monitor's logical-monitor
+   * number; `get_work_area_for_monitor` indexes the logical-monitor list. Nothing in those APIs promises
+   * a number from the first is a valid index into the second, and a stale number does not announce itself
+   * -- its value looks like any other. Asking how many logical monitors there are is the only way to
+   * check.
+   *
+   * WHAT THIS IS NOT. It is not a fix for the `libmutter-CRITICAL` pair that
+   * `test/integration/phase5-checks.py --hotplug` provokes
+   * (`meta_monitor_manager_get_logical_monitor_from_number`, then
+   * `meta_workspace_get_work_area_for_monitor`). Measurement attributes those to GNOME's own hotplug
+   * handling: src/shell/geometry.ts holds this project's only call into either API, it was instrumented
+   * to log the index it passes and the live logical count on every call, and across 106 calls of a
+   * `--hotplug` run every index was below that count, with our first work-area call of the
+   * reconfiguration landing 39 ms AFTER the criticals were already in the log. The guard this count feeds
+   * has never been observed to fire, in that run or any other.
+   *
+   * WHY IT IS HERE ANYWAY. test/integration/criticals.sh now excludes
+   * `meta_workspace_get_work_area_for_monitor: assertion 'logical_monitor != NULL' failed` by exact text,
+   * in both scopes, so the native gate can no longer see that line. It is also exactly what a bad call of
+   * OURS would print. This count, `readTopology`'s `index >= logicalCount` guard and that guard's unit
+   * test are what replace the detection the exclusion costs.
+   *
+   * WHAT IT CAN AND CANNOT CATCH, said plainly. `readTopology` runs synchronously, so Mutter's two lists
+   * cannot change underneath a single call: no reconfiguration can land between the two questions within
+   * one pass. The case left over is a snapshot that is internally inconsistent -- a monitor list naming a
+   * logical-monitor number the logical-monitor list of that same instant does not hold. Nothing in the
+   * API rules that out, and nothing here has demonstrated it either.
    */
   logicalMonitorCount(): number;
   primaryIndex(): number;
@@ -49,11 +68,19 @@ export function readTopology<M, W>(
     if (connector.length === 0) return null;
     const index = source.indexForConnector(connector);
     if (!Number.isInteger(index) || index < 0) return null;
-    // A number Mutter's logical-monitor list does not have. Rejected HERE, before `workArea` is called
-    // with it: asking anyway is a `libmutter-CRITICAL` pair per call (see `logicalMonitorCount`), and the
-    // rect that comes back is zeroed, so `usableRect` below would reject this read a moment later
-    // anyway. The outcome is the same `null` -- "Mutter is mid-reconfiguration, publish nothing, the next
-    // commit will read a settled backend" -- reached without making the compositor complain about us.
+    // A number Mutter's monitor list handed us that its logical-monitor list does not hold. Rejected
+    // HERE, before `workArea` is ever called with it. This has never been observed to fire: the
+    // `--hotplug` criticals were measured to GNOME's own code, not to this call site (see
+    // `logicalMonitorCount` above for that measurement). It is here because the native gate now excludes
+    // `meta_workspace_get_work_area_for_monitor`'s assertion by text, so a bad call of ours would be
+    // invisible there -- this line is what makes one impossible instead, and
+    // test/unit/shell/geometryTopology.test.ts's "never asks Mutter for the work area of a logical
+    // monitor number it no longer has" is what pins it.
+    // Correctness never depended on it. The returned rect would have to be usable to reach a window: if
+    // Mutter leaves it zeroed, as the assertion's early return suggests and as the unit test's fake
+    // assumes -- an assumption about Mutter, not a measurement -- `usableRect` below rejects the read and
+    // `readTopology` returns the same `null` this line returns. Publish nothing; the next commit reads a
+    // settled backend.
     if (index >= logicalCount) return null;
     const connectors = groups.get(index) ?? [];
     connectors.push(connector);

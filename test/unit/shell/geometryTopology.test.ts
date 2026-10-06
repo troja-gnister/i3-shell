@@ -186,22 +186,30 @@ describe('readTopology', () => {
   });
 
   // ------------------------------------------------------------------------
-  // A logical-monitor number Mutter has already retired (native run 4, phase 5 --hotplug)
+  // A logical-monitor number Mutter's logical-monitor list does not hold
   // ------------------------------------------------------------------------
   //
-  // `test/integration/phase5-checks.py --hotplug` failed the SESSION half of the critical-log gate on
-  // four lines, two per call, with every scenario assertion green:
+  // THIS IS NOT A REGRESSION TEST FOR THE --hotplug CRITICALS. `phase5-checks.py --hotplug` does make
+  // Mutter log this pair:
   //
   //   libmutter-CRITICAL meta_monitor_manager_get_logical_monitor_from_number:
   //       assertion '(unsigned int) number < g_list_length (manager->logical_monitors)' failed
   //   libmutter-CRITICAL meta_workspace_get_work_area_for_monitor:
   //       assertion 'logical_monitor != NULL' failed
   //
-  // Those are CALLER-triggered: `readTopology` is the only thing in this project that asks for a work
-  // area per monitor, and it validated the number `indexForConnector` gave it only against zero. The
-  // first assertion's own text says the number was >= the length of Mutter's logical-monitor list -- our
-  // `index < 0` guard rules the -1 case out -- so during a reconfiguration the two queries disagree:
-  // `get_monitor_for_connector` still answers with a number that `get_logical_monitors` no longer has.
+  // but the caller is not this extension. src/shell/geometry.ts holds the project's only call into
+  // either API; it was instrumented to log the index it passes and the live
+  // `get_logical_monitors().length` on every call, and over a `--hotplug` run all 106 calls had
+  // index < count, with the first work-area call of the reconfiguration arriving 39 ms AFTER the
+  // criticals were already logged. test/integration/criticals.sh excludes both texts by name and records
+  // that measurement; `readTopology`'s guard has never been observed to fire.
+  //
+  // WHAT THIS TEST IS FOR. Because the gate now excludes
+  // `meta_workspace_get_work_area_for_monitor: assertion 'logical_monitor != NULL' failed` -- which is
+  // also what a bad call of OURS would print -- this test is the only thing left that can catch one. The
+  // two Mutter questions index two different lists (`get_monitor_for_connector` the monitor list,
+  // `get_work_area_for_monitor` the logical-monitor list), nothing promises a number from the first is
+  // valid for the second, so the guard holds the invariant that no such number reaches Mutter.
   //
   // THE FIXTURE CARRIES THREE OUTPUTS, and that is the whole point of it. The stale number is exactly
   // the logical count, so every OTHER count in reach of this function accepts it -- `monitors()` is 3,
@@ -210,7 +218,10 @@ describe('readTopology', () => {
   // written on any of those, which is how this file has produced vacuous tests before.
   it('never asks Mutter for the work area of a logical monitor number it no longer has', () => {
     const {ids, oldId} = seededIds();
-    // Mutter's g_return_if_fail leaves the out rect untouched, so gjs hands back a zeroed Mtk.Rectangle.
+    // The fake answers a zeroed rect for the number Mutter would refuse. That models what a
+    // `g_return_if_fail` early return plausibly leaves behind; it is this fixture's assumption about
+    // Mutter, not something measured. Nothing asserted below depends on it: the guard's job is that
+    // the number never reaches `workArea` at all, so the rect is never read.
     const zeroed = {x: 0, y: 0, width: 0, height: 0};
     const {source: probe, asked} = recording(source(
       [
@@ -230,7 +241,7 @@ describe('readTopology', () => {
 
     const result = readTopology(ids, probe);
 
-    // The assertion that fails without the fix: 2 reached Mutter, which is the critical pair.
+    // The assertion that fails if the `index >= logicalCount` guard is removed: 2 reaches Mutter.
     expect(asked).not.toContain(2);
     expect(asked).toEqual([]);
     expect(result).toBeNull();
