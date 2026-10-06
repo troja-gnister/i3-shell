@@ -131,7 +131,12 @@ interface MutterReading {
    * `global.stage.get_key_focus()`, as a readable string. Clutter's key focus and Mutter's
    * `focus_window` can disagree: while any Shell actor holds the key focus the keyboard goes there and
    * not to the focused window, whatever `focus_window` says, and `modalCount` can already be back to 0.
-   * The stage itself is the ordinary "no Shell actor has it" answer, not a problem.
+   *
+   * NULL IS THE ORDINARY ANSWER, measured on native run 3: this Clutter returns null when no actor holds
+   * the key focus, which is exactly the state in which the keyboard belongs to `focusedWindow`. It is
+   * also what GNOME's own `Main.popModal` restores after a Shell grab whose `pushModal` saved a null --
+   * i.e. whenever a window rather than a Shell actor had the keyboard when the grab was taken. A non-null
+   * St actor here is the interesting case, not this one.
    */
   stageKeyFocus: string | null;
   windows: MutterWindowReading[];
