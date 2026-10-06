@@ -1540,20 +1540,27 @@ export class Engine {
    * point: `_expectedFocus` is maintained in one place, so the D8 suppression cannot be bypassed by a
    * second route to `windows.activate`.
    *
-   * Returns whether a window was actually activated, so a caller looking for *some* window to hand the
-   * keyboard to can tell "this workspace had nobody" from "done".
+   * Returns the window it actually focused, or null, so a caller looking for *some* window to hand the
+   * keyboard to can tell "this workspace had nobody" from "done" -- and can name the window in a log.
    */
-  private _activateSelection(timestamp: number, workspace?: number): boolean {
+  private _activateSelection(timestamp: number, workspace?: number): WindowId | null {
     const selection = this._tree?.selection(workspace);
     const id = selection?.kind === 'floating' ? selection.window : selection?.kind === 'tiled'
       ? descendFocused(selection.con)?.window : undefined;
     this._expectedFocus.clear();
-    if (id === undefined) return false;
+    if (id === undefined) return null;
     this._expectedFocus.add(id);
     const activated = this._ports.windows.activate(id, timestamp);
-    if (this._disposed) return activated;
-    if (!activated) this._expectedFocus.delete(id);
-    return activated;
+    if (this._disposed) return activated ? id : null;
+    if (!activated) {
+      this._expectedFocus.delete(id);
+      // Silent until now, and it is the fact that separates "there was nobody to focus" from "the window
+      // was there and the activation was refused". Two native rounds were spent not knowing which, on a
+      // path (`_handOffFocus`) where the two have completely different fixes.
+      this._ports.log.warn(`could not focus window ${id}; the activation was refused`);
+      return null;
+    }
+    return id;
   }
 
   /**
@@ -1585,12 +1592,27 @@ export class Engine {
    */
   private _handOffFocus(): void {
     const tree = this._tree;
-    if (!tree) return;
-    if (this._activateSelection(0)) return;
-    for (const workspace of [...tree.visible.values(), ...tree.workspaces.keys()]) {
-      if (this._disposed) return;
-      if (this._activateSelection(0, workspace)) return;
+    if (!tree) {
+      this._ports.log.info('tiling off: there is no tree, so no window to hand the keyboard to');
+      return;
     }
+    // `undefined` first IS tier 1: it means "the active workspace" to `selection()`, so one loop covers
+    // all three tiers and the trace below reports them uniformly.
+    const tried: string[] = [];
+    for (const workspace of [undefined, ...tree.visible.values(), ...tree.workspaces.keys()]) {
+      if (this._disposed) return;
+      const id = this._activateSelection(0, workspace);
+      tried.push(`${workspace ?? 'active'}=${id ?? '-'}`);
+      if (id !== null) {
+        // Logged, for the same reason `involuntary focus:` is: this is the one moment the engine hands
+        // the keyboard over and then stops managing focus, the native suite reads it out of the journal,
+        // and when the user cannot type after switching off this line is the whole diagnosis. `-` means
+        // that workspace's selection named no window; a refusal warns separately, above.
+        this._ports.log.info(`tiling off: keyboard handed to window ${id} (tried ${tried.join(' ')})`);
+        return;
+      }
+    }
+    this._ports.log.info(`tiling off: no window to hand the keyboard to (tried ${tried.join(' ')})`);
   }
 
   /**

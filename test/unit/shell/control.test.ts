@@ -148,10 +148,12 @@ function fakeWindow(id: number, title: string, workspaceIndex: number,
  * They are set separately because the gap between them is the subject -- `get_tab_list` drops every
  * skip-taskbar window, and the flush under test exists partly for those.
  */
-function fakeMutter(tabList: object[], onWorkspace: object[][]): void {
+function fakeMutter(tabList: object[], onWorkspace: object[][],
+  focus: object | null = null, keyFocus: object | null = null): void {
   (globalThis as unknown as {global: unknown}).global = {
     get_current_time: () => 0,
-    display: {get_tab_list: (_type: number, _workspace: unknown) => tabList},
+    stage: {get_key_focus: () => keyFocus},
+    display: {get_tab_list: (_type: number, _workspace: unknown) => tabList, focus_window: focus},
     workspace_manager: {
       get_n_workspaces: () => onWorkspace.length,
       get_active_workspace_index: () => 0,
@@ -239,6 +241,37 @@ describe('Debug.MutterWindows', () => {
     expect(report.windows.map(w => w.workspace)).toEqual([0, 1]);
     expect(report.windows[1]).toMatchObject({skipTaskbar: true, sources: ['workspace1']});
     expect(report.windows[0]!.sources).toEqual(['tabList', 'workspace0']);
+  });
+
+  it('reports who has the keyboard, which no other reading here can stand in for', () => {
+    // Permanent, and the whole point of fix round 2: `GetWindows` publishes no focused flag, and the
+    // harness's only other oracle is "press a key and see where it lands" -- which cannot tell "nobody is
+    // focused" from "the focused window is not the one receiving". Both halves are reported, because
+    // Clutter's key focus and Mutter's focus_window can disagree: while a Shell actor holds the key focus
+    // the keyboard goes there whatever focus_window says, and modalCount can already be back to 0.
+    const live = fakeWindow(4, 'live', 0);
+    class St_Entry { name = 'launcher-entry'; }
+    fakeMutter([live], [[live]], live, new St_Entry());
+    const debug = debugObject(() => {});
+
+    const report = JSON.parse(debug.MutterWindows()) as {
+      focusedWindow: {nativeId: number; title: string} | null; stageKeyFocus: string | null;
+    };
+
+    expect(report.focusedWindow).toEqual({nativeId: 4, title: 'live'});
+    expect(report.stageKeyFocus).toBe('St_Entry launcher-entry');
+  });
+
+  it('reports no focused window at all, which is the state a hand-off has to fix', () => {
+    fakeMutter([], [[]]);
+    const debug = debugObject(() => {});
+
+    const report = JSON.parse(debug.MutterWindows()) as {
+      focusedWindow: unknown; stageKeyFocus: unknown;
+    };
+
+    expect(report.focusedWindow).toBeNull();
+    expect(report.stageKeyFocus).toBeNull();
   });
 
   it('reports the workspace Mutter gives, and -1 for a window on none', () => {

@@ -142,6 +142,19 @@ describe('setTilingEnabled', () => {
       .toBeGreaterThan(f.calls.indexOf(`moveTo:2:${LIVE_WORKSPACE}`));
   });
 
+  it('says so when the window it offers the keyboard to refuses the activation', () => {
+    // Fix round 2. Two native rounds were spent unable to tell "no workspace selection named a window"
+    // from "a window was named and the activation was refused" -- and those two have entirely different
+    // fixes. `_activateSelection` swallowed the refusal silently on every path, not just this one.
+    const f = parked();
+    f.focus(1);
+    f.activationFails = true;
+    f.calls.length = 0;
+
+    f.engine.setTilingEnabled(false);
+    expect(f.calls).toContain('warn:could not focus window 1; the activation was refused');
+  });
+
   it('hands the keyboard over on the way back on only when nothing holds it', () => {
     // The ON path adopts the compositor's focus rather than pushing its own (`_acceptFocus` of
     // `windows.focused()`), which is right: while tiling was off the user was clicking windows, and

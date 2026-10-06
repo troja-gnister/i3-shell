@@ -120,6 +120,20 @@ interface MutterReading {
   activeWorkspace: number;
   /** `Main.modalCount`: the Shell's own count of live modal grabs, not the launcher's bookkeeping. */
   modalCount: number;
+  /**
+   * `global.display.focus_window`: WHO HAS THE KEYBOARD, as Mutter has it. Permanent, and added after two
+   * native rounds were spent on a focus failure that could not report this -- `GetWindows` publishes no
+   * focused flag, and the harness's only other oracle is "type a key and see where it lands", which
+   * cannot distinguish "nobody is focused" from "the focused window is not receiving".
+   */
+  focusedWindow: {nativeId: number; title: string} | null;
+  /**
+   * `global.stage.get_key_focus()`, as a readable string. Clutter's key focus and Mutter's
+   * `focus_window` can disagree: while any Shell actor holds the key focus the keyboard goes there and
+   * not to the focused window, whatever `focus_window` says, and `modalCount` can already be back to 0.
+   * The stage itself is the ordinary "no Shell actor has it" answer, not a problem.
+   */
+  stageKeyFocus: string | null;
   windows: MutterWindowReading[];
 }
 
@@ -284,9 +298,16 @@ export class DebugObject {
       for (const window of workspace.list_windows())
         mark(window, `workspace${index}`);
     }
+    // @girs types both of these non-nullable; Mutter has no focused window whenever the Shell itself
+    // holds the focus, and Clutter returns null for the key focus in the same situations.
+    const focus = global.display.focus_window as Meta.Window | null;
+    const keyFocus = global.stage.get_key_focus() as Clutter.Actor | null;
     return {
       nWorkspaces,
       activeWorkspace: manager.get_active_workspace_index(),
+      focusedWindow: focus === null ? null : {nativeId: focus.get_id(), title: focus.get_title() ?? ''},
+      stageKeyFocus: keyFocus === null ? null
+        : `${keyFocus.constructor.name} ${String(keyFocus.name ?? '')}`.trim(),
       // Typed `any` by @girs (ui/main.d.ts); it is a plain number at runtime, and it is the Shell's own
       // count rather than anything the launcher remembers about its grab.
       modalCount: Number(Main.modalCount),

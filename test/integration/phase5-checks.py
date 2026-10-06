@@ -159,7 +159,7 @@ def diagnose(label):
             print(f'{label} {name}:', json.dumps(reader()), flush=True)
         except Exception as error:                      # Control may be absent on purpose
             print(f'{label} {name}: unavailable ({error})', flush=True)
-    for name, reader in (('pointer', pointer), ('display', describe_display)):
+    for name, reader in (('pointer', pointer), ('display', describe_display), ('focus', focus_facts)):
         try:
             print(f'{label} {name}:', json.dumps(reader()), flush=True)
         except Exception as error:
@@ -1491,6 +1491,12 @@ def scenario_gesture_runs_its_binding(primary_id, second_id):
 # refuses the move that was supposed to bring a window back. Counting it is how "every moveToWorkspace
 # return is checked" becomes an assertion rather than a claim.
 ATTIC_REFUSED = 'from the attic; it may stay hidden'
+# src/engine.ts `_handOffFocus` logs one line per OFF naming the window it gave the keyboard to and every
+# workspace selection it tried (`<workspace>=<window id>`, `-` for a selection that named nobody), and
+# `_activateSelection` warns separately when a window WAS named and Mutter refused the activation. Those
+# two together are what distinguishes "no selection named a window" from "Mutter would not take it" -- two
+# native rounds were spent on this failure unable to tell them apart.
+HAND_OFF_MARKERS = ('tiling off: ', 'the activation was refused')
 
 # The fixtures the toggle scenario parks, and the one it must NOT disturb.
 PARKED_WINDOWS = ('QS one', 'QS two', 'QS min', 'QS dialog')
@@ -1628,7 +1634,36 @@ def switch_point(box, label):
     return (box['x'] + box['width'] // 2, box['y'] + box['height'] // 2)
 
 
-def typing_reaches_someone(key, titles, label):
+def hand_off_log(offset):
+    """Every line `_handOffFocus` and `_activateSelection` wrote since `offset`."""
+    return [line for line in shell_log_text()[offset:].splitlines()
+            if any(marker in line for marker in HAND_OFF_MARKERS)]
+
+
+def focus_facts(offset=0):
+    """Who has the keyboard, what the tree thinks is selected, and what the hand-off actually did.
+
+    The three answers a focus failure needs and that no single reader has. `focusedWindow` and
+    `stageKeyFocus` are Mutter's and Clutter's (see `Debug.MutterWindows`); `treeSelected` is the raw
+    per-workspace selection out of `GetTree`, which is what `_handOffFocus` walks; `handOff` is the
+    engine's own trace of which workspace it tried and which window it resolved.
+    """
+    reading = mutter_reading()
+    data = snapshot()
+    return {
+        'mutterFocus': reading['focusedWindow'],
+        'stageKeyFocus': reading['stageKeyFocus'],
+        'modalCount': reading['modalCount'],
+        'grabbed': state()['grabbed'],
+        'treeSelected': {ws['index']: ws['selected'] for ws in data['workspaces']},
+        'treeSelectedTitles': {ws['index']: selected_title(ws['index']) for ws in data['workspaces']},
+        'activeWorkspace': data['activeWorkspace'],
+        'visible': visible_map(),
+        'handOff': hand_off_log(offset),
+    }
+
+
+def typing_reaches_someone(key, titles, label, offset=0):
     """A bare key must arrive in SOME client's Entry, which is a DIFFERENT claim from "no grab survives".
 
     Fix round 1. `modalCount == 0` and `grabbed == 0` prove nothing is HOLDING the keyboard, and both
@@ -1653,14 +1688,19 @@ def typing_reaches_someone(key, titles, label):
         time.sleep(0.1)
     fail(label, {'note': f'one of {sorted(titles)} receives {key!r}', 'before': before},
          {'after': seen},
-         lambda: {'modalCount': mutter_reading()['modalCount'], 'grabbed': state()['grabbed'],
+         lambda: {**focus_facts(offset),
                   'launcher': launcher_box(), 'toggle': toggle_box(),
                   'byWorkspace': native_workspaces(),
                   'windows': [{'title': w['title'], 'workspace': w['workspace'],
                                'minimized': w['minimized'], 'skipTaskbar': w['skipTaskbar']}
                               for w in mutter_reading()['windows']],
-                  'note': 'Engine._handOffFocus must give the keyboard to a live window at the end of '
-                          'the OFF path, after the flush; while paused nothing else will'})
+                  'note': 'READ IN THIS ORDER. handOff says which workspace selections the engine tried '
+                          'and which window each resolved to (`-` = nobody); a "the activation was '
+                          'refused" line beside it means a window WAS named and Mutter declined. '
+                          'mutterFocus says whether any window ended up focused, and stageKeyFocus '
+                          'whether a Shell actor is holding the keyboard anyway (the stage itself is the '
+                          'ordinary answer). Engine._handOffFocus is what must leave a live window '
+                          'focused at the end of the OFF path; while paused nothing else will.'})
 
 
 def create_child(title, parent, kind, label):
@@ -1820,8 +1860,10 @@ def scenario_toggle_flushes_the_attic(primary_id, second_id):
     # Split from the three assertions above (fix round 1): all of them passed natively while this one
     # failed, which is the whole reason it is its own step. Nothing was holding the keyboard AND nothing
     # was receiving it -- `Engine._handOffFocus` is what closes the second half.
+    print('toggle: focus facts after the switch off:', json.dumps(focus_facts(offset)), flush=True)
     typing_reaches_someone('q', TOGGLE_WINDOWS,
-                           'toggle: a bare key reaches a client, so switching OFF handed the keyboard on')
+                           'toggle: a bare key reaches a client, so switching OFF handed the keyboard on',
+                           offset)
 
     step('toggle: the visible switch followed the programmatic change')
     expect('toggle: the switch shows OFF and the adapter agrees with the engine', (False, False),
@@ -1890,6 +1932,7 @@ def scenario_toggle_flushes_the_attic(primary_id, second_id):
     # The focus mirror. The ON path adopts the compositor's focus instead of pushing its own (see
     # `Engine.setTilingEnabled`), so what it must not do is LOSE it: OFF handed the keyboard to a window,
     # and switching back on has to leave the user still able to type.
+    print('toggle: focus facts after the switch back on:', json.dumps(focus_facts()), flush=True)
     typing_reaches_someone('w', TOGGLE_WINDOWS,
                            'toggle: a bare key still reaches a client after the switch back ON')
 
