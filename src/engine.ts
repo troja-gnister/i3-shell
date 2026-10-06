@@ -2424,6 +2424,11 @@ export class Engine {
           this._minimized.clear();
           this._raiseOrders.clear();
           this._lastFocus = null;
+          // Beside the four above for the same reason `setTilingEnabled(true)` clears it: a carry record
+          // suppresses ONE repeat translation while the compositor still reports the output the frame was
+          // carried away from, and a restart is a fresh enable, which starts with none. Kept, it would
+          // suppress a genuine later carry back to that same output.
+          this._carriedFloating.clear();
         });
         return 'restarted';
       case 'nop':

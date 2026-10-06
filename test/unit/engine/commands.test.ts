@@ -1617,4 +1617,38 @@ describe('a floating window moved by command follows the tree with its frame', (
       .toBe('move container to output');
     expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
   });
+
+  it('does not let a carry record outlive a restart, which rebuilds everything else', () => {
+    // `restart` nulls the tree and clears `_manualFloating`, `_minimized`, `_raiseOrders` and
+    // `_lastFocus`: it is a fresh enable in all but name, and `setTilingEnabled(true)` clears the carry
+    // records beside those same four for exactly that reason. A record that outlived it would suppress the
+    // user's next genuine carry back to the same output -- a floating window left drawn on the display it
+    // was just told to leave, which is the defect this whole mechanism exists to fix.
+    //
+    // The client REFUSES the frame, which is the only state in which a surviving record is observable: a
+    // record lives until the compositor reports the frame somewhere other than where it started, and this
+    // fake's `geometry.apply` never moves `monitor` (see `translates once` above), so with the frame
+    // accepted the record would still be there and the second carry would be suppressed either way. With
+    // the refusal, the one thing that can drop the record is `restart` itself.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.refuseGeometry = true;
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1))
+      .toBe('move container to output');
+    f.refuseGeometry = false;
+    expect(f.windows.get(1)!.monitor).toBe(0);
+
+    expect(f.engine.run([{type: 'restart'}], 2)).toBe('restarted');
+    f.flush();
+    // Re-adopted on its own monitor's workspace, which is where the frame still is.
+    expect(f.tree().location(1)).toEqual({workspace: 0, output: 0, floating: true});
+    f.applied.length = 0;
+
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 3))
+      .toBe('move container to output');
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
+  });
 });
