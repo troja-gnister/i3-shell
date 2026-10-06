@@ -48,6 +48,9 @@ export class Geometry implements GeometryPort {
       isActive: monitor => monitor.is_active(),
       connector: monitor => monitor.get_connector(),
       indexForConnector: connector => manager.get_monitor_for_connector(connector),
+      // Null when the backend has no logical monitors to report, which reads as zero and so rejects
+      // every index -- the same "publish nothing yet" answer the rest of readTopology gives. Fail safe.
+      logicalMonitorCount: () => manager.get_logical_monitors()?.length ?? 0,
       primaryIndex: () => global.display.get_primary_monitor(),
       workspaceCount: () => global.workspace_manager.get_n_workspaces(),
       workspace: index => global.workspace_manager.get_workspace_by_index(index),
