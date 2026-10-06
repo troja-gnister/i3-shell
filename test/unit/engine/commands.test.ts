@@ -1180,3 +1180,204 @@ describe('onSwipe', () => {
     expect(f.engine.state().activeWorkspace).toBe(0);
   });
 });
+
+// Task 1: the mirror image of D6. D6 is "the frame moved, follow it with the tree"; this is "the tree
+// moved, follow it with the frame". The defect the Phase 5 ledger carried: a commanded move re-homes a
+// floating window and emits no rect at all, so it stays drawn on the display it left and then appears
+// to vanish when that display switches away from the workspace it now belongs to. Measured port calls
+// at the failure: ["moveTo:1:0","decorations","decorations"].
+describe('a floating window moved by command follows the tree with its frame', () => {
+  // THREE outputs, all of DIFFERENT SIZE, for both reasons this project has learned the hard way:
+  // - different sizes, so a proportional translation and a plain origin offset differ;
+  // - three of them, so "translate into the focused output" and "translate into the output showing the
+  //   destination workspace" are different answers. With two outputs they coincide, which is how three
+  //   earlier tests in this repo passed while testing nothing.
+  const WIDE = {x: 0, y: 0, width: 1920, height: 1080};
+  const NARROW = {x: 1920, y: 0, width: 1280, height: 720};
+  const TALL = {x: 3200, y: 0, width: 1024, height: 1280};
+  const threeOutputs = (text = 'bindsym Mod4+q kill') => fakeEngine(text, {
+    monitors: [{id: 0, index: 0, area: WIDE}, {id: 1, index: 1, area: NARROW}, {id: 2, index: 2, area: TALL}],
+    primary: 0,
+    workspaceCount: 10,
+  });
+  // Centre at x = 1440 (75% of WIDE) and y = 540 (50% of WIDE).
+  const floatingOnWide = {kind: 'floating' as const, rect: {x: 1340, y: 490, width: 200, height: 100}};
+
+  it('move container to output carries the frame onto the destination display', () => {
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1))
+      .toBe('move container to output');
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    // 75% of 1280 is 960; + NARROW.x (1920) - half the width (100) = 2780. y: 50% of 720 - 50 = 310.
+    expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
+  });
+
+  it('move container to workspace uses the output showing that workspace, not the focused one', () => {
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    // Workspace 3 (index 2) is the one output 2 is showing, and the user is standing on output 0.
+    expect(f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 3, name: '3'}}], 1))
+      .toBe('moved to workspace 3');
+    expect(f.tree().location(1)).toEqual({workspace: 2, output: 2, floating: true});
+    // 75% of 1024 is 768; + TALL.x (3200) - 100 = 3868. y: 50% of 1280 - 50 = 590.
+    expect(f.appliedRects().get(1)).toEqual({x: 3868, y: 590, width: 200, height: 100});
+  });
+
+  it('writes nothing while the window sits on a workspace no output is showing, and catches up when it is shown', () => {
+    // Workspace 6 is PINNED to output 1 by the config, and output 1 is showing workspace 2. So after the
+    // move the window's workspace belongs to an output other than the one its frame is on and is on no
+    // output's screen -- the two halves this test needs at once. Without the pin every spare workspace is
+    // homed on output 0 (`workspacesOn(0)` is [0,3,4,5,6,7,8,9] in this fixture), the parked workspace
+    // would come back on the very output the frame is already on, and the first half would hold for the
+    // wrong reason: nothing to translate rather than a parked window left alone.
+    const f = threeOutputs('bindsym Mod4+q kill\nworkspace 6 output fixture-1\n');
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    // Workspace 6 (index 5) is on no output's screen: the window is parked, and a parked frame is
+    // unobservable, so there is nothing to translate it against.
+    expect(f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 6, name: '6'}}], 1))
+      .toBe('moved to workspace 6');
+    expect(f.tree().location(1)).toEqual({workspace: 5, output: 1, floating: true});
+    expect([...f.tree().visible]).toEqual([[0, 0], [1, 1], [2, 2]]);
+    expect(f.appliedRects().get(1)).toBeUndefined();
+
+    // Now show workspace 6, which brings it up on output 1 where it lives. The frame is still on output
+    // 0, so this is the moment it has an answer -- and a commanded move that parked the window must not
+    // lose the follow-up.
+    expect(f.engine.run([{type: 'workspace', target: {kind: 'number', number: 6, name: '6'}}], 2))
+      .toBe('workspace 6');
+    expect([...f.tree().visible]).toEqual([[0, 0], [1, 5], [2, 2]]);
+    expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
+  });
+
+  it('writes no frame for a fullscreen floating window', () => {
+    // Review Focus 5. Mutter owns a fullscreen window's frame; a rect written at it fights the
+    // compositor and can leave the window the size of the output it came from.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, {...floatingOnWide, fullscreen: true});
+    f.flush();
+    f.applied.length = 0;
+
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1))
+      .toBe('move container to output');
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    expect(f.appliedRects().get(1)).toBeUndefined();
+  });
+
+  it('writes no frame for a tiled window, which the layout pass owns', () => {
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1);
+    f.flush();
+    f.applied.length = 0;
+
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1))
+      .toBe('move container to output');
+    // The layout pass gives it the whole of NARROW; the follow pass must not also have queued one.
+    expect(f.appliedRects().get(1)).toEqual({x: 1920, y: 0, width: 1280, height: 720});
+  });
+
+  it('translates the frame as the command line left it, so a centred window lands centred on the destination', () => {
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    // Two commands in one run(): `move position center` centres the window on output 0, and the move
+    // then re-homes it. The follow pass has to translate the frame as THAT command left it -- the centre
+    // of output 0 -- so the window ends up centred on the output it moved to, and not merely somewhere
+    // proportional to where it started. This order and not the reverse: `move position` reads the
+    // *selection* of the focused output's workspace, and once the move has carried the window to output
+    // 1's workspace the user is no longer standing on it, so the reverse order makes `move position`
+    // refuse with "move position applies only to a tracked floating window" and tests nothing.
+    f.engine.run([
+      {type: 'move_position', position: 'center'},
+      {type: 'move_container_to_output', target: 'right'},
+    ], 1);
+    const rect = f.appliedRects().get(1)!;
+    expect(rect.x + rect.width / 2).toBe(NARROW.x + NARROW.width / 2);
+    expect(rect.y + rect.height / 2).toBe(NARROW.y + NARROW.height / 2);
+  });
+
+  it('leaves a dragged window alone: D6 moves the tree to the frame and the two then agree', () => {
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    // The drag: Mutter reports the window on output 1 with the frame STRADDLING the boundary -- most of
+    // it over NARROW, which is why the compositor has handed it to output 1, but its top-left corner
+    // still over WIDE. D6 re-homes it; this pass must then write nothing, or it would yank the window
+    // out from under the pointer. The straddle is the point: a frame wholly inside NARROW would be left
+    // alone by the already-in-the-destination guard whether the monitor guard existed or not, so the
+    // test could not tell the two apart. Here only the monitor guard keeps the pass quiet -- without it
+    // the clamp would snap the corner to NARROW's left edge mid-drag.
+    f.change(1, {monitor: 1, rect: {x: 1850, y: 100, width: 200, height: 100}}, 'frame');
+    f.flush();
+
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    expect(f.appliedRects().get(1)).toBeUndefined();
+  });
+
+  it('writes nothing, and does not throw, while Mutter names a monitor the topology no longer has', () => {
+    // Mid-unplug the compositor can report a window on a monitor index that has already gone from the
+    // topology, and there is then no source work area to scale the frame against. Without the guard this
+    // divided a rect by `undefined` and threw out of the commit, taking the whole relayout with it.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    // The workspace is moved to output 1 first, and only then does the compositor report the window on a
+    // monitor that is gone, with a frame back over output 0 -- because Mutter relocates a window off a
+    // display that has just left. Both halves are needed to reach the source lookup at all: with the
+    // workspace still on output 0 the frame is already inside the destination and the pass stops one line
+    // earlier, which is how the first draft of this test passed whether the guard was there or not.
+    f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1);
+    f.applied.length = 0;
+    f.change(1, {monitor: 99, rect: {x: 100, y: 100, width: 200, height: 100}}, 'frame');
+    f.flush();
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    expect(f.appliedRects().get(1)).toBeUndefined();
+  });
+
+  it('translates once, and not again on each commit that follows while Mutter still reports the old monitor', () => {
+    // The pass is level-triggered and runs on every commit, while `info.monitor` only catches up some
+    // commits later -- the engine's own geometry write raises a signal it commits on, with the monitor
+    // still stale. Without the already-in-the-destination guard the second pass re-translated the frame
+    // it had just moved and the clamp pinned it at x=3000 instead of 2780, so the window crept into the
+    // destination's far corner by itself.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1);
+    f.flush();
+    expect(f.applied.map(rects => [...rects])).toEqual([[[1, {x: 2780, y: 310, width: 200, height: 100}]]]);
+
+    // Another commit, with Mutter still naming output 0 as the window's monitor.
+    f.applied.length = 0;
+    f.change(1, {}, 'frame');
+    f.flush();
+    expect(f.windows.get(1)!.monitor).toBe(0);
+    expect(f.appliedRects().get(1)).toBeUndefined();
+  });
+});

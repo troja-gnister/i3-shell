@@ -36,3 +36,21 @@ export function fixFloatingCoordinates(rect: Rect, from: Rect, to: Rect): Rect {
     height: rect.height,
   };
 }
+
+/**
+ * Is this frame's top-left corner inside `area`? Both bounds inclusive, on both axes.
+ *
+ * The exact postcondition of `fixFloatingCoordinates` above, and that is the whole reason it exists:
+ * `originWithin(fixFloatingCoordinates(r, from, to), to)` is true for every input, including a window
+ * larger than `to` (which the clamp pins to `to`'s near edge). A caller can therefore use it to tell a
+ * frame it has already translated from one it has not, and translate at most once however many times it
+ * runs -- see `Engine._followFloatingFrames`, which runs on every commit and would otherwise re-translate
+ * a frame it had just moved, each pass dragging it further into the destination's far corner.
+ *
+ * The far bounds are inclusive so that the postcondition holds with no exception to remember: a window
+ * wider than `to` is pinned to `to.x`, and a zero-width one can land exactly on `to.x + to.width`.
+ */
+export function originWithin(rect: Rect, area: Rect): boolean {
+  return rect.x >= area.x && rect.x <= area.x + area.width
+    && rect.y >= area.y && rect.y <= area.y + area.height;
+}

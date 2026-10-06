@@ -363,11 +363,13 @@ workspace to the display you are looking at when nothing else is showing it. Bin
 - **Workspaces or windows jumped after you ran the integration suite.** `npm run test:integration`
   rebuilds `dist/`; it restores a release bundle on exit, but only `make install` refreshes the live
   symlink. Finish with `make install`.
-- **A floating window you moved with a key is still drawn on the old display — and then vanishes.**
-  `move container to output` and `move container to workspace N` re-home a floating window in the tree
-  but emit no frame change, so it stays painted where it was; the moment the other display switches away
-  from the workspace it now belongs to, it disappears. It is not lost (`GetTree` shows it on the new
-  workspace). Drag it with the mouse, which does move the frame, or `floating disable` and move it tiled.
+- **A floating window you moved with a key landed somewhere you did not expect on the new display.**
+  Its frame follows its workspace now, the way i3 does it: the size is kept and the centre keeps the same
+  fraction of the work area it had on the display it left, so on a smaller display it lands nearer the
+  middle than you may expect. One deliberate difference from i3: the position is clamped so the top-left
+  corner stays inside the destination, which is what makes `move container to output primary` a usable
+  rescue for a window stranded on a display you cannot see. A window wider or taller than the destination
+  sits at its left or top edge, at its original size, and overhangs the far edge.
 - **`$mod+N` opened the overview and took the keyboard.** A workspace switch that crosses displays warps
   the pointer (i3's `mouse_warping output` default). A warp out of the **top-left corner** trips GNOME's
   hot-corner pressure barrier. Either veto the warp with `mouse_warping none` in your config, or turn the

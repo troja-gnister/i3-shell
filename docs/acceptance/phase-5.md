@@ -389,14 +389,15 @@ gnome-extensions enable i3-shell@troja
 - **`move container to output` is implemented but unbound.** i3 ships no default binding for it either;
   bind it yourself if you want it (`bindsym $mod+Ctrl+p move container to output primary` is the useful
   one).
-- **A floating window moved by *command* keeps its old frame.** `move container to output` and
-  `move container to workspace N` re-home a floating window in the tree but emit **no frame change**, so
-  it stays drawn exactly where it was — and then appears to *vanish* when the other display switches away
-  from the workspace it now belongs to. Confirmed by execution, not inference: the commit's port calls
-  are `["moveTo:1:0","decorations","decorations"]`, with no rect. The D6 cross-output re-home cannot
-  correct it either, because no monitor *change* occurred. Workaround: drag the window instead, or
-  `floating disable` first and move it tiled. Pre-existing, but Phase 5 is what made `$mod+Shift+N` a
-  cross-display operation, so expect to meet it.
+- **A floating window moved by command now carries its frame, proportionally.** `move container to
+  output`, `move container to workspace N`, a directional `move` across an output edge, `move workspace
+  to output` and a replug all give a floating window a frame on the output its workspace now lives on:
+  the size is unchanged and the centre keeps the same fraction of the work area, which is i3's own
+  `floating_fix_coordinates`. One divergence from i3: the position is clamped so the frame's top-left
+  corner stays inside the destination work area, because i3-shell's destination may be a display you
+  cannot see and `move container to output primary` is the documented rescue for that case. A window
+  wider or taller than the destination therefore sits at its left or top edge and overhangs the far
+  one, at its original size. (Was a Known Limitation through Phase 5; fixed 2026-10-06.)
 - **GNOME's hot corner can swallow the pointer warp.** `workspace N` warps the pointer when the switch
   crosses displays (i3's `mouse_warping output` default, A61). Warping *out of* the top-left corner trips
   Mutter's pressure barrier, which opens the overview and takes the keyboard — mid-walk, from a key you

@@ -3,6 +3,7 @@ import {descendFocused, leaves, walk, type Con, type MonitorId, type NodeId, typ
 import {effectiveWorkspaceCount, resolveOutputArg, type OutputArg} from './tree/outputs';
 import {layoutWithRects, stackingOrder} from './tree/layout';
 import {cycleWorkspace} from './tree/cycle';
+import {fixFloatingCoordinates, originWithin} from './tree/floating';
 import {RectReconciler} from './runtime/reconcile';
 import {serializeTree, type TreeSnapshot, type WindowSnapshot} from './runtime/snapshot';
 import {decorationPlan, type DecorationPlan} from './runtime/decoration';
@@ -722,6 +723,9 @@ export class Engine {
         for (const id of this._windows.keys()) this._forced.add(id);
         this._monitorInvalidation = false;
       }
+      // Task 1: after the layout loop (which owns tiled geometry) and before the floating drain below,
+      // because this pass both reads and writes `_floatingRects`.
+      this._followFloatingFrames(tree, topology);
       const changes = this._reconciler.plan(expected, this._forced);
       for (const id of expected.keys()) this._forced.delete(id);
       for (const [id, rect] of this._floatingRects) changes.set(id, rect);
@@ -1052,6 +1056,80 @@ export class Engine {
     // _moveReconfigured, `move container to output`), and a window Mutter parked for its own reasons
     // is put back on screen by it. One call per crossing, not per motion.
     this._parkOrShow(id, target);
+  }
+
+  /**
+   * Task 1, the mirror image of D6: a floating window whose frame is still on the output its workspace
+   * has LEFT is given a frame on the output its workspace now lives on.
+   *
+   * D6 (`_rehomeFloating` above) is "the frame moved, follow it with the tree": the user drags a window
+   * onto another display and its tree membership follows. This is "the tree moved, follow it with the
+   * frame", and it is the half that was missing. `move container to output`, `move container to
+   * workspace N`, a directional `move` that crossed an output edge, `move workspace to output`, a
+   * workspace shown on a different output after being parked, and a replug all move a floating window's
+   * workspace without touching its frame. The measured symptom: the window stays drawn on the display it
+   * left and then appears to VANISH when that display switches away from the workspace it now belongs
+   * to. The commit's port calls were `["moveTo:1:0","decorations","decorations"]` -- no rect at all.
+   *
+   * LEVEL-TRIGGERED, and on exactly the fact D6's own guard is edge-triggered on: does the monitor the
+   * compositor reports for this window disagree with the output showing its tree workspace? That is why
+   * this is one pass instead of a call at each of the five commands that can cause it -- and why there is
+   * no sixth place for the next command to forget.
+   *
+   * It cannot resurrect the mid-drag hazard D6's edge trigger exists to avoid. Mid-drag, before Mutter
+   * reports the new monitor, `info.monitor` still names the old output AND the workspace is still on the
+   * old output: they agree, so nothing happens. Once Mutter reports it, `_rehomeFloating` moves the tree
+   * and they agree again. Only a tree-side move leaves them disagreeing, and only then does this write.
+   * (`_syncWindow` runs for every window earlier in this same commit, so `_windows` already holds the
+   * fresh monitor by the time this reads it -- the same view `_crossedOutput` compares against.)
+   *
+   * Three exclusions, each its own sentence because each is its own reason:
+   *
+   * - **A workspace no output is showing is skipped**, by construction: this iterates `tree.visible`, so
+   *   a parked workspace is never reached. A parked window is in the attic where its frame is
+   *   unobservable, and it gets its frame the moment some output shows that workspace -- which is this
+   *   same pass, on the commit that shows it.
+   * - **A fullscreen window is skipped.** Mutter owns a fullscreen window's geometry (main spec 19), and
+   *   the layout pass above excludes it for the same reason; writing a rect here would fight the
+   *   compositor and could leave the window the size of the output it came from.
+   * - **A rect a command queued in THIS commit is translated, not overwritten.** `_floatingRects` is read
+   *   before `info.rect`, so `move container to output right, move position center` centres the window on
+   *   the output it moved TO: `move position center` resolves `center` against the monitor Mutter still
+   *   reports, and this pass carries that answer across with it. Overwriting instead would silently
+   *   discard the user's own second command.
+   * - **A frame already standing in the destination is left alone**, which is what makes a
+   *   level-triggered pass safe to run on every commit. `info.monitor` is the compositor's answer and it
+   *   does not change the instant this writes a rect: moving the frame raises a geometry signal, the
+   *   engine commits again on it, and the monitor it reads is still the old one -- so without this the
+   *   pass would translate the SAME window a second time, and because the result is clamped each pass
+   *   drags it further into the destination's far corner. Measured before this guard existed: commit one
+   *   wrote x=2780, correctly, and the next wrote x=3000, the clamp's limit. `originWithin` is exactly
+   *   `fixFloatingCoordinates`'s postcondition, so one application is a fixed point. It is an addition to
+   *   the monitor test and not a replacement for it: on its own it would also yank back a window the user
+   *   deliberately parked half off the edge of its own output, every commit, forever.
+   */
+  private _followFloatingFrames(tree: Tree, topology: Topology): void {
+    // Shaped like the layout loop in `_layoutAndPublish`, deliberately and line for line: over
+    // `topology.monitors`, taking the index from `tree.visible` and asserting the work area, because the
+    // `_ready` gate at the top of that method has already established that every monitor in this topology
+    // has one. Iterating the topology rather than `tree.visible` also means an output that has left can
+    // never be reached, so there is no third unreachable branch to justify.
+    for (const output of topology.monitors) {
+      const index = tree.visible.get(output.id);
+      if (index === undefined) continue;
+      const destination = topology.workAreas.get(output.id)!;
+      for (const id of tree.workspace(index).floating) {
+        const info = this._windows.get(id);
+        if (!info || info.monitor === null || info.monitor === output.id || info.fullscreen) continue;
+        // Reachable, unlike the two above: the compositor can name a monitor that has already left the
+        // topology, and there is then no source work area to scale the frame against.
+        const source = topology.workAreas.get(info.monitor);
+        if (source === undefined) continue;
+        const current = this._floatingRects.get(id) ?? info.rect;
+        if (originWithin(current, destination)) continue;
+        this._floatingRects.set(id, fixFloatingCoordinates(current, source, destination));
+      }
+    }
   }
 
   private _forget(id: WindowId): void {

@@ -39,21 +39,27 @@ export function twoMonitorTopology(count = 10): Topology {
  * A topology built from a plain list of outputs, one work area per output, laid out left to right.
  * Each monitor's connectors default to a synthetic `fixture-<id>` name; a test pinning `workspace N
  * output <name>` passes its own, so the name it configures is the name the fake topology reports.
+ *
+ * `area` overrides the default 1000x700 slab for one output. Every existing caller omits it and gets
+ * exactly what it got before. A test that needs the outputs to differ in SIZE -- not merely in origin
+ * -- passes it: with equal areas, a proportional cross-output translation and a plain origin offset
+ * give the same answer for every input, so such a test could not tell them apart (Task 1).
  */
 export function outputsTopology(
-  monitors: Array<{id: MonitorId; index: number; connectors?: readonly string[]}>,
+  monitors: Array<{id: MonitorId; index: number; connectors?: readonly string[]; area?: Rect}>,
   primary: MonitorId,
 ): Topology {
   return {
     primary,
     monitors: monitors.map(m => ({id: m.id, index: m.index, connectors: m.connectors ?? [`fixture-${m.id}`]})),
-    workAreas: new Map(monitors.map(m => [m.id, {x: m.index * 1000, y: 0, width: 1000, height: 700}])),
+    workAreas: new Map(monitors.map(m =>
+      [m.id, m.area ?? {x: m.index * 1000, y: 0, width: 1000, height: 700}])),
   };
 }
 
 export interface FakeEngineOptions {
   /** Builds the initial topology in place of the single-monitor default. */
-  monitors?: Array<{id: MonitorId; index: number; connectors?: readonly string[]}>;
+  monitors?: Array<{id: MonitorId; index: number; connectors?: readonly string[]; area?: Rect}>;
   primary?: MonitorId;
   /** Overrides the fake's native GNOME workspace count (the `count` the ports.workspaces getter reports). */
   workspaceCount?: number;
