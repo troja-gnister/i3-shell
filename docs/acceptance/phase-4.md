@@ -84,24 +84,29 @@ Reading a GSetting is fine anywhere below. **Writing one is a defect for this ph
 
 ## A40 — the rule does not re-fire and re-resize on a later title change
 
-- [ ] With the dialog open, resize it yourself by dragging a corner to something clearly different from
-      720×420.
-- [ ] Now make its title change again while it stays open (change the selected output in the list, or do
-      whatever in that dialog alters its title bar text).
-- [ ] **Your size survives.** The dialog is not snapped back to 720×420, and it is not re-centred.
-      This is the one that matters: a rule that re-fires fights the user for the rectangle, once per
-      title flap, forever.
+A dialog's title cannot be changed on demand, so force it with a terminal whose title you set yourself.
+Both titles below match your rule's regex `^Audio (output|input)$` (config line 50).
+
+- [ ] Open a terminal and run `printf '\e]0;Audio output\a'`. The rule fires: floating, 720x420,
+      centred, 2px border.
+- [ ] Resize it by dragging a corner to something clearly different from 720x420, and move it.
+- [ ] Run `printf '\e]0;Audio input\a'`, then `printf '\e]0;Audio output\a'` again. Confirm in the
+      terminal's title bar (or `GetWindows`' `title`) that the title really did change each time.
+- [ ] **Your size and position survive.** The window is not snapped back to 720x420 or re-centred. A rule
+      that re-fires fights the user for the rectangle once per title change.
 - [ ] `GetWindows` confirms the frame is still the one you dragged to.
+- [ ] **If you could not observe the title change, this box is unwalkable, not passed.** Say so in your
+      report instead of ticking it.
 
 ## A41 — an urgency hint on an inactive workspace turns that workspace's pill
 
-- [ ] Put something that will demand attention on a workspace you are not looking at. The reliable way:
-      `$mod+2`, start a long command in a terminal, `$mod+1`, and let it finish — most terminals set the
-      urgency hint when a command completes in an unfocused window. If yours does not, any application
-      that raises a notification-with-focus-request will do.
-- [ ] Workspace **II**'s pill changes colour while you are on **I**. It is styled from your config's
-      `client.urgent` colours, which is a deliberate divergence recorded in the spec (i3 would take bar
-      colours from a `bar { colors { … } }` block, and this project ignores the bar block entirely).
+- [ ] On workspace **2**, open a terminal and run `sleep 5; printf '\a'`, then press `$mod+1` at once so
+      you are looking at **1** when it fires. (Command-completion urgency in terminals is unreliable; the
+      bell is not.)
+- [ ] Workspace **2**'s pill changes colour while you are on **1**, to your config's `client.urgent`
+      colours (config line 277: border `#EC69A0`, background `#DB3279`). Compare the pill's colour with
+      those values, not just "it changed". This is styled from `client.urgent` deliberately: i3 would use
+      a `bar { colors { ... } }` block, which this project ignores.
 - [ ] The pill for the workspace you are **on** does not change.
 - [ ] `GetState`'s `pills` array marks that workspace `urgent: true`.
 
@@ -115,16 +120,29 @@ Reading a GSetting is fine anywhere below. **Writing one is a defect for this ph
 
 ## A43 — `focus right` at the laptop panel's right edge moves to the external display
 
+**For A43-A45, do not touch the mouse.** GNOME's focus mode is `sloppy` and a workspace switch that
+crosses displays warps the pointer, so focus can reach the other display without `focus right` ever
+running. Also do not press `$mod+Ctrl+Right` (`focus output right`, config line 203): it gives the same
+visible result by a different command. Press the **directional** binding, `$mod+semicolon` or
+`$mod+Right`. (`$mod+l` is `focus up` in your config, not right.) Read the state before and after:
+
+```sh
+gdbus call --session --dest org.i3shell.Control --object-path /org/i3shell/Control \
+  --method org.i3shell.Control.GetState    # note focusedOutput
+```
+
 - [ ] Two displays, side by side: the 1728x1048 panel on the left and the 1920x1080 external to the
-      **right** of it (set the arrangement in GNOME Settings → Displays). One window on each.
-- [ ] Focus the window on the panel. Press your `focus right` binding (`$mod+l` or `$mod+Right` as your
-      config has it) — **focus lands on the external display's window**. Type: the characters go there.
+      **right** of it (GNOME Settings -> Displays). One window on each.
+- [ ] Focus the window on the panel by keyboard (`$mod+j`/`$mod+Left`). `GetState`'s `focusedOutput`
+      names the panel.
+- [ ] Press `$mod+semicolon` (or `$mod+Right`). **Focus lands on the external display's window.** Type:
+      the characters go there. `GetState`'s `focusedOutput` now names the external display.
 - [ ] It did not wrap back to the leftmost window on the panel.
-- [ ] `GetState`'s `focusedOutput` names the external display.
 
 ## A44 — `focus left` at the external display's left edge returns
 
-- [ ] From there, press `focus left`. Focus comes back to the panel's window.
+- [ ] From there, press `$mod+j` (or `$mod+Left`). Focus comes back to the panel's window, and
+      `focusedOutput` names the panel again. Mouse untouched.
 - [ ] Repeat the pair five or six times. It works every time and nothing drifts: no window moves, no
       workspace changes, and the journal stays quiet.
 - [ ] With two windows side by side **inside** the external display, `focus left` from the right-hand one
@@ -133,50 +151,71 @@ Reading a GSetting is fine anywhere below. **Writing one is a defect for this ph
 
 ## A45 — `move right` at the edge carries the container across
 
-- [ ] Focus the panel's window and press your `move right` binding (`$mod+Shift+l` or similar). The
-      **window** moves to the external display's visible workspace.
-- [ ] Build a nested layout first — two windows, `$mod+v`, a third — focus the split with `$mod+a`, and
+Same rule: no mouse, and not `$mod+Ctrl+Right`. The bindings are `$mod+Shift+semicolon` or
+`$mod+Shift+Right`. (`$mod+Shift+l` is `move up`.)
+
+- [ ] Focus the panel's window and press `$mod+Shift+semicolon`. The **window** moves to the external
+      display's visible workspace; `GetWindows`/`GetTree` show it there.
+- [ ] Build a nested layout first: two windows, `$mod+v`, a third. Focus the split with `$mod+a`, and
       `move right` again. The whole subtree lands intact: same split, same order, same proportions, the
       same child focused inside it.
 - [ ] The panel's remaining windows re-fill its work area with no gap and no overlap.
 
 ## A46 — with the lid closed and the panel off, its windows are reachable on the external display
 
+If closing the lid suspends the machine, this cannot be walked as written: either set the lid action to
+"do nothing" in GNOME Settings -> Power for the walk (and say so in your report), or write A46-A48 up as
+unwalked. Do not tick them from a resume.
+
 - [ ] Open two windows on the panel's workspace and note which they are.
-- [ ] Close the lid (the 1920x1080 external stays attached and awake). The panel goes dark and GNOME drops that output.
+- [ ] Close the lid (the 1920x1080 external stays attached and awake). The panel goes dark and GNOME
+      drops that output.
+- [ ] **Confirm the panel is really off before going on:** run
+      `gdbus call --session --dest org.i3shell.Control --object-path /org/i3shell/Control \
+  --method org.i3shell.Control.GetTree` and check that
+      only the external output is listed. If the panel is still there, this box has not been tested.
 - [ ] **Those two windows are reachable on the external display**: `$mod+N` for the workspace they were
       on brings it up there, with both windows, in the same layout.
-- [ ] Nothing was closed and nothing is invisible-but-audible: `GetWindows` lists both, and whichever
-      workspace is on screen draws them.
+- [ ] Nothing was closed: `GetWindows` lists both, and whichever workspace is on screen draws them.
 - [ ] The journal has no warning about outputs, assignment or coverage.
 
 ## A47 — on undock they return to the laptop panel
 
-- [ ] Open the lid again; the 1728x1048 panel comes back.
+- [ ] Open the lid again; the 1728x1048 panel comes back. Confirm with `GetTree` that both outputs are
+      listed before judging anything.
 - [ ] The workspaces that lived on the panel **go back to the panel**, with their windows, their layout
       and their split proportions.
 - [ ] The external display keeps what it had: this is a return, not a reshuffle.
-- [ ] `GetTree` agrees — each workspace names the output you expect, and `visible` has one entry per
+- [ ] `GetTree` agrees: each workspace names the output you expect, and `visible` has one entry per
       attached display.
 
 ## A48 — a window the user deliberately moved while undocked stays put
 
-- [ ] Close the lid again.
-- [ ] While the panel is off, **deliberately** move one of its windows to a workspace that belongs to the
-      external display (`move container to output` over D-Bus, or `$mod+Shift+N`).
-- [ ] Open the lid. **That window stays where you put it.** Everything else returns to the panel as in
-      A47, and only the one you moved does not.
+- [ ] Close the lid again and confirm with `GetTree` that the panel is gone (as in A46).
+- [ ] Pick a window that lived on the panel, and a workspace whose home **was the external display**
+      (not one that only ended up there). Deliberately move the window there: focus it and press
+      `$mod+Shift+N` for that workspace number, or run, with the external's output name from `GetTree`
+      (for example `HDMI-A-1`):
+      `gdbus call --session --dest org.i3shell.Control --object-path /org/i3shell/Control \
+  --method org.i3shell.Control.Command "move container to output HDMI-A-1"`
+- [ ] Open the lid and confirm with `GetTree` that both outputs are back. **That window stays where you
+      put it.** Everything else returns to the panel as in A47; only the one you moved does not.
 - [ ] This is the box that separates "remembering where a workspace lived" from "overruling the user", and
       it is the only test of the displacement-origin rule the spec settles in §7.
 
 ## A49 — none of A38-A48 needs a hand-edited GSetting or an outside script
 
-- [ ] Re-read everything you did above. Every step was: edit `~/.config/i3/config`, press a binding, use
-      the mouse, close or open the lid, or call `org.i3shell.Control` over D-Bus.
-- [ ] You did not run `gsettings set` for anything except a workaround explicitly offered in
-      `docs/acceptance/phase-5.md`'s Known Limitations (the hot-corner one).
-- [ ] You did not run a script, a systemd unit or a `sudo` command to make any box pass.
-- [ ] If any box above needed one, **that box fails and so does this one** — name it here.
+Observe this rather than remember it. Before A38, in a spare terminal, start
+`dconf watch /org/gnome/` and leave it running for the whole walk.
+
+- [ ] At the end, the `dconf watch` output shows no write you made on purpose to get a box to pass.
+      (Writes GNOME makes on its own, such as window geometry or recent files, are not yours; name any you
+      are unsure of.)
+- [ ] You did not run `gsettings set` or `dconf write` for anything during A38-A48.
+- [ ] You did not run a script, a systemd unit or a `sudo` command to make any box pass. Every step was:
+      edit `~/.config/i3/config`, press a binding, close or open the lid, or call `org.i3shell.Control`
+      over D-Bus. (The lid-action setting in A46 is a Settings change, not a workaround, but record it.)
+- [ ] If any box above needed one, **that box fails and so does this one**; name it here.
 
 ---
 
