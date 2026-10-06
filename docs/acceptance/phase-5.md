@@ -413,10 +413,20 @@ gnome-extensions enable i3-shell@troja
   to a different output or closed. Measured, three outputs, with `move container to output`:
   - a client that **refuses the rect** (the `stubborn` clients the README names): the carry is written and
     ignored, the compositor goes on reporting the original output, and a later command back to the same
-    output writes nothing — `APPLIED=[]`, where the same walk with the refusal removed writes
-    `{x: 2070, y: 34}`. (Dragging it anywhere else first *does* clear the record, which is what the
-    `from` half of the record buys and what fix round 2 repaired: before it, any third output left the
-    record stale forever.)
+    output writes nothing — `APPLIED=[]`. **Corrected 2026-10-06** (whole-branch review of
+    `cleanup-and-toggle`): this used to read "where the same walk with the refusal removed writes
+    `{x: 2070, y: 34}`", which is wrong twice over, and the re-run is what reproduces today. Removing the
+    refusal changes nothing about the walk: both variants write `{x: 2780, y: 310, 200×100}` for the first
+    carry and then nothing at all for the command back, because the record ends on the *compositor's* report
+    of a monitor other than the one the frame started on — and accepting the rect is not that report.
+    (Nothing in the walk makes the compositor re-report, and the unit fake's `geometry.apply` writes the
+    rect without touching `monitor`, so the two variants are indistinguishable there.) `{x: 2070, y: 34}`
+    belongs to a different walk: it is what the carry back to output 1 writes once the window has been
+    **dragged** onto output 2 first, which is the parenthetical below, measured by
+    `carries again once the compositor reports the frame anywhere other than where it started`. So the
+    discriminator is the compositor confirmation, never the refusal. (Dragging it anywhere else first
+    *does* clear the record, which is what the `from` half of the record buys and what fix round 2
+    repaired: before it, any third output left the record stale forever.)
   - a **command pressed while the window is still being dragged on the output it is leaving**: the carry
     lands (`applied [[1,{x:395,y:205,…}]]`), the drag's own motions then overwrite the frame, the monitor is
     reported unchanged throughout, and nothing catches up after release — final state `monitor 1`,

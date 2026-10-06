@@ -47,7 +47,12 @@ UPSTREAM_STACK_ASSERTION="meta_window_set_stack_position_no_sync: assertion 'win
 # ListSearchResults, and the date menu's EventsSection. GNOME disposes them from C during teardown while
 # its own JS still holds wrappers. This extension can never be confused with them: it registers no
 # GObject class at all (verified -- `rg 'registerClass' src/` finds nothing), so its own actors are
-# reported by St type name (St.BoxLayout, St.Button, St.Widget) and are still fatal in both scopes.
+# reported either by St type name (St.BoxLayout, St.Button, St.Widget) or, where it instantiates a class
+# GNOME itself registered, by that class's own Gjs_ name -- `PanelMenu.Button`, and
+# `QuickSettings.QuickToggle` and `QuickSettings.SystemIndicator` since the Quick Settings toggle landed,
+# which report as `Gjs_ui_quickSettings_*`. Neither kind is allowlisted, so both stay fatal in both
+# scopes: the allowance is by exact name and the three names it grants belong to objects this extension
+# never builds.
 GNOME_DISPOSED_WIDGETS='Gjs_ui_search_MaxWidthBox|Gjs_ui_search_ListSearchResults|Gjs_ui_dateMenu_EventsSection'
 
 # GNOME Shell's own deferred-work queue (js/ui/main.js `queueDeferredWork`), which it drains after the

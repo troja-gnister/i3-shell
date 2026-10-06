@@ -130,6 +130,19 @@ export class SignalTracker {
    * an emitter widened on its way in -- to `Connectable`, to `any`, or through a parameter or a field
    * declared as either -- loses its `$signals` map and takes the permissive branch silently, with no
    * diagnostic anywhere. Pass generated GObjects to this method at their own concrete types.
+   *
+   * AND THE BIGGER LIMIT, WHICH IS THE REAL COVERAGE: this method is not on the path of most connections
+   * in this extension. There are 26 direct `.connect()` calls in `src/` that never reach it (measured
+   * 2026-10-06: `rg '\.connect\(' src/ | rg -v 'signals\.connect|connectUnchecked'`, spread over ten
+   * files, every one of them in `src/shell/**`), and every one of them is typed by @girs rather than by
+   * `HandlerFor`. The exact bug this signature exists to catch STILL COMPILES CLEAN when written that way:
+   * appending `global.stage.connect('captured-event', (event: Clutter.Event) => event.type())` to
+   * `signals.typecheck.ts` and running `tsc -p tsconfig.json` exits 0, because @girs declares a loose
+   * second overload beside the typed one (`connect(signal: string, callback: (...args: any[]) => any)`,
+   * e.g. `clutter-18.d.ts:19978` on `Clutter.Actor`) and overload resolution falls through to it -- the
+   * same reason `HandlerFor` is one signature and not an overload pair. So this typing covers the calls
+   * that come through `SignalTracker`, which is the right place for a lifetime-tracked connection to be,
+   * and nothing else.
    */
   connect<O extends Connectable, K extends string>(object: O, signal: K, callback: HandlerFor<O, K>): number {
     // One widening, at the one boundary where it is unavoidable: `Connectable.connect` is declared with

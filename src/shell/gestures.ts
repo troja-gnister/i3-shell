@@ -30,10 +30,12 @@ const SWIPE_THRESHOLD = 100;
  * The handler takes `(actor, event)`, not `(event)`: a GJS signal callback receives the emitting object
  * ahead of the signal's own arguments, as `src/shell/keys.ts`'s `accelerator-activated` handler
  * (`(_display, action, _device, timestamp)`) shows. `@girs` lists `captured-event` as `(event: Event) =>
- * boolean | void` -- its `SignalSignatures` entries carry the signal's own arguments only -- and
- * `SignalTracker.connect` accepts `(...args: any[])`, so neither the stubs nor the typechecker can catch
- * getting this wrong. Fix round 1, B1: it WAS wrong, and the Stage arriving where the event was expected
- * threw on `.type()` for every event in the session until the native run found it.
+ * boolean | void` -- its `SignalSignatures` entries carry the signal's own arguments only. Fix round 1,
+ * B1: it WAS wrong, and the Stage arriving where the event was expected threw on `.type()` for every event
+ * in the session until the native run found it. `SignalTracker.connect` accepted `(...args: any[])` at the
+ * time, so neither the stubs nor the typechecker could catch it; it is typed against the emitter's own
+ * signature now and `signals.typecheck.ts` pins this exact handler as rejected -- but only for calls that
+ * go through the tracker, which is the limit that method's own doc comment states.
  *
  * It CLAIMS the gestures it recognises: a three-finger `TOUCHPAD_SWIPE` answers `Clutter.EVENT_STOP` in
  * every phase, so GNOME never sees any part of it. With this extension enabled GNOME has exactly two
