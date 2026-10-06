@@ -441,10 +441,26 @@ export class Engine {
    * Fix round 1, folded item 4: gated on `_locked` too, for the same reason the `launcher` command is
    * -- pointer motion over a lock screen must not reassign the focused output underneath it. Task 2
    * widened that to `_suspended`: tiling switched off at the toggle must not reassign it either.
+   *
+   * Task 4, D8's gap: the crossing is recorded as a reason to stop suppressing involuntary focus reports
+   * BEFORE the `focus_follows_mouse` gate below, and only for a crossing onto an output that is not the
+   * focused one. Clicking a window on another display requires the pointer to reach it, so this crossing
+   * is strictly earlier than the click and is the only evidence available when the setting is off --
+   * with it off the engine otherwise threw the crossing away and a deliberate click was ignored for
+   * focus purposes until a window opened there or a command moved the focused output. It ends the
+   * suppression only; it does not move the focused output, which is what the setting forbids, so the
+   * click's own focus report is then honoured by D5 exactly as at any other time.
+   *
+   * `output !== tree.focusedOutput` carries the whole of the risk. D8's native scenario warps the
+   * pointer ONTO the focused output (the measured dump reads `"pointer": [960, 556]`, the centre of the
+   * focused output's work area), so a lapse on any crossing would have broken D8 on the very run that
+   * found it. Crossing back onto the display you are already on says nothing about another one.
    */
   onPointerOutput(output: MonitorId): void {
-    if (!this._started || this._disposed || this._suspended || !this._config.focusFollowsMouse) return;
+    if (!this._started || this._disposed || this._suspended) return;
     const tree = this._tree;
+    if (tree && output !== tree.focusedOutput) this._shownOnFocusedOutput = null;
+    if (!this._config.focusFollowsMouse) return;
     if (!tree || tree.focusedOutput === output) return;
     // An output with no visible entry is not one the focus can sit on: `activeWorkspace` reads
     // `visible.get(focusedOutput)` and throws without one. `coverOutputs` makes that unreachable for a

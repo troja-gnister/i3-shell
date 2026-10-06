@@ -1115,6 +1115,83 @@ describe('workspace and focus on two displays (Task 19)', () => {
     expect(f.engine.state().focusedOutput).toBe(2);
     expect(f.engine.state().activeWorkspace).toBe(0);
   });
+
+  // Task 4, D8's gap under `focus_follows_mouse no`. The suppression is durable and ends only when the
+  // focused output moves or its workspace gains a window; with the pointer inert there is no crossing to
+  // end it, so a deliberate click on another display was ignored for focus purposes. A click needs the
+  // pointer over the window, so the crossing reported by src/shell/pointer.ts is the evidence -- and it
+  // arrives even when `focus_follows_mouse no` forbids acting on it.
+  describe('a pointer crossing ends the involuntary-focus suppression', () => {
+    // THREE outputs. With two, the user's own crossing moves the focused output to the display the
+    // reported window is on, so "the crossing ended the suppression" and "the crossing moved the focused
+    // output" give the same answer -- which is exactly the fixture trap the D8 report records removing
+    // from its own lapse test. Here the pointer crosses onto output 2 while the stray report names a
+    // window on output 3, so only the lapse can explain the outcome.
+    const threeOutputs = (text: string) => fakeEngine(text, {
+      monitors: [{id: 1, index: 0}, {id: 2, index: 1}, {id: 3, index: 2}], primary: 1, workspaceCount: 10,
+    });
+
+    it('honours a focus report on another display once the pointer has crossed, with the pointer inert', () => {
+      const f = threeOutputs('focus_follows_mouse no\nbindsym Mod4+q kill');
+      f.engine.start();
+      f.mapOn(3, 7);                        // a window on output 3's workspace
+      f.mapOn(1, 8);                        // and one on the primary, which holds native focus
+      f.focus(8);
+      // The user switches the primary to an empty workspace: the premise of D8. Mutter has nothing on
+      // this display to focus, so it reports window 7 on output 3 and the suppression holds.
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: 5, name: '5'}}], 1);
+      // The fake emits the replacement pick the real compositor does (fakeEngine's moveToWorkspace), so
+      // the suppressed report has already arrived by here; asserting it is the premise of the test.
+      expect(f.engine.state().focusedOutput).toBe(1);
+
+      // Now the user moves the mouse onto output 2 and clicks a window on output 3. (Two steps, because
+      // that is what it takes: `focus_follows_mouse no` means the crossing itself moves nothing.)
+      f.engine.onPointerOutput(2);
+      expect(f.engine.state().focusedOutput).toBe(1);   // the crossing alone moves nothing
+      // `focus(null)` first, and it is not padding: `_acceptFocus` drops a report whose id equals the
+      // last one, and Mutter really does unset the input focus between picks -- the measured behaviour
+      // the D8 report's round 2 is built on. Without it this second report is a duplicate and the test
+      // would pass or fail for a reason that has nothing to do with the lapse.
+      f.focus(null);
+      f.focus(7);
+      expect(f.engine.state().focusedOutput).toBe(3);   // the report after the crossing is the user's
+    });
+
+    it('keeps suppressing when the pointer crosses back onto the focused output itself', () => {
+      // D8's own native scenario warps the pointer onto the FOCUSED output, so a lapse on any crossing
+      // at all would have broken D8 on the run that found it.
+      const f = threeOutputs('focus_follows_mouse no\nbindsym Mod4+q kill');
+      f.engine.start();
+      f.mapOn(3, 7);
+      f.mapOn(1, 8);
+      f.focus(8);
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: 5, name: '5'}}], 1);
+      expect(f.engine.state().focusedOutput).toBe(1);
+
+      f.engine.onPointerOutput(1);
+      f.focus(null);
+      f.focus(7);
+      expect(f.engine.state().focusedOutput).toBe(1);
+    });
+
+    it('still lapses with focus_follows_mouse on, where the crossing also moves the focused output', () => {
+      // The default config. The crossing moves the focused output (rule 4), which already ended the
+      // suppression through clause 1 -- so this test exists to prove Task 4 did not change that path.
+      const f = threeOutputs('bindsym Mod4+q kill');
+      f.engine.start();
+      f.mapOn(3, 7);
+      f.mapOn(1, 8);
+      f.focus(8);
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: 5, name: '5'}}], 1);
+      expect(f.engine.state().focusedOutput).toBe(1);
+
+      f.engine.onPointerOutput(2);
+      expect(f.engine.state().focusedOutput).toBe(2);
+      f.focus(null);
+      f.focus(7);
+      expect(f.engine.state().focusedOutput).toBe(3);
+    });
+  });
 });
 
 /**
