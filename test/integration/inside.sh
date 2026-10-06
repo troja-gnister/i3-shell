@@ -45,7 +45,10 @@ cleanup() {
   fi
   hotplug=$(upstream_hotplug_notes "$LOG")
   if [[ -n "$hotplug" ]]; then
-    echo 'note: known upstream mutter hotplug work-area assertions present and allowed (see criticals.sh):' >&2
+    # Worded as a text match rather than as provenance on purpose: the same two lines are what a bad
+    # call of OURS would print, and this note cannot tell the difference. What rules that out is
+    # readTopology's index guard and its unit test, both named in criticals.sh -- not this message.
+    echo 'note: criticals matching the excluded mutter hotplug work-area pair, allowed by text (see criticals.sh):' >&2
     printf '%s\n' "$hotplug" >&2
   fi
   allowed=$(allowed_shutdown_notes "$LOG")
