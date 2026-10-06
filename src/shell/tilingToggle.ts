@@ -16,6 +16,21 @@ import {guard} from './util/signals';
  * `disable()` -- and no second one: the actors are not registered with the SignalTracker and nothing else
  * destroys them.
  *
+ * It does NOT ask for `toggleMode`, and it never reads the widget's own `checked` to decide anything. Both
+ * are fix round 1, I3. In toggle mode St.Button flips `checked` itself around the `clicked` signal, and
+ * whether it does so before or after emitting is a fact about compositor C code that nothing in this repo
+ * can observe -- while this project has four times been bitten by an assumption about compositor behaviour
+ * that only a fake confirmed. Reading `checked` is correct under one order and catastrophic under the
+ * other: every request would come out equal to the engine's current state, `setTilingEnabled`'s no-change
+ * early return would fire, and the switch would be permanently inert while still animating under the
+ * user's finger -- a control that looks like it works and does nothing.
+ *
+ * So the engine's state is the only input: a click asks for its opposite, and the switch's appearance is
+ * written from the answer that comes back through `setChecked`. With no `toggleMode` the widget never
+ * writes `checked` on its own schedule, so there is no order left to be wrong about, and nothing is lost
+ * visually: GNOME 50's own theme draws a quick toggle "on" purely from the `:checked` pseudo-class, which
+ * follows the property this class sets (`gnome-shell-dark.css`: `.quick-toggle:checked`).
+ *
  * `addExternalIndicator` is the documented way for an extension to put an item in Quick Settings
  * (`node_modules/@girs/gnome-shell/dist/ui/panel.d.ts:72`). `statusArea.quickSettings` is typed optional
  * there, and that is not pedantry: a session mode that builds no quick settings would otherwise take
@@ -26,24 +41,35 @@ export class TilingToggle {
   private readonly _toggle = new QuickSettings.QuickToggle({
     title: 'Tiling',
     iconName: 'view-grid-symbolic',
-    toggleMode: true,
     checked: true,
   });
   /** The shell destroys the panel before disable() runs; see the class comment. */
   private _destroyed = false;
+  /**
+   * What the ENGINE is doing, as last reported through `setChecked`. The widget's `checked` is this
+   * class's output, never its input; see the class comment for what reading it back would cost. True to
+   * start, matching both the `checked: true` above and `Engine.tilingEnabled` on a fresh enable.
+   */
+  private _enabled = true;
 
   constructor(onChanged: (enabled: boolean) => void) {
-    // `clicked` arrives AFTER St.Button has flipped `checked` (the toggle is in toggleMode), so the
-    // actor's own state is the answer. A local boolean mirrored here would drift the first time
-    // `setChecked` or anything else moved the actor.
-    this._toggle.connect('clicked', guard('tiling toggle', () => { onChanged(this._toggle.checked); }));
+    // A click asks for the opposite of what the engine is doing -- which is what the user who clicked a
+    // switch means, whatever the widget has done with its own appearance by the time this runs. The answer
+    // arrives back through `setChecked`, and only that moves `_enabled`: recording the REQUEST here would
+    // make a refused change look accepted and send the next click the wrong way.
+    this._toggle.connect('clicked', guard('tiling toggle', () => { onChanged(!this._enabled); }));
     this._toggle.connect('destroy', guard('tiling toggle destroy', () => { this._destroyed = true; }));
     this._indicator.quickSettingsItems.push(this._toggle);
     Main.panel.statusArea.quickSettings?.addExternalIndicator(this._indicator);
   }
 
-  /** Moves the switch without firing `clicked`, for a state change the user did not make. */
+  /**
+   * What the engine is now doing, which is both the switch's appearance and the state the next click is
+   * measured against. Called by `src/extension.ts` after every `setTilingEnabled`, including the ones the
+   * engine refuses -- that is what makes a refusal snap the switch back instead of leaving it lying.
+   */
   setChecked(enabled: boolean): void {
+    this._enabled = enabled;
     if (this._destroyed) return;
     if (this._toggle.checked !== enabled) this._toggle.checked = enabled;
   }

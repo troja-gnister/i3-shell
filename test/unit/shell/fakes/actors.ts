@@ -494,6 +494,21 @@ const quickSettingsImpl = {
   },
 };
 
+/**
+ * The three shapes a press on an St.Button can have, from this repo's point of view:
+ *
+ * - `flip-then-emit`: the widget flips its own `checked` and THEN emits `clicked` -- what St.Button in
+ *   toggle mode is believed to do, and what every handler that reads `this.checked` assumes.
+ * - `emit-then-flip`: the same widget, the other way round.
+ * - `no-flip`: the widget touches `checked` at all only if it was asked to toggle itself.
+ *
+ * Which of the first two real St does is a fact about the compositor's C code that nothing in this repo
+ * can observe (fix round 1, I3), so the adapter has to be right for both and these let a test say so. A
+ * button that was not asked for `toggleMode` flips nothing, whichever order is named -- which is itself
+ * the property that makes "the widget cannot race us" testable.
+ */
+export type ClickOrder = 'flip-then-emit' | 'emit-then-flip' | 'no-flip';
+
 /** The `resource:///org/gnome/shell/ui/quickSettings.js` module, for the two classes this repo uses. */
 export const fakeQuickSettings = {
   QuickToggle: class FakeQuickToggle extends FakeActor {
@@ -518,6 +533,18 @@ export const fakeQuickSettings = {
       this.touch('checked');
       this.checkedWrites++;
       this._checked = value;
+    }
+
+    /**
+     * A real press, modelled as St.Button's release path: the widget flips `checked` ITSELF only in toggle
+     * mode, and `order` says which side of `clicked` that flip lands on. `emit` alone would model only the
+     * signal and would quietly assume the answer to the one question here that is open.
+     */
+    click(order: ClickOrder = 'no-flip'): void {
+      const togglesItself = this.props.toggleMode === true;
+      if (togglesItself && order === 'flip-then-emit') this.checked = !this.checked;
+      this.emit('clicked');
+      if (togglesItself && order === 'emit-then-flip') this.checked = !this.checked;
     }
   },
   SystemIndicator: class FakeSystemIndicator extends FakeActor {

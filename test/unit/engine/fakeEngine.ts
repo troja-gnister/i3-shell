@@ -75,6 +75,13 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
   const applied: Array<Map<WindowId, Rect>> = [];
   const queue = new Map<number, () => void>();
   let token = 0, active = 0, count = options.workspaceCount ?? 10, staleActivations = 0;
+  /**
+   * GNOME's own `num-workspaces` as the user had it before this extension touched it -- what
+   * `settings.restoreAll()` below puts back. Captured rather than assumed: the real
+   * `SettingsOverrides.restoreAll()` restores from its snapshot, and a fake whose restore left the forced
+   * count of two in place made the engine's paused `commit()` unobservable (fix round 1, I2).
+   */
+  const userWorkspaceCount = count;
   let focused: WindowId | null = null;
   const refusedMoves = new Set<WindowId>();
   let currentTopology: Topology | null = options.monitors
@@ -159,7 +166,13 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
         if (wanted > 0) count = 2;
         active = Math.min(active, count - 1);
       },
-      restoreAll: () => { calls.push('settings.restore'); },
+      // Restores `count`, because that is the half of restoreAll that the rest of the engine can see: with
+      // the user's own num-workspaces back, GNOME no longer has the attic, and anything that re-forces it
+      // is undoing the restore. A test stands in for the `n-workspaces` signal the restore raises by
+      // calling `engine.onWorkspacesChanged()` itself, exactly as `setActiveIndex` documents for the
+      // active-workspace signal -- emitting it from in here would make the restore re-entrant in a way the
+      // real adapter's is not (the signal arrives on a later main-loop turn).
+      restoreAll: () => { calls.push('settings.restore'); count = userWorkspaceCount; },
     },
     indicator: {
       setMode: name => { calls.push(`mode:${name}`); },

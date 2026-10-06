@@ -92,6 +92,44 @@ describe('setTilingEnabled', () => {
     expect(f.plan).toEqual({borders: [], frames: [], titleRows: []});
   });
 
+  it('closes the launcher when switched off, so its modal grab cannot keep the keyboard', () => {
+    // Fix round 1, I1. The worst outcome anything in this task can produce: the launcher holds a modal
+    // grab on the whole session, so a launcher left open with the engine paused -- its own bindings
+    // ungrabbed, its commands refused -- takes the keyboard away from everything and gives it to a window
+    // that will not answer. `reload`, `restart`, `onMonitorsChanged` and `onLocked` all close it first for
+    // this reason; switching tiling off is the fifth, and the only one the user reaches by mouse while the
+    // launcher is in front of them.
+    const f = parked();
+    expect(f.engine.run([{type: 'launcher', term: null}], 1)).toBe('launcher');
+    expect(f.ports.launcher.isOpen()).toBe(true);
+    f.calls.length = 0;
+
+    f.engine.setTilingEnabled(false);
+    expect(f.ports.launcher.isOpen()).toBe(false);
+    expect(f.calls).toContain('launcher.close');
+  });
+
+  it('does not restore the workspace count and then re-force it from under the user', () => {
+    // Fix round 1, I2: what the paused `commit()` is really for, now that the fake's `restoreAll()` puts
+    // GNOME's own `num-workspaces` back the way the real settings port does.
+    //
+    // Restoring that count raises GNOME's `n-workspaces` signal, which arrives as
+    // `onWorkspacesChanged()`. That handler exists to force the count back to two and to drag the active
+    // workspace back to live -- correct while tiling is on, and the exact opposite of what switching off
+    // just did. Without the `_paused` guard in `commit()` the restore is undone a main-loop turn after it
+    // lands: the user's workspaces vanish again, with no pills, no bindings and nothing to explain it.
+    const f = parked();
+    f.engine.setTilingEnabled(false);
+    expect(f.ports.workspaces.count).toBe(10);
+    f.calls.length = 0;
+
+    // The native signal the restore itself raises (the fixture's own convention for a change no port call
+    // of the engine's made; see `setActiveIndex`).
+    f.engine.onWorkspacesChanged();
+    expect(f.calls).toEqual([]);
+    expect(f.ports.workspaces.count).toBe(10);
+  });
+
   it('stops committing while off: a new window is neither tiled nor parked', () => {
     const f = parked();
     f.engine.setTilingEnabled(false);

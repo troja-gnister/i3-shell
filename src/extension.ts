@@ -247,7 +247,16 @@ export default class I3ShellExtension extends Extension {
     // and before the session watcher, so a lock arriving during enable finds it already built. It owns
     // its two actors and one teardown route, `destroy()` in disable(); it registers nothing with the
     // SignalTracker, exactly as src/shell/indicator.ts does not.
-    const toggle = new TilingToggle(enabled => { engine.setTilingEnabled(enabled); });
+    //
+    // The second line is not decoration (fix round 1, I3): `TilingToggle` holds no state of its own beyond
+    // what the engine tells it, deliberately, so that nothing depends on what GNOME did to the widget's own
+    // `checked` around the click. This is how the engine's answer gets back -- including when the engine
+    // refuses, in which case the switch snaps back to the truth instead of showing a lie and inverting
+    // every click after it.
+    const toggle = new TilingToggle(enabled => {
+      engine.setTilingEnabled(enabled);
+      toggle.setChecked(engine.tilingEnabled);
+    });
     this._toggle = toggle;
 
     const session = new SessionWatcher(tracker,

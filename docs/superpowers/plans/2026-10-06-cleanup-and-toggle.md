@@ -775,10 +775,16 @@ describe('setTilingEnabled', () => {
     expect(f.visible).toBe(true);
   });
 
-  it('refuses the launcher while off, with its own message', () => {
+  // AS BUILT (Task 2): there is no launcher-specific message, because (g) below turned out to be
+  // unreachable -- `run()` refuses every command before `_runOne` is entered. The test kept its place by
+  // asserting the refusal that does govern the launcher, plus the thing that makes the launcher the
+  // sharpest case: it is the one command whose effect does not go through `commit()`.
+  it('refuses the launcher while off, opening nothing', () => {
     const f = parked();
     f.engine.setTilingEnabled(false);
-    expect(f.engine.run([{type: 'launcher'}], 1)).toBe('launcher: refused while tiling is switched off');
+    expect(f.engine.run([{type: 'launcher', term: null}], 1)).toBe('tiling is switched off');
+    expect(f.ports.launcher.isOpen()).toBe(false);
+    expect(f.calls).not.toContain('launcher.open');
   });
 
   it('does nothing at all before start()', () => {
@@ -884,11 +890,12 @@ with:
     if (this._paused) return;
 ```
 
-(g) The launcher refusal (line 2087). The existing line is `if (this._locked) return 'launcher: refused while the session is locked';`. Add immediately below it:
-
-```ts
-        if (this._paused) return 'launcher: refused while tiling is switched off';
-```
+(g) ~~The launcher refusal (line 2087): add a `_paused` twin below the existing `if (this._locked) return
+'launcher: refused while the session is locked';`.~~ **NOT BUILT, and the string it named exists nowhere in
+the tree.** `run()`'s own `if (this._paused) return 'tiling is switched off';` from (e) returns before
+`_runOne` is entered, and `_runOne`'s only other caller, `_applyRules`, runs from inside a `commit()`
+closure, which is itself paused -- so the line would have been unreachable and its test could not pass.
+Task 2 left a comment at that site saying why there is no `_paused` twin instead.
 
 (h) Add the public API and the flush. Put them immediately after `onUnlocked()`:
 
@@ -1315,9 +1322,9 @@ Expected: all pass; `npm test` reports 1241 tests in 76 files.
 | is idempotent | `if (enabled === !this._paused) return;` |
 | unlocking does not turn tiling back on (Review Focus 3) | `if (this._paused) return;` in `onUnlocked` |
 | switching on over a locked screen grabs nothing | `if (!this._locked)` before `keys.setBindings` **and** `setVisible(!this._locked)` |
-| refuses the launcher while off | `if (this._paused) return 'launcher: refused while tiling is switched off';` |
+| refuses the launcher while off | `if (this._paused) return 'tiling is switched off';` in `run()` -- see (g): there is no launcher-specific message, because one would be unreachable |
 | does nothing before start() | `if (!this._started \|\| this._disposed) return;` |
-| `tilingToggle.test.ts` reports the toggle's own checked state | `onChanged(this._toggle.checked)` → `onChanged(!wasChecked)` with a local |
+| `tilingToggle.test.ts` reports the toggle's own checked state | **AS BUILT (Task 2, fix round 1): the adapter must NOT read `this._toggle.checked`.** Whether St.Button flips `checked` before or after `clicked` is unobservable from here, and reading it is inert-switch-catastrophic under one of the two orders; the request is `onChanged(!this._enabled)`, derived from the engine's last reported state, and `toggleMode` is not asked for. Pinned by `onChanged(!this._enabled)` → `onChanged(this._toggle.checked)`, which fails five tests |
 | `tilingToggle.test.ts` setChecked does not re-enter | `if (this._toggle.checked !== enabled)` — and that the fake's `checked` setter emits nothing |
 | `tilingToggle.test.ts` survives no quick settings | the `?.` in `Main.panel.statusArea.quickSettings?.addExternalIndicator(...)` |
 | `tilingToggle.test.ts` touches nothing after the panel is destroyed | either `if (this._destroyed) return;` |

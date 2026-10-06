@@ -9,6 +9,8 @@ vi.mock('resource:///org/gnome/shell/ui/quickSettings.js', async () =>
 vi.mock('../../../src/shell/log', () => ({log: {info: vi.fn(), warn: vi.fn(), error: vi.fn()}}));
 
 const {criticals, quickSettings, resetActors} = await import('./fakes/actors');
+type ClickOrder = (typeof CLICK_ORDERS)[number];
+const CLICK_ORDERS = ['no-flip', 'flip-then-emit', 'emit-then-flip'] as const;
 
 interface ToggleLike {
   setChecked(enabled: boolean): void;
@@ -21,6 +23,7 @@ interface FakeToggleActor {
   destroyCount: number;
   destroy(): void;
   emit(signal: string): void;
+  click(order?: ClickOrder): void;
 }
 
 // Loaded at runtime against the doubles above, not statically imported, for the reason
@@ -48,30 +51,73 @@ describe('TilingToggle', () => {
     expect(criticals).toEqual([]);
   });
 
-  it('reports the toggle own checked state on a click, never a mirror of its own last answer', () => {
-    // The QuickToggle is in toggleMode, so GNOME has already flipped `checked` by the time `clicked`
-    // arrives. Reading the actor is the only way to stay in step with it.
+  it('asks for the opposite of the ENGINE state, whatever the widget says its own checked is', () => {
+    // Fix round 1, I3, and the heart of it. Whether St.Button flips `checked` before or after it emits
+    // `clicked` is a fact about compositor C code that nothing in this repo can observe, and this project
+    // has been bitten four times by assumptions about compositor behaviour that only a fake confirmed. So
+    // the request is derived from the state the ENGINE last reported -- never read off the widget, whose
+    // `checked` is set here to the wrong answer and then to the right one to prove the reading is gone.
     //
-    // The middle step is what makes this able to fail. Two clicks that alternate cannot tell the actor's
-    // own state from a local boolean this class flipped per click -- they give the same two answers, which
-    // is exactly the coincidence this repo keeps finding in its own fixtures. So something ELSE moves the
-    // switch between the clicks (`setChecked`, which is how the engine's state reaches it), and the user
-    // then clicks it off AGAIN: two consecutive clicks reporting the same value, which a mirror cannot do,
-    // and a third reporting the other one, which a constant cannot do.
+    // The failure being bought off is worse than an inverted switch: reading `checked` under the other
+    // order makes every request equal to the engine's current state, `setTilingEnabled`'s no-change early
+    // return fires, and the switch becomes permanently inert while still animating under the finger.
     const seen: boolean[] = [];
-    const toggle = new TilingToggle(enabled => { seen.push(enabled); });
+    new TilingToggle(enabled => { seen.push(enabled); });   // an engine that never answers
     const a = actor();
 
-    a.checked = false;        // the user switches tiling off; GNOME flips it, then emits
-    a.emit('clicked');
-    toggle.setChecked(true);  // ...and something else puts the switch back on, with no click
-    a.checked = false;        // the user switches it off again
-    a.emit('clicked');
-    a.checked = true;         // and finally back on
-    a.emit('clicked');
-
-    expect(seen).toEqual([false, false, true]);
+    a.checked = false;
+    a.click();
+    expect(seen).toEqual([false]);
+    a.checked = true;
+    a.click();
+    // Still `false`: nothing has told this class the engine switched off, so "the opposite of the engine's
+    // state" has not moved. A class reading the widget would have said `true` here.
+    expect(seen).toEqual([false, false]);
   });
+
+  it('asks again rather than going inert when the engine refuses the change', () => {
+    // The other half of deriving from the engine: the state must come from the engine's ANSWER, not from
+    // the request. A class that recorded its own request would believe tiling was off, ask to turn it back
+    // on next time, and the user's second click would do the opposite of what the switch showed.
+    const seen: boolean[] = [];
+    const toggle = new TilingToggle(enabled => { seen.push(enabled); toggle.setChecked(true); });
+    const a = actor();
+
+    a.click();
+    expect(seen).toEqual([false]);
+    expect(a.checked).toBe(true);           // the switch snaps back to what the engine is really doing
+    a.click();
+    expect(seen).toEqual([false, false]);   // and the next click asks for the same thing again
+  });
+
+  for (const order of CLICK_ORDERS) {
+    it(`a click, the engine's answer and the switch end in step whichever way round GNOME flips (${order})`, () => {
+      // The whole loop src/extension.ts wires: click -> request -> engine -> `setChecked` with what the
+      // engine actually did. Run three times over the three shapes a press can have, so no ordering of the
+      // widget's own `checked` write can leave the switch disagreeing with the engine. The `emit-then-flip`
+      // case is the one that fails if `toggleMode` is ever asked for again: a widget that flips AFTER the
+      // handler has already written the engine's answer leaves the switch showing the opposite of the
+      // truth, and no amount of care inside this class can reach past it.
+      const seen: boolean[] = [];
+      let tilingEnabled = true;
+      const toggle = new TilingToggle(enabled => {
+        seen.push(enabled);
+        tilingEnabled = enabled;              // the engine accepts
+        toggle.setChecked(tilingEnabled);     // ...and extension.ts feeds back what it did
+      });
+      const a = actor();
+
+      a.click(order);
+      expect(seen).toEqual([false]);
+      expect(tilingEnabled).toBe(false);
+      expect(a.checked).toBe(false);
+
+      a.click(order);
+      expect(seen).toEqual([false, true]);
+      expect(tilingEnabled).toBe(true);
+      expect(a.checked).toBe(true);
+    });
+  }
 
   it('setChecked moves the actor without re-entering the callback', () => {
     const seen: boolean[] = [];
