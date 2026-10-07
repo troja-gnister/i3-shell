@@ -95,8 +95,16 @@ UPSTREAM_STACK_ASSERTION="meta_window_set_stack_position_no_sync: assertion 'win
 # output and keeping its children and percentages.
 #
 # WHY THESE ARE GNOME'S AND NOT OURS, measured rather than argued. src/shell/geometry.ts holds the only
-# call site in this project that reaches any Mutter work-area or logical-monitor API (grepped over src/
-# for work_area|workArea|get_monitor_geometry|logical_monitor: one hit). That call site was instrumented
+# call site in this project that reaches any Mutter work-area or logical-monitor API. The recipe, with the
+# number it really gives: `grep -rnE 'get_work_area_for_monitor|get_logical_monitors|get_monitor_geometry'
+# src/` returns SEVEN lines -- five are prose in src/shell/geometryTopology.ts, which argues about these
+# same APIs, and two are the call sites themselves, geometry.ts:53 (the logical-monitor count) and
+# geometry.ts:57 (the work area). Review 2 is why this now names a pattern a reader can run: the earlier
+# wording claimed one hit for `work_area|workArea|get_monitor_geometry|logical_monitor`, which returns 28
+# across five files -- mostly the engine's own `topology.workAreas` map -- and a file whose whole value is
+# that its measurements can be re-run cannot afford a recipe that does not reproduce its own number.
+#
+# That call site was instrumented
 # to log the monitor number it passes and the live get_logical_monitors().length on every call, and the
 # hotplug scenario was run: 106 probe lines, every one with index < liveLogicalCount, and our FIRST
 # work-area call of the reconfiguration landed 39 ms AFTER the criticals were already in the log. So the

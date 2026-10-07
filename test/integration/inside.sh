@@ -79,7 +79,11 @@ cleanup() {
     printf '%s\n' "$teardown" >&2
     status=1
   fi
-  if [[ -f "$FIXTURE_LOG" ]] && grep -Eq 'fixture [[:alnum:]]+ failed|(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL' "$FIXTURE_LOG"; then
+  # The shared CRITICAL_SUBSYSTEMS pattern and not a spelling of its own: this is its fourth user, and
+  # until Task 10 it carried a stale copy that read `GLib(-GObject)?` -- so a `GLib-GIO-CRITICAL` from the
+  # GTK/GIO fixture was read out of fixture.log and dropped. criticals.sh is sourced above, so the
+  # variable is in scope here; criticals-selftest.sh §17e pins that this line keeps using it.
+  if [[ -f "$FIXTURE_LOG" ]] && grep -Eq "fixture [[:alnum:]]+ failed|$CRITICAL_SUBSYSTEMS" "$FIXTURE_LOG"; then
     echo 'fixture failures found in fixture.log' >&2
     status=1
   fi

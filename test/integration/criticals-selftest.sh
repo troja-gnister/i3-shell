@@ -71,7 +71,7 @@ check 'the upstream stack assertion is excluded before shutdown' '' "$(session_c
 check 'the upstream stack assertion is excluded after shutdown' '' "$(shutdown_criticals "$upstream")"
 
 # 3. THE RULING. The GC-sweeping critical is fatal during the session -- that is the window in which
-#    --name-conflict disables the extension four times, so it is where an actor leak on disable shows up.
+#    --name-conflict disables the extension three times, so it is where an actor leak on disable shows up.
 sweep_before=$(log sweep_before "$SWEEP" "$SHUTDOWN_MARKER")
 check 'the GC sweeping critical is fatal before shutdown' "$SWEEP" "$(session_criticals "$sweep_before")"
 check 'a pre-marker critical is not reported as an allowed teardown note' '' "$(allowed_shutdown_notes "$sweep_before")"
@@ -360,13 +360,27 @@ glib_in_message=$(log glib_in_message "$GLIB_IN_MESSAGE" "$SHUTDOWN_MARKER")
 check 'a warning whose message mentions GLib and -CRITICAL is not a critical' '' \
   "$(session_criticals "$glib_in_message")"
 
-# 17e. THE THREE USERS SHARE ONE VARIABLE. `_critical_lines`, `_by_trace`'s awk and
-#      `upstream_hotplug_notes` each reference `$CRITICAL_SUBSYSTEMS`; 17 and 17a exercise the first two
-#      directly, and the third cannot be reached with a GIO line because its second filter is the two
-#      fixed hotplug texts, which only libmutter prints. So pin the sharing structurally instead: a fourth
-#      spelling of the alternation copied into one of them is how these three silently stop agreeing.
-check 'all three critical scanners reference the one shared pattern' '3' \
+# 17e. THE FOUR USERS SHARE ONE VARIABLE, and this section used to count only three of them. Inside
+#      criticals.sh, `_critical_lines`, `_by_trace`'s awk and `upstream_hotplug_notes` each reference
+#      `$CRITICAL_SUBSYSTEMS`; 17 and 17a exercise the first two directly, and the third cannot be reached
+#      with a GIO line because its second filter is the two fixed hotplug texts, which only libmutter
+#      prints. The fourth lives in inside.sh -- the fixture.log scan -- and review 2 found it still
+#      carrying the pre-Task-10 `GLib(-GObject)?` spelling written out by hand: the one user this check
+#      did not look at was the one that had drifted, which is the whole reason the counts below name both
+#      files. So pin the sharing structurally: a spelling of the alternation copied into either file is
+#      how these four silently stop agreeing, and the third check is what makes re-introducing a copy
+#      fail rather than merely leaving the first two satisfied. Every count here was produced by running
+#      the grep, not by reading the files.
+check 'all three critical scanners in criticals.sh reference the one shared pattern' '3' \
   "$(grep -cF '"$CRITICAL_SUBSYSTEMS"' "$ROOT/test/integration/criticals.sh")"
+check "inside.sh's fixture-log scan references it too, as the fourth user" '1' \
+  "$(grep -cF '$CRITICAL_SUBSYSTEMS' "$ROOT/test/integration/inside.sh")"
+# The alternation's own text, which only the assignment in criticals.sh may contain. `GNOME Shell)` is
+# the closing half of it, so this matches an inline copy wherever in either file it is written and does
+# not match prose about the pattern. Two files, one hit.
+check 'nothing but the assignment spells the alternation out' '1' \
+  "$(cat "$ROOT/test/integration/criticals.sh" "$ROOT/test/integration/inside.sh" |
+    grep -cF 'GNOME Shell)-CRITICAL')"
 
 if ((failures > 0)); then
   echo "$failures critical-gate assertion(s) failed" >&2
