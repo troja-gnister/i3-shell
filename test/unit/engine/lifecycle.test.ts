@@ -909,3 +909,105 @@ describe('workspace pill labels', () => {
     expect(f.engine.state().activeWorkspace).toBe(1);
   });
 });
+
+/**
+ * The defect of 2026-10-07, measured on the user's own desktop: unplug the external output and plug it
+ * back in, and every window launched afterwards opens on the laptop until the mouse is moved across and
+ * back. `Tree.reconfigure` sends the focused output to the primary when the output it names is
+ * unplugged, nothing moves it back on the replug, and the pointer -- the one thing that knows better --
+ * reports crossings, so a pointer that never moved says nothing. See
+ * `Engine._followPointerAfterReconfigure`.
+ *
+ * Every fixture here has THREE outputs and unplugs the MIDDLE one, for two reasons the project has paid
+ * for before. The primary and the restored output are then different ids, so "the reconfigure's primary"
+ * and "where the pointer is" cannot coincide and pass a broken engine. And removing the middle output
+ * reshuffles Mutter's monitor *indices* (output 2 is index 2 with three outputs and index 1 with two),
+ * so a fix that confused the unstable index with the stable `MonitorId` names the wrong output here
+ * instead of agreeing with itself.
+ *
+ * Not fixtured, and not fixturable: the `tree.visible.has(output)` guard. `coverOutputs` gives every
+ * live output a visible workspace in the same pass, so for an index this topology knows the guard is
+ * unreachable rather than merely unfixtured -- the same argument `onPointerOutput` records for its own
+ * copy of it. The two reachable refusals (an index this topology does not know, and no reading at all)
+ * each have a test below.
+ */
+describe('the focused output after a hotplug', () => {
+  const THREE = [{id: 0, index: 0}, {id: 1, index: 1}, {id: 2, index: 2}];
+  const WITHOUT_THE_MIDDLE = [{id: 0, index: 0}, {id: 2, index: 1}];
+
+  /** Three outputs, the focused output moved onto the middle one, then that output unplugged. */
+  function unplugged(text = 'bindsym Mod4+q kill'): EngineFixture {
+    const f = fakeEngine(text, {monitors: THREE, primary: 0, workspaceCount: 10});
+    f.engine.start();
+    expect([...f.tree().visible]).toEqual([[0, 0], [1, 1], [2, 2]]);
+    f.engine.run([{type: 'focus_output', target: {name: 'fixture-1'}}], 0);
+    expect(f.tree().focusedOutput).toBe(1);
+    f.setTopology(outputsTopology(WITHOUT_THE_MIDDLE, 0));
+    f.engine.onMonitorsChanged(); f.flush();
+    // The reconfigure's own correction, and the start of the defect: the focused output had to land
+    // somewhere real and the primary is where it lands.
+    expect(f.tree().focusedOutput).toBe(0);
+    return f;
+  }
+
+  /** Plugs the middle output back in, with the pointer standing on `monitorIndex` the whole time. */
+  function replug(f: EngineFixture, monitorIndex: number | null): void {
+    f.pointer.setMonitorIndex(monitorIndex);
+    f.setTopology(outputsTopology(THREE, 0));
+    f.engine.onMonitorsChanged(); f.flush();
+  }
+
+  it('takes the focused output back from the primary when the pointer is on the restored output', () => {
+    const f = unplugged();
+    replug(f, 1);                       // the restored output is index 1 again; the pointer never moved
+    expect(f.tree().focusedOutput).toBe(1);
+  });
+
+  it('adopts a window opened straight after a replug onto the workspace the pointer is looking at', () => {
+    // The user's actual symptom, end to end: with the focused output stranded on the laptop, Steam was
+    // adopted onto the laptop's workspace however the external was the display it was mapped on.
+    const f = unplugged();
+    replug(f, 1);
+    // Mutter says the primary, deliberately disagreeing with the pointer -- live adoption is i3's and
+    // reads `activeWorkspace`, so a window that landed on workspace 1 here landed there because the
+    // focused output was corrected and for no other reason.
+    f.add(7, {monitor: 0}); f.flush();
+    expect(f.tree().visible.get(0)).toBe(0);       // the stale answer and the right one differ
+    expect(f.tree().location(7)).toMatchObject({workspace: 1});
+    expect(f.tree().workspaces.get(1)!.output).toBe(1);
+  });
+
+  it('follows the pointer, not the output that came back', () => {
+    // The pointer is on the third output, which this hotplug never touched and which is not the
+    // primary either. "Restore the focused output to whatever was replugged" passes the test above and
+    // fails here; so does "put it back where it was before the unplug".
+    const f = unplugged();
+    replug(f, 2);
+    expect(f.tree().focusedOutput).toBe(2);
+  });
+
+  it('leaves the reconfigure its own choice when focus_follows_mouse is off, but still reads the pointer', () => {
+    const f = unplugged('bindsym Mod4+q kill\nfocus_follows_mouse no\n');
+    const before = f.pointer.reads();
+    replug(f, 1);
+    // With sloppy focus off the pointer is not evidence about where the user is, so the symptom stands
+    // for that configuration -- recorded here rather than left to be discovered.
+    expect(f.tree().focusedOutput).toBe(0);
+    // The reading still happens: it is also what re-seeds the pointer's edge filter against the new
+    // configuration, and `onPointerOutput` clears D8's suppression on a crossing whether or not sloppy
+    // focus is on, so a filter left holding an index from the dead configuration misjudges that too.
+    expect(f.pointer.reads()).toBeGreaterThan(before);
+  });
+
+  it('leaves the focused output alone when the pointer names a monitor this topology does not know', () => {
+    const f = unplugged();
+    replug(f, 7);                       // an index from no configuration the engine has ever published
+    expect(f.tree().focusedOutput).toBe(0);
+  });
+
+  it('leaves the focused output alone when the pointer position cannot be read at all', () => {
+    const f = unplugged();
+    replug(f, null);
+    expect(f.tree().focusedOutput).toBe(0);
+  });
+});
