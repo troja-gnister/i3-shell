@@ -19,11 +19,12 @@ because a second physical display, a real pointer and a real unplug are the only
 The Quick Settings tiling switch described below, plus six cleanup tasks, are on `cleanup-and-toggle` on
 top of that branch. Verification at the time of writing: **1292 unit tests in 76 files**, both TypeScript
 programs, the Layer 0 import gate, the tree lint, and the private nested integration suite under
-`test/integration/` — **865 assertions, exit 0, zero `LIMITATION` branches**, at `b06c264` on 2026-10-06,
-covering real output removal and restore rather than skipping those branches, and including the Quick
-Settings toggle's own native scenario (`scenario_toggle_flushes_the_attic`). PROJECT.md is the canonical
-verification record: it names what sits above that run and what has had no native run since. Take every
-count here from a run, never from arithmetic.
+`test/integration/` — **867 assertions, exit 0, zero `LIMITATION` branches**, at `0867e37` on 2026-10-06,
+which is the newest commit on this branch that changes behaviour -- everything above it is
+documentation -- so every line of code here has had a native run. It covers real output removal and
+restore rather than skipping those branches, and includes the Quick Settings toggle's own native scenario
+(`scenario_toggle_flushes_the_attic`). PROJECT.md is the canonical verification record and lists the
+superseded figures. Take every count here from a run, never from arithmetic.
 
 ---
 
