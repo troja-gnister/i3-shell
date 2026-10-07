@@ -71,6 +71,15 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
   const calls: string[] = [];
   let launcherOpen = false;
   const pointerWarps: Rect[] = [];
+  /**
+   * What `pointer.currentMonitorIndex()` answers, and how many times it has been asked.
+   *
+   * Null by default -- "Mutter will not say" -- so a reconfigure in a test that is not about the
+   * pointer behaves exactly as it did before `_followPointerAfterReconfigure` existed. A test that
+   * wants the engine to re-derive the focused output from the pointer says where the pointer is first.
+   */
+  let pointerIndex: number | null = null;
+  let pointerReads = 0;
   const windows = new Map<WindowId, WindowInfo>();
   const applied: Array<Map<WindowId, Rect>> = [];
   const queue = new Map<number, () => void>();
@@ -194,7 +203,10 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
       setColors: colors => { f.launcherColors = colors; calls.push('launcher.colors'); },
       isOpen: () => launcherOpen,
     },
-    pointer: {warpTo: rect => { pointerWarps.push({...rect}); calls.push('pointer.warp'); }},
+    pointer: {
+      warpTo: rect => { pointerWarps.push({...rect}); calls.push('pointer.warp'); },
+      currentMonitorIndex: () => { pointerReads++; return pointerIndex; },
+    },
     now: () => 123456789,
     exec: command => { calls.push(`exec:${command}`); },
     notify: (title, body) => { calls.push(`notify:${title}|${body}`); },
@@ -241,6 +253,10 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
     pointer: {
       warps: (): Rect[] => pointerWarps.map(r => ({...r})),
       clear(): void { pointerWarps.length = 0; },
+      /** Where the fake compositor will say the pointer is; null is "it will not say". */
+      setMonitorIndex(value: number | null): void { pointerIndex = value; },
+      /** How many times the engine has asked -- the only way to observe the read on a path that ignores the answer. */
+      reads: (): number => pointerReads,
     },
     /**
      * Fix round 1, C1: the real `Launcher` closes itself at seven sites the engine never calls

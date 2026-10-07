@@ -108,7 +108,15 @@ export interface EnginePorts {
    * `src/shell/`, so this shape and that interface are duplicated on purpose and must be kept in sync
    * by hand -- see the comment on `PointerPort` itself.
    */
-  pointer: {warpTo(rect: Rect): void};
+  pointer: {
+    warpTo(rect: Rect): void;
+    /**
+     * Which Mutter monitor index the pointer is on right now, or null when the compositor will not say.
+     * Level-triggered, and the only port call in this file that asks a question the pointer's own
+     * crossing callback cannot answer -- see `_followPointerAfterReconfigure`, its one caller.
+     */
+    currentMonitorIndex(): number | null;
+  };
   exec(command: string): void;
   notify(title: string, body: string): void;
   log: {info(message: string): void; warn(message: string): void};
@@ -490,6 +498,94 @@ export class Engine {
     if (monitor) this.onPointerOutput(monitor.id);
   }
 
+  /**
+   * The level-triggered half of rule 4: after a reconfigure, point the focused output at wherever the
+   * pointer actually is.
+   *
+   * The defect, measured on the user's two-monitor desktop on 2026-10-07. Unplug an output and
+   * `Tree.reconfigure` moves the focused output to the primary, because the output it named is gone and
+   * focus has to land somewhere real. Plug it back in and nothing moves it back. The one thing that
+   * knows better cannot speak: `src/shell/pointer.ts` reports CROSSINGS, and a pointer that never moved
+   * crosses nothing -- the limitation D8's own doc block on `_armInvoluntaryFocus` records, and which
+   * turned out to outlive D8's fix here. So the engine went on believing the user was on the laptop
+   * until they crossed displays by hand, and everything downstream followed from that one wrong fact:
+   * `$mod+d` opened the launcher there (D8's symptom on a path D8 cannot reach), and every window
+   * adopted in between took `tree.activeWorkspace`, which was the laptop's. The journal caught Steam
+   * being adopted onto a laptop workspace while Mutter had mapped its window on the external, with
+   * `_followFloatingFrames` then faithfully carrying the frame across to match the workspace it had
+   * been given.
+   *
+   * `onPointerOutput` asks this question on motion; this asks it outright at the one moment the answer
+   * can change without the pointer moving. The cost is one `currentMonitorIndex()` per reconfigure --
+   * two GJS calls (`get_pointer`, `get_monitor_index_for_rect`), on a hotplug or a change in the
+   * workspace count, which is what `reconfigured` means. Never per motion.
+   *
+   * That it also runs for a workspace-count change, where nothing can have stranded the focused output,
+   * is deliberately not narrowed: `mouse_warping output` warps the pointer after every keyboard path
+   * that moves the focused output (`_warpToFocusedOutput`), so with sloppy focus on the two disagree
+   * only after a reconfigure or an involuntary focus report -- cases where the pointer is the better
+   * answer anyway. A narrower gate would be a second definition of "the topology changed" to keep in
+   * step with the one above.
+   *
+   * Four things it deliberately does not do:
+   *
+   * - **It does not call `onPointerOutput`.** That one `commit()`s and this runs inside a commit, so
+   *   `tree.focusedOutput` is written here directly, at the point in the pass where the value is still
+   *   ahead of every reader of `activeWorkspace`.
+   * - **It does not move anything with `focus_follows_mouse` off.** With sloppy focus disabled the
+   *   pointer is not evidence about where the user is, and moving the focused output by it would be a
+   *   new behaviour rather than a fix. For that configuration the symptom therefore stays exactly as
+   *   the reconfigure left it; that is a limit of this fix, recorded rather than hidden. The reading
+   *   itself still happens -- see below.
+   * - **It does not trust the index.** `currentMonitorIndex` answers Mutter's monitor *index*, which a
+   *   hotplug reshuffles; only `_topology.monitors` maps that onto this project's stable `MonitorId`,
+   *   exactly as `onPointerMonitorIndex` does, and it is the topology this same pass has just
+   *   published. An index this topology does not know -- a reading from a configuration already gone --
+   *   moves nothing.
+   * - **It does not run on the commit that BUILDS the tree.** That one adopts windows by the output
+   *   Mutter already has them on (`_adoptionWorkspace`, 'startup') and takes the compositor's focus,
+   *   so there is no stale focused output for the pointer to correct.
+   */
+  private _followPointerAfterReconfigure(tree: Tree): void {
+    // Read first and gate after, because the read is also what re-seeds the pointer's edge filter
+    // against the new configuration (see `Pointer.currentMonitorIndex`). A filter still comparing
+    // against an index from a topology that no longer exists misjudges the user's next real crossing
+    // whether or not sloppy focus is on -- with it off, `onPointerOutput` still ends D8's suppression
+    // on a crossing -- so the reseed must not be skipped by the gate below.
+    const index = this._ports.pointer.currentMonitorIndex();
+    // The null is refused here and not left to the lookup below. No monitor in a published topology has
+    // a null index, so the lookup would answer undefined today and the two refusals are one test apart
+    // -- but "the pointer could not be read" is the port's own contract and belongs where it is read.
+    if (!this._config.focusFollowsMouse || index === null) return;
+    const output = this._topology?.monitors.find(m => m.index === index)?.id;
+    if (output === undefined || output === tree.focusedOutput) return;
+    // Same guard, same reason, as `onPointerOutput`: an output with no visible entry is not one the
+    // focus can sit on, because `activeWorkspace` reads `visible.get(focusedOutput)` and throws without
+    // one. `coverOutputs` has just rebuilt coverage for every live output in this same pass, so for an
+    // index this topology knows this is unreachable rather than merely unfixtured; it is kept because
+    // the cost of being wrong is a throw on every later commit.
+    if (!tree.visible.has(output)) return;
+    // JOURNAL DIAGNOSTIC: the fifth line, and the only one that is about the
+    // correction rather than the decisions it feeds. It fires once per reconfigure that moves the
+    // focused output, so the next login says in the journal whether the replug was corrected -- which
+    // is the only place this path is observable to the user who reported it.
+    this._ports.log.info(`focusedOutput ${tree.focusedOutput} -> ${output}: reconfigure, ` +
+      `pointer on monitor index ${index}`);
+    tree.focusedOutput = output;
+    // What `onPointerOutput` does when it moves the focused output, and for its reason: the engine's
+    // record of "I pointed focus at this output by revealing a workspace there" is about the output
+    // focus is being taken away from, and `_involuntaryFocus`'s first clause would discard it on the
+    // next report for precisely this reason -- the focused output moved, and the user's own pointer is
+    // what moved it. Clearing it here rather than waiting for that report matters because port calls
+    // are still ahead in this pass (`_reconcileParking`'s `moveToWorkspace`), and Mutter can deliver a
+    // focus report from inside one.
+    //
+    // It does not disarm D8: a hotplug changes `tree.visible`, so `_armInvoluntaryFocus` re-records the
+    // CORRECTED output at the end of this drained change, and the suppression that protects a revealed
+    // empty workspace is then armed on the output the user is actually on.
+    this._shownOnFocusedOutput = null;
+  }
+
   /** The shell measures the title-row height once fonts are known and reports it here; not a port, since it is the shell asking the engine, not the other way round. */
   setRowHeight(height: number): void {
     if (this._rowHeight === height) return;
@@ -721,6 +817,9 @@ export class Engine {
       }
       if (this._disposed) return;
       const tree = this._tree;
+      // After the reconfigure, so the topology and `visible` this pass publishes are final, and before
+      // the sync loop below, so adoption reads a focused output that is already right. See the method.
+      if (reconfigured) this._followPointerAfterReconfigure(tree);
       const live = this._ports.windows.list();
       const ids = new Set(live.map(w => w.id));
       for (const id of this._windows.keys()) if (!ids.has(id)) this._forget(id);
@@ -1106,9 +1205,33 @@ export class Engine {
    *    nothing, which `coverOutputs` makes unreachable.)
    */
   private _adoptionWorkspace(tree: Tree, info: WindowInfo, adopting: Adoption, remembered?: number): number {
-    if (remembered !== undefined && tree.workspaces.has(remembered)) return remembered;
-    if (adopting === 'live') return tree.activeWorkspace;
-    return tree.visible.get(info.monitor ?? tree.focusedOutput) ?? tree.activeWorkspace;
+    const [workspace, basis] = this._adoptionChoice(tree, info, adopting, remembered);
+    // JOURNAL DIAGNOSTIC: one line per window entering the tree, naming the branch
+    // (These five JOURNAL DIAGNOSTIC lines are kept deliberately. Nine defects in this project have been
+    // about which display something landed on -- D1 through D8 and the hotplug focused-output defect of
+    // 2026-10-07 -- and that last one was found in a single login purely because these lines said what
+    // the engine had decided and what Mutter had reported. They are `log.info`, so they reach the
+    // journal and nothing else. Volume, stated rather than guessed at: this one fires once per window
+    // entering the tree, the focus one only when the focused output actually changes, and the other
+    // three only on a re-home, a frame carry or a reconfigure that moves the focused output.)
+    // that chose and the output the chosen workspace sits on. This is the decision that puts a new
+    // window on a display, so a report of "it opened on the wrong monitor" is answered here or nowhere.
+    this._ports.log.info(`adopt: window ${info.id} (${info.wmClass ?? '?'}) -> workspace ${workspace} ` +
+      `on output ${tree.workspaces.get(workspace)?.output ?? '?'} via ${basis}; ` +
+      `Mutter says monitor ${info.monitor ?? 'null'}, focusedOutput ${tree.focusedOutput}, ` +
+      `activeWorkspace ${tree.activeWorkspace}`);
+    return workspace;
+  }
+
+  /** The choice itself, split out only so the diagnostic above can name the branch that made it. */
+  private _adoptionChoice(tree: Tree, info: WindowInfo, adopting: Adoption,
+    remembered?: number): [number, string] {
+    if (remembered !== undefined && tree.workspaces.has(remembered)) return [remembered, 'remembered'];
+    if (adopting === 'live') return [tree.activeWorkspace, 'live:activeWorkspace'];
+    const visible = tree.visible.get(info.monitor ?? tree.focusedOutput);
+    return visible !== undefined
+      ? [visible, `startup:visibleOn(${info.monitor ?? tree.focusedOutput})`]
+      : [tree.activeWorkspace, 'startup:fallbackActiveWorkspace'];
   }
 
   /**
@@ -1151,6 +1274,11 @@ export class Engine {
     const dragged = this._selectedWindow() === id;
     const target = tree.rehomeFloating(id, monitor);
     if (target === null) return;
+    // JOURNAL DIAGNOSTIC: a re-home reads a floating window's frame as the user's
+    // statement of intent and moves its tree membership to that output. If a launch lands on the wrong
+    // display, this line says whether this path is why.
+    this._ports.log.info(`rehome floating: window ${id} from workspace ${location.workspace} ` +
+      `(output ${location.output}) to workspace ${target} (output ${monitor}); dragged=${dragged}`);
     if (dragged) this._selectWindow(id);
     // Both workspaces are on screen, so this resolves to LIVE; it is here because every mover of a
     // window's i3 workspace in this file asserts the native side rather than assuming it (_parkAndShow,
@@ -1261,6 +1389,10 @@ export class Engine {
         this._floatingRects.set(id, fixFloatingCoordinates(this._floatingRects.get(id) ?? info.rect,
           source, destination));
         this._carriedFloating.set(id, {from: info.monitor, to: output.id});
+        // JOURNAL DIAGNOSTIC: the mirror of a re-home -- the tree moved and the frame
+        // is being dragged after it. Named separately so the journal distinguishes the two directions.
+        this._ports.log.info(`carry floating frame: window ${id} from output ${info.monitor} ` +
+          `to output ${output.id} (workspace ${index})`);
       }
     }
   }
@@ -1399,6 +1531,12 @@ export class Engine {
     else { const leaf = tree.find(id); if (leaf) tree.select(leaf); }
     if (!claimOutput) return;
     const showing = tree.outputShowing(location.workspace);
+    // JOURNAL DIAGNOSTIC: logged only when the focused output actually CHANGES, so
+    // the journal stays quiet for ordinary same-output focus. This is D5's claim -- "the user is on the
+    // display this window is on" -- and a wrong one here is what sends the next launch to that display.
+    if (showing !== null && showing !== tree.focusedOutput)
+      this._ports.log.info(`focusedOutput ${tree.focusedOutput} -> ${showing}: window ${id} selected ` +
+        `(its workspace ${location.workspace} is showing there)`);
     if (showing !== null) tree.focusedOutput = showing;
   }
 
@@ -1412,7 +1550,10 @@ export class Engine {
    * leftover as the user having moved there and hands the focused output to the display they just looked
    * away from; `$mod+d` opens the launcher there, which is how the user saw it. `onPointerOutput` cannot
    * correct it: `src/shell/pointer.ts` is edge-triggered on `_lastMonitor`, so a pointer standing still
-   * emits nothing. The ruling: an explicit user action beats the compositor's involuntary pick. A
+   * emits nothing. (Still true of `onPointerOutput`. The hotplug path, where that limitation was found
+   * to outlive this fix entirely, is corrected at the reconfigure instead -- see
+   * `_followPointerAfterReconfigure`, which leaves this suppression armed on the output it corrects
+   * to.) The ruling: an explicit user action beats the compositor's involuntary pick. A
    * `workspace` switch, a `move workspace to output` and a reconfigure all set `focusedOutput`
    * deliberately, and a report that arrives as a consequence of one must not override it.
    *

@@ -30,6 +30,7 @@ vi.mock('gi://Mtk', () => ({
 const {Pointer} = await vi.importActual<{
   Pointer: new (tracker: SignalTracker, onCrossed: (monitorIndex: number) => void) => {
     warpTo(rect: Rect): void;
+    currentMonitorIndex(): number | null;
   };
 }>('../../../src/shell/pointer');
 
@@ -44,6 +45,14 @@ interface FakeCursorTracker {
  * compositor's half: it sets the position `get_pointer()` will answer *and* the monitor index
  * `get_monitor_index_for_rect` will answer for it, then fires `position-invalidated` -- exactly what a
  * real cursor tracker does on every pointer motion, monitor crossing or not.
+ *
+ * `reindex` is the hotplug: the pointer has not moved, so no signal is emitted, but the index Mutter
+ * answers for the position it is standing on is a different number than it was. Nothing a motion-driven
+ * harness can produce, and the whole reason `currentMonitorIndex` exists -- so it is modelled as its own
+ * verb rather than folded into `movePointerTo`, which would always fire the signal and could therefore
+ * never leave the edge filter holding an index from a configuration that no longer exists.
+ *
+ * `losePointer` is `get_pointer()` answering no position, which its own nullable type allows.
  */
 function pointerHarness(onCrossed: (monitorIndex: number) => void) {
   let handler: (() => void) | null = null;
@@ -70,6 +79,15 @@ function pointerHarness(onCrossed: (monitorIndex: number) => void) {
       point = {x, y};
       handler?.();
     },
+    /** Two reads in a row, to pin that answering does not consume the answer the way a crossing does. */
+    currentIndexTwice: (): Array<number | null> =>
+      [pointer.currentMonitorIndex(), pointer.currentMonitorIndex()],
+    reindex(monitor: number): void {
+      reportedMonitor = monitor;
+    },
+    losePointer(): void {
+      point = null;
+    },
     crossings: (): number[] => crossed.slice(),
     warps: (): Array<[number, number]> => seatCalls.slice(),
   };
@@ -95,6 +113,41 @@ describe('Pointer', () => {
     const h = await pointerHarness(() => {});
     h.pointer.warpTo({x: 3840, y: 28, width: 1920, height: 1052});
     expect(h.warps()).toEqual([[4800, 554]]);
+  });
+
+  it('answers where the pointer is now, with no edge filter in the way', async () => {
+    // The hotplug defect of 2026-10-07: after an unplug/replug the engine has to ask outright where the
+    // pointer is, because the pointer never moved and so crossed nothing. `reindex` is that situation
+    // exactly -- same position, different index, no signal.
+    const h = await pointerHarness(() => {});
+    h.movePointerTo(0, 10, 10);
+    h.reindex(1);
+    expect(h.currentIndexTwice()).toEqual([1, 1]);
+    expect(h.crossings()).toEqual([]);  // asking is not crossing; nothing was reported to the engine
+  });
+
+  it('re-seeds the edge filter from what it read, so the next motion is judged against truth', async () => {
+    const h = await pointerHarness(() => {});
+    h.movePointerTo(0, 10, 10);         // baseline: _lastMonitor is monitor 0
+    h.reindex(1);                       // a hotplug renumbers the monitor the pointer is standing on
+    expect(h.pointer.currentMonitorIndex()).toBe(1);
+    h.movePointerTo(1, 20, 20);         // the pointer wiggles where it already was: not a crossing
+    expect(h.crossings()).toEqual([]);
+    h.movePointerTo(0, 4000, 30);       // and a real crossing still reports
+    expect(h.crossings()).toEqual([0]);
+  });
+
+  it('answers null when the tracker will not say, and treats the next report as a baseline', async () => {
+    const h = await pointerHarness(() => {});
+    h.movePointerTo(0, 10, 10);
+    h.losePointer();
+    expect(h.pointer.currentMonitorIndex()).toBeNull();
+    // An index read from a position the tracker would not give is no index at all, so the filter must
+    // hold nothing rather than the stale 0: the next report establishes the baseline again.
+    h.movePointerTo(1, 4000, 30);
+    expect(h.crossings()).toEqual([]);
+    h.movePointerTo(0, 10, 10);
+    expect(h.crossings()).toEqual([0]);
   });
 
   it('disconnects its cursor subscription when the tracker is torn down', async () => {
