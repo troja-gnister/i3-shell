@@ -16,11 +16,14 @@ as in i3 and sway.
 implemented; **Phase 5 — per-output workspaces — is implemented on the `phase-5` branch** and awaits its
 live walk: [docs/acceptance/phase-5.md](docs/acceptance/phase-5.md), A50–A66, deliberately unticked,
 because a second physical display, a real pointer and a real unplug are the only evidence for most of it.
-Verification at the time of writing: **1290 unit tests in 76 files**, both TypeScript programs, the
-Layer 0 import gate, the tree lint, and the private nested integration suite under `test/integration/` —
-**637 assertions, exit 0, zero `LIMITATION` branches**, its first full green run for Phase 5 (2026-10-01,
-at `863a8ec`), covering real output removal and restore rather than skipping those branches. That
-assertion count predates the Quick Settings toggle's own native scenario, which has not been run yet.
+The Quick Settings tiling switch described below, plus six cleanup tasks, are on `cleanup-and-toggle` on
+top of that branch. Verification at the time of writing: **1292 unit tests in 76 files**, both TypeScript
+programs, the Layer 0 import gate, the tree lint, and the private nested integration suite under
+`test/integration/` — **865 assertions, exit 0, zero `LIMITATION` branches**, at `b06c264` on 2026-10-06,
+covering real output removal and restore rather than skipping those branches, and including the Quick
+Settings toggle's own native scenario (`scenario_toggle_flushes_the_attic`). PROJECT.md is the canonical
+verification record: it names what sits above that run and what has had no native run since. Take every
+count here from a run, never from arithmetic.
 
 ---
 
@@ -406,7 +409,7 @@ workspace to the display you are looking at when nothing else is showing it. Bin
 ## Develop
 
 ```sh
-npm test                      # unit suite: pure core + adapter doubles, on Node (1290 tests, 76 files)
+npm test                      # unit suite: pure core + adapter doubles, on Node (1292 tests, 76 files)
 npm run typecheck             # two programs: tsconfig.json (src + GNOME types), tsconfig.test.json (tests + Layer 0)
 npm run check:layer0          # fails if Layer 0 imports gi:// / resource:// / src/shell
 npm run lint:tree             # eslint over src/tree and its tests
@@ -434,13 +437,31 @@ disclosed ways: `--no-x11` (Xwayland clients and visible mode are unverified) an
 the conflict above is not covered). Release builds must never contain the `org.i3shell.Debug` surface.
 
 **The suite fails a run when GNOME Shell logs a CRITICAL, and that gate is scanned in two scopes.** The
-harness appends a marker to `shell.log` immediately before it signals gnome-shell, and criticals logged
-*before* the marker still fail the run — so every mid-run `disable()` is covered, including the three
+harness appends a marker to `shell.log` immediately before it signals gnome-shell. *Before* the marker —
+the session proper — nothing is excused: every mid-run `disable()` is covered, including the three
 disable/enable cycles of the `--name-conflict` step. *After* the marker, where GNOME is tearing down its
-own widgets, five named GNOME-owned messages are excused and reported as notes instead. One of them is
-`Attempting to call back into JSAPI during the sweeping phase of GC`, which is **also the signature of an
-actor this extension failed to destroy** — so the accepted cost is that a leaked actor finalised only
-during the final session teardown will no longer fail a run, while a leak on any `disable()` still does.
+own widgets, a critical is attributed by **the stack trace GJS prints under it, not by the name of the
+object it mentions**: with a trace block it fails the run if and only if some frame of that block names
+this extension (its directory is always spelled `i3-shell@troja`, GNOME's own JS is loaded from a
+GResource and has no filesystem path at all); with no trace block — which is how libmutter's C-side
+criticals arrive — it fails unless the text matches one of **two** named GNOME-owned allowances,
+`Invalid work id` and `Attempting to call back into JSAPI during the sweeping phase of GC`. Three upstream
+Mutter assertions are excluded by exact text in *both* scopes. Every allowance that fires is printed as a
+note, with a count, so an allowance that starts firing is visible rather than silent.
+
+Three costs, carried up from `criticals.sh`'s own header rather than left in it:
+
+1. The GC-sweeping text is **also the signature of an actor this extension failed to destroy**, so a
+   leaked actor collected only during the final teardown no longer fails a run. A leak on any `disable()`
+   still does, which is what the pre-marker scope is for.
+2. The price of attributing by trace: a critical from **our own code** that GJS prints with no stack trace
+   at all, after the marker, is now allowed where matching the object's name might have caught it. Whether
+   that case occurs is unmeasured, not impossible.
+3. The narrower half of the same trade: a disposed-object critical naming an actor of ours but raised
+   entirely from GNOME's frames is allowed. What that gives up was shown not to work — GNOME builds
+   `St.BoxLayout` too, and reading ownership out of the object name produced a false positive on GNOME's
+   own Background Apps toggle.
+
 The implementation and the full reasoning are in `test/integration/criticals.sh`; its self-test,
 `test/integration/criticals-selftest.sh`, runs first in the suite and needs no GNOME session.
 
