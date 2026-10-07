@@ -1865,6 +1865,18 @@ export class Engine {
       this._minimized.clear();
       this._raiseOrders.clear();
       this._lastFocus = null;
+      // NOT a second maintenance site: `_activateSelection` is still the only place that puts an id in
+      // here, so the D8 suppression keeps its single route. This is the same per-enable reset as the
+      // six beside it. The set holds the id of a focus the engine ASKED for and has not yet seen
+      // reported, and the OFF path always leaves one there -- `_handOffFocus` activates a window and
+      // the report that activation raises is dropped by the paused `commit()`, so it cannot resolve
+      // itself the way a running engine's would. Kept across the pause, that id makes the rebuild's own
+      // `_acceptFocus(this._ports.windows.focused())` return early -- before the involuntary-focus check
+      // and before the selection reconciliation -- in the COMMON case where the window the hand-off
+      // focused is the one still holding the keyboard: the tree's selection would then be whatever the
+      // restore loop happened to pick, and the first directional `focus` would move from the wrong
+      // window. A fresh enable has asked for nothing yet.
+      this._expectedFocus.clear();
       this._shownOnFocusedOutput = null;
       // Task 1's carry records, cleared here and not in `_flushAttic`: each one suppresses ONE repeat
       // translation of a floating frame while the compositor is still reporting the output the frame was
@@ -2510,7 +2522,13 @@ export class Engine {
           this._minimized.clear();
           this._raiseOrders.clear();
           this._lastFocus = null;
-          // Beside the four above for the same reason `setTilingEnabled(true)` clears it: a carry record
+          // The same per-enable reset `setTilingEnabled(true)` makes, and no more a second maintenance
+          // site here than there: a restart nulls the tree, so it lands in the `isNew` branch whose
+          // `_acceptFocus(focused())` adopts the compositor's focus -- and an activation the engine
+          // asked for just before the restart, whose report has not arrived yet, would suppress exactly
+          // that adoption and leave the selection wherever the restore loop put it.
+          this._expectedFocus.clear();
+          // Beside the resets above for the same reason `setTilingEnabled(true)` clears it: a carry record
           // suppresses ONE repeat translation while the compositor still reports the output the frame was
           // carried away from, and a restart is a fresh enable, which starts with none. Kept, it would
           // suppress a genuine later carry back to that same output.

@@ -182,6 +182,79 @@ describe('setTilingEnabled', () => {
     expect(f.calls.filter(call => call.startsWith('focus:'))).toEqual([]);
   });
 
+  it('agrees with Mutter about the focused window on the way back on, not with its own restore loop', () => {
+    // Review 2, finding 7. `_expectedFocus` was the one piece of per-enable state the ON commit did not
+    // clear, and the OFF path is what fills it: `_handOffFocus` reaches `_activateSelection`, which
+    // records the window it asked for, and the focus report that activation raises arrives at a PAUSED
+    // `commit()` and is dropped. Nothing resolves the record, so it survives a pause of any length. On
+    // the way back ON the rebuild's single `_acceptFocus(windows.focused())` -- the one call that adopts
+    // the compositor's focus -- reads `_expectedFocus` first and returns before the selection
+    // reconciliation, leaving the tree pointed at whatever the `isNew` restore loop happened to select
+    // while the user types into another window. The next `focus left`/`focus right` then moves from the
+    // wrong place.
+    //
+    // THE FIXTURE IS THE WHOLE TEST. Mutter's window list is MRU-ordered, so the window the hand-off
+    // focused is normally the list head and the restore loop selects it anyway: the suppressed
+    // `_acceptFocus` and the correct one give the SAME answer, which is why this was invisible in the
+    // native suite rather than absent from it. Here the two answers are made to differ -- the port lists
+    // window 1 first, so the restore loop's own choice is 1, while Mutter reports 2 focused -- and both
+    // halves of that premise are measured below rather than assumed, so a later change to the fake's
+    // ordering fails the premise out loud instead of quietly turning this into a test that cannot fail.
+    //
+    // Two windows on ONE workspace, deliberately: the restore loop selects one window per workspace, so
+    // a fixture that put them on different workspaces would restore both and never disagree with Mutter.
+    const f = fakeEngine('bindsym Mod4+q kill', {workspaceCount: 10});
+    f.engine.start();
+    f.add(1);
+    f.add(2);
+    f.flush();
+    // The user is typing into window 2, and while tiling is on the tree and Mutter agree about that.
+    f.focus(2);
+
+    f.engine.setTilingEnabled(false);
+    expect(f.calls).toContain('focus:2');
+    // The premise, measured: the port's order and the focused window disagree.
+    expect(f.ports.windows.list().map(info => info.id)).toEqual([1, 2]);
+    expect(f.ports.windows.focused()).toBe(2);
+    f.calls.length = 0;
+
+    f.engine.setTilingEnabled(true);
+    // Adopted, not re-asserted: the keyboard is already on the right window, so nothing is pushed out.
+    expect(f.calls.filter(call => call.startsWith('focus:'))).toEqual([]);
+    // `kill` acts on the tree's selection, so it is the user-visible read of who the engine thinks has
+    // the keyboard. Revert `this._expectedFocus.clear();` in the ON `commit()` and this kills window 1.
+    f.engine.run([{type: 'kill'}], 2);
+    expect(f.calls).toContain('kill:2');
+    expect(f.calls).not.toContain('kill:1');
+  });
+
+  it('forgets a pending focus request across a restart, which rebuilds the tree the same way', () => {
+    // The twin of the test above, for the other commit that nulls the tree. `restart` lands in the same
+    // `isNew` branch and adopts `windows.focused()` through the same single `_acceptFocus`, so a record
+    // left in `_expectedFocus` suppresses it there too. The pause is not what makes a record stale:
+    // Mutter reports focus a main-loop turn after the activation that caused it, so any restart issued
+    // in between finds the record still armed. Modelled the way lifecycle.test.ts models an
+    // asynchronous focus request -- the port accepts the activation and raises no report.
+    const f = fakeEngine('bindsym Mod4+q kill', {workspaceCount: 10});
+    f.engine.start();
+    f.add(1);
+    f.add(2);
+    f.flush();
+    f.focus(2);
+    f.ports.windows.activate = id => { f.calls.push(`focus:${id}`); return true; };
+    f.engine.focusWindow(2);
+    expect(f.calls).toContain('focus:2');
+    // The same premise as above, measured for the same reason: the restore loop's own answer is 1.
+    expect(f.ports.windows.list().map(info => info.id)).toEqual([1, 2]);
+    expect(f.ports.windows.focused()).toBe(2);
+    f.calls.length = 0;
+
+    expect(f.engine.run([{type: 'restart'}], 1)).toBe('restarted');
+    f.engine.run([{type: 'kill'}], 2);
+    expect(f.calls).toContain('kill:2');
+    expect(f.calls).not.toContain('kill:1');
+  });
+
   it('does not restore the workspace count and then re-force it from under the user', () => {
     // Fix round 1, I2: what the paused `commit()` is really for, now that the fake's `restoreAll()` puts
     // GNOME's own `num-workspaces` back the way the real settings port does.
