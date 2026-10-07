@@ -860,7 +860,8 @@ def scenario_incoming_selection_takes_focus(primary_id, second_id):
 
 
 # --------------------------------------------------------------------------
-# Scenario 4 (brief, --hotplug): an unplug preserves layout; a replug restores the assignment
+# Scenario 4 (brief, --hotplug): an unplug preserves layout; a replug restores the assignment -- and
+# the focused output comes back to the output the pointer is standing on (defect of 2026-10-07)
 # --------------------------------------------------------------------------
 
 def scenario_unplug_and_replug(primary_id, second_id):
@@ -893,6 +894,26 @@ def scenario_unplug_and_replug(primary_id, second_id):
     primary_only = logical_configs(primary_only=True)
     print('scenario 4: display', json.dumps(describe_display()), flush=True)
 
+    # The pointer, and the defect of 2026-10-07. An unplug moves the focused output to the primary
+    # because the output it named is gone; nothing moves it back on the replug, and src/shell/pointer.ts
+    # reports CROSSINGS, so a pointer that never moved reports nothing -- after which every window the
+    # user opens takes the primary's workspace. The engine therefore asks outright where the pointer is
+    # at every reconfigure (Engine._followPointerAfterReconfigure), and this is the only place that can
+    # be measured against a real cursor tracker, real monitor indices and a real hotplug instead of a
+    # fake that agrees with the code.
+    #
+    # Over chrome, never over a client window: on a window, Mutter's own sloppy focus would move the
+    # keyboard focus as well, and a focused output seen later could have come from D5 instead (see
+    # chrome_point). The pointer is then left standing for the whole hotplug.
+    step('scenario 4: stand the pointer on the second output, and leave it standing')
+    warp(centre(work_area(primary_id)))      # the first report only establishes a baseline
+    warp(chrome_point(second_id))
+    expect('scenario 4: the crossing put the focused output on the second output', second_id,
+           focused_output, timeout=15,
+           context=lambda: {'pointer': pointer(), 'visible': visible_map()})
+    second_area = work_area(second_id)
+    pointer_before = pointer()
+
     step('scenario 4: drop to one monitor')
     failure = apply_monitors(primary_only)
     if failure is not None:
@@ -905,6 +926,14 @@ def scenario_unplug_and_replug(primary_id, second_id):
 
     expect('scenario 4: only the primary remains', [primary_id], monitor_ids, timeout=25,
            context=describe_display)
+    pointer_unplugged = pointer()
+    # Not a claim about the pointer, a claim about the engine: the output the focus named is gone, so
+    # the focus has to land somewhere real (src/tree/tree.ts, the `!live.has(this.focusedOutput)` line),
+    # and the reconfigure's own reading of the pointer must not fight that -- whatever the backend did
+    # with the cursor, the only live output left is the primary.
+    expect('scenario 4: the unplug leaves the focused output on the primary', primary_id,
+           focused_output, timeout=15,
+           context=lambda: {'pointer': pointer(), 'visible': visible_map()})
     after = {'shape': shape_of(workspace_entry(index)['root']),
              'percents': workspace_entry(index)['root']['percents'],
              'output': workspace_entry(index)['output']}
@@ -941,6 +970,37 @@ def scenario_unplug_and_replug(primary_id, second_id):
     check('scenario 4: and it still keeps its children and percentages',
           [shape_of(workspace_entry(index)['root']), workspace_entry(index)['root']['percents']],
           [before['shape'], before['percents']], lambda: workspace_entry(index))
+
+    pointer_after = pointer()
+    print('scenario 4: pointer across the hotplug',
+          json.dumps({'before': pointer_before, 'unplugged': pointer_unplugged,
+                      'after': pointer_after, 'secondArea': second_area,
+                      'secondAreaNow': work_area(second_id)}), flush=True)
+    if pointer_before == pointer_unplugged == pointer_after and inside(pointer_after, second_area):
+        # The pointer never moved, so nothing can have emitted a crossing and rule 4's edge-triggered
+        # path cannot be what corrected this: the reconfigure's own reading of the pointer is the only
+        # thing left that could have. This is the measured defect, inverted.
+        expect('scenario 4: the replug gives the focused output back to the output the pointer stands on',
+               second_id, focused_output, timeout=25,
+               context=lambda: {'pointer': pointer(), 'visible': visible_map(),
+                                'focusedOutput': focused_output()})
+    else:
+        print('LIMITATION: this backend moved the pointer itself across the hotplug '
+              f'({pointer_before} -> {pointer_unplugged} -> {pointer_after}), so a crossing may have '
+              'been emitted and the reconfigure re-deriving the focused output cannot be told apart '
+              'from rule 4 here; that discrimination belongs to the live walk.', flush=True)
+        here = next((o for o in monitor_ids() if inside(pointer_after, work_area(o))), None)
+        if here is None:
+            print('LIMITATION: and the pointer ended up over no work area at all, so there is no output '
+                  'it should name; the focused output is left unasserted rather than asserted weakly.',
+                  flush=True)
+        else:
+            # Weaker, because either path could have produced it -- but not vacuous: with the pointer
+            # over `here`, a focused output that is anything else is the defect whichever path left it.
+            expect('scenario 4: the focused output is the output the pointer ended up on', here,
+                   focused_output, timeout=25,
+                   context=lambda: {'pointer': pointer(), 'visible': visible_map(),
+                                    'focusedOutput': focused_output()})
     reset_windows()
     print('ok phase 5 hotplug scenario', flush=True)
 
