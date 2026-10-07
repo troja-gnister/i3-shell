@@ -565,7 +565,7 @@ export class Engine {
     // index this topology knows this is unreachable rather than merely unfixtured; it is kept because
     // the cost of being wrong is a throw on every later commit.
     if (!tree.visible.has(output)) return;
-    // DIAGNOSTIC (steam-diagnostics branch): the fifth line, and the only one that is about the
+    // JOURNAL DIAGNOSTIC: the fifth line, and the only one that is about the
     // correction rather than the decisions it feeds. It fires once per reconfigure that moves the
     // focused output, so the next login says in the journal whether the replug was corrected -- which
     // is the only place this path is observable to the user who reported it.
@@ -1206,7 +1206,14 @@ export class Engine {
    */
   private _adoptionWorkspace(tree: Tree, info: WindowInfo, adopting: Adoption, remembered?: number): number {
     const [workspace, basis] = this._adoptionChoice(tree, info, adopting, remembered);
-    // DIAGNOSTIC (steam-diagnostics branch): one line per window entering the tree, naming the branch
+    // JOURNAL DIAGNOSTIC: one line per window entering the tree, naming the branch
+    // (These five JOURNAL DIAGNOSTIC lines are kept deliberately. Nine defects in this project have been
+    // about which display something landed on -- D1 through D8 and the hotplug focused-output defect of
+    // 2026-10-07 -- and that last one was found in a single login purely because these lines said what
+    // the engine had decided and what Mutter had reported. They are `log.info`, so they reach the
+    // journal and nothing else. Volume, stated rather than guessed at: this one fires once per window
+    // entering the tree, the focus one only when the focused output actually changes, and the other
+    // three only on a re-home, a frame carry or a reconfigure that moves the focused output.)
     // that chose and the output the chosen workspace sits on. This is the decision that puts a new
     // window on a display, so a report of "it opened on the wrong monitor" is answered here or nowhere.
     this._ports.log.info(`adopt: window ${info.id} (${info.wmClass ?? '?'}) -> workspace ${workspace} ` +
@@ -1267,7 +1274,7 @@ export class Engine {
     const dragged = this._selectedWindow() === id;
     const target = tree.rehomeFloating(id, monitor);
     if (target === null) return;
-    // DIAGNOSTIC (steam-diagnostics branch): a re-home reads a floating window's frame as the user's
+    // JOURNAL DIAGNOSTIC: a re-home reads a floating window's frame as the user's
     // statement of intent and moves its tree membership to that output. If a launch lands on the wrong
     // display, this line says whether this path is why.
     this._ports.log.info(`rehome floating: window ${id} from workspace ${location.workspace} ` +
@@ -1382,7 +1389,7 @@ export class Engine {
         this._floatingRects.set(id, fixFloatingCoordinates(this._floatingRects.get(id) ?? info.rect,
           source, destination));
         this._carriedFloating.set(id, {from: info.monitor, to: output.id});
-        // DIAGNOSTIC (steam-diagnostics branch): the mirror of a re-home -- the tree moved and the frame
+        // JOURNAL DIAGNOSTIC: the mirror of a re-home -- the tree moved and the frame
         // is being dragged after it. Named separately so the journal distinguishes the two directions.
         this._ports.log.info(`carry floating frame: window ${id} from output ${info.monitor} ` +
           `to output ${output.id} (workspace ${index})`);
@@ -1524,7 +1531,7 @@ export class Engine {
     else { const leaf = tree.find(id); if (leaf) tree.select(leaf); }
     if (!claimOutput) return;
     const showing = tree.outputShowing(location.workspace);
-    // DIAGNOSTIC (steam-diagnostics branch): logged only when the focused output actually CHANGES, so
+    // JOURNAL DIAGNOSTIC: logged only when the focused output actually CHANGES, so
     // the journal stays quiet for ordinary same-output focus. This is D5's claim -- "the user is on the
     // display this window is on" -- and a wrong one here is what sends the next launch to that display.
     if (showing !== null && showing !== tree.focusedOutput)
