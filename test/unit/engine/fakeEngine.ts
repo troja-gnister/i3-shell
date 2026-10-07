@@ -39,21 +39,27 @@ export function twoMonitorTopology(count = 10): Topology {
  * A topology built from a plain list of outputs, one work area per output, laid out left to right.
  * Each monitor's connectors default to a synthetic `fixture-<id>` name; a test pinning `workspace N
  * output <name>` passes its own, so the name it configures is the name the fake topology reports.
+ *
+ * `area` overrides the default 1000x700 slab for one output. Every existing caller omits it and gets
+ * exactly what it got before. A test that needs the outputs to differ in SIZE -- not merely in origin
+ * -- passes it: with equal areas, a proportional cross-output translation and a plain origin offset
+ * give the same answer for every input, so such a test could not tell them apart (Task 1).
  */
 export function outputsTopology(
-  monitors: Array<{id: MonitorId; index: number; connectors?: readonly string[]}>,
+  monitors: Array<{id: MonitorId; index: number; connectors?: readonly string[]; area?: Rect}>,
   primary: MonitorId,
 ): Topology {
   return {
     primary,
     monitors: monitors.map(m => ({id: m.id, index: m.index, connectors: m.connectors ?? [`fixture-${m.id}`]})),
-    workAreas: new Map(monitors.map(m => [m.id, {x: m.index * 1000, y: 0, width: 1000, height: 700}])),
+    workAreas: new Map(monitors.map(m =>
+      [m.id, m.area ?? {x: m.index * 1000, y: 0, width: 1000, height: 700}])),
   };
 }
 
 export interface FakeEngineOptions {
   /** Builds the initial topology in place of the single-monitor default. */
-  monitors?: Array<{id: MonitorId; index: number; connectors?: readonly string[]}>;
+  monitors?: Array<{id: MonitorId; index: number; connectors?: readonly string[]; area?: Rect}>;
   primary?: MonitorId;
   /** Overrides the fake's native GNOME workspace count (the `count` the ports.workspaces getter reports). */
   workspaceCount?: number;
@@ -69,6 +75,13 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
   const applied: Array<Map<WindowId, Rect>> = [];
   const queue = new Map<number, () => void>();
   let token = 0, active = 0, count = options.workspaceCount ?? 10, staleActivations = 0;
+  /**
+   * GNOME's own `num-workspaces` as the user had it before this extension touched it -- what
+   * `settings.restoreAll()` below puts back. Captured rather than assumed: the real
+   * `SettingsOverrides.restoreAll()` restores from its snapshot, and a fake whose restore left the forced
+   * count of two in place made the engine's paused `commit()` unobservable (fix round 1, I2).
+   */
+  const userWorkspaceCount = count;
   let focused: WindowId | null = null;
   const refusedMoves = new Set<WindowId>();
   let currentTopology: Topology | null = options.monitors
@@ -153,7 +166,13 @@ export function fakeEngine(initialText = 'bindsym Mod4+q kill', options: FakeEng
         if (wanted > 0) count = 2;
         active = Math.min(active, count - 1);
       },
-      restoreAll: () => { calls.push('settings.restore'); },
+      // Restores `count`, because that is the half of restoreAll that the rest of the engine can see: with
+      // the user's own num-workspaces back, GNOME no longer has the attic, and anything that re-forces it
+      // is undoing the restore. A test stands in for the `n-workspaces` signal the restore raises by
+      // calling `engine.onWorkspacesChanged()` itself, exactly as `setActiveIndex` documents for the
+      // active-workspace signal -- emitting it from in here would make the restore re-entrant in a way the
+      // real adapter's is not (the signal arrives on a later main-loop turn).
+      restoreAll: () => { calls.push('settings.restore'); count = userWorkspaceCount; },
     },
     indicator: {
       setMode: name => { calls.push(`mode:${name}`); },

@@ -3,6 +3,7 @@ import {descendFocused, leaves, walk, type Con, type MonitorId, type NodeId, typ
 import {effectiveWorkspaceCount, resolveOutputArg, type OutputArg} from './tree/outputs';
 import {layoutWithRects, stackingOrder} from './tree/layout';
 import {cycleWorkspace} from './tree/cycle';
+import {fixFloatingCoordinates} from './tree/floating';
 import {RectReconciler} from './runtime/reconcile';
 import {serializeTree, type TreeSnapshot, type WindowSnapshot} from './runtime/snapshot';
 import {decorationPlan, type DecorationPlan} from './runtime/decoration';
@@ -142,6 +143,32 @@ export class Engine {
   private _loaded!: LoadedConfig;
   private _mode = 'default';
   private _locked = false;
+  /**
+   * Task 2: tiling is switched OFF at the Quick Settings toggle. A second, independent pause cause
+   * BESIDE `_locked`, composed with it through `_suspended` below -- never folded into it.
+   *
+   * Two causes rather than one because they have different exits. A lock ends when the screen unlocks; a
+   * toggle ends only when the user clicks it again, so unlocking a screen that was locked while tiling
+   * was off must not turn tiling back on. One shared flag would do exactly that.
+   *
+   * Per-session, deliberately not persisted. The extension's GSettings would be the mechanism, and a
+   * persisted "off" would survive a logout into a session with no pills, no bindings and no visible
+   * reason why the user's config is being ignored -- while `enable()` is also the one path that has to
+   * work when everything else has failed. A fresh session is i3-shell on.
+   */
+  private _paused = false;
+  /**
+   * "The engine must not act." Either pause cause answers it, and every site that asks the question has
+   * to get one answer, or the two causes would disagree about whether a swipe runs or a mode re-grabs.
+   * The two places that mean specifically "the SCREEN is locked" -- the launcher's locked refusal message
+   * and `onUnlocked`'s own early return -- keep reading `_locked` directly, because they are about the
+   * lock and not about acting. `commit()` is the third: see the comment there, which is about acting but
+   * deliberately only about the toggle.
+   */
+  private get _suspended(): boolean {
+    return this._locked || this._paused;
+  }
+
   private _started = false;
   private _disposed = false;
   private _closing = false;
@@ -178,6 +205,21 @@ export class Engine {
   private _rowHeight = 0;
   private readonly _borderOverrides = new Map<WindowId, number>();
   private readonly _floatingRects = new Map<WindowId, Rect>();
+  /**
+   * Task 1: for each floating frame `_followFloatingFrames` has carried, the output it was carried `from`
+   * and the output it was carried `to`. It is what stops a level-triggered pass from carrying the same
+   * frame twice, and it says "already carried", which is the fact that matters. Geometry cannot say it: a
+   * frame straddling an output boundary has its origin on the destination side before anything has moved
+   * it, and a window near the seam between a 1728-wide panel and a 1920-wide display is the ordinary case,
+   * not an exotic one.
+   *
+   * `from` is why the entry has two fields (fix round 2, I5). The record ends on the first report of any
+   * monitor OTHER than `from`, not on a report of `to`: a frame may never be observed at `to` at all -- a
+   * client can refuse the rect, and then the compositor goes on reporting the output the frame started on
+   * -- and keying the end on `to` alone left the suppression in place after the uncertainty had been
+   * resolved by some third output, which silently swallowed the next genuine carry back to `to`.
+   */
+  private readonly _carriedFloating = new Map<WindowId, {from: MonitorId; to: MonitorId}>();
   /** window -> indexes into Config.rules that have already fired for it. */
   private readonly _firedRules = new Map<WindowId, Set<number>>();
   private readonly _frameReads = new Map<WindowId, {token: number; generation: number | undefined}>();
@@ -397,11 +439,35 @@ export class Engine {
    * the pointer here would leave a documented setting half-effective in its least visible half.
    *
    * Fix round 1, folded item 4: gated on `_locked` too, for the same reason the `launcher` command is
-   * -- pointer motion over a lock screen must not reassign the focused output underneath it.
+   * -- pointer motion over a lock screen must not reassign the focused output underneath it. Task 2
+   * widened that to `_suspended`: tiling switched off at the toggle must not reassign it either.
+   *
+   * Task 4, D8's gap: the crossing is recorded as a reason to stop suppressing involuntary focus reports
+   * BEFORE the `focus_follows_mouse` gate below, and only for a crossing onto an output that is not the
+   * focused one. Clicking a window on another display requires the pointer to reach it, so this crossing
+   * is strictly earlier than the click and is the only evidence available when the setting is off --
+   * with it off the engine otherwise threw the crossing away and a deliberate click was ignored for
+   * focus purposes until a window opened there or a command moved the focused output. It ends the
+   * suppression only; it does not move the focused output, which is what the setting forbids, so the
+   * click's own focus report is then honoured by D5 exactly as at any other time.
+   *
+   * `output !== tree.focusedOutput` carries the whole of the risk. D8's native scenario warps the
+   * pointer ONTO the focused output (the measured dump reads `"pointer": [960, 556]`, the centre of the
+   * focused output's work area), so a lapse on any crossing would have broken D8 on the very run that
+   * found it. Crossing back onto the display you are already on says nothing about another one.
+   *
+   * It deliberately does not consult `tree.visible`, unlike the return three lines below: the clear
+   * writes no output, so it cannot leave the focused output pointing at a display with no visible entry,
+   * and `coverOutputs` keeps a live output from lacking one anyway -- `onPointerMonitorIndex` forwards
+   * only ids from `_topology.monitors`, and the topology and `visible` are written in the same
+   * `_layoutAndPublish` pass. So the one shape where this clears without the move below compensating is
+   * unreachable rather than merely unfixtured.
    */
   onPointerOutput(output: MonitorId): void {
-    if (!this._started || this._disposed || this._locked || !this._config.focusFollowsMouse) return;
+    if (!this._started || this._disposed || this._suspended) return;
     const tree = this._tree;
+    if (tree && output !== tree.focusedOutput) this._shownOnFocusedOutput = null;
+    if (!this._config.focusFollowsMouse) return;
     if (!tree || tree.focusedOutput === output) return;
     // An output with no visible entry is not one the focus can sit on: `activeWorkspace` reads
     // `visible.get(focusedOutput)` and throws without one. `coverOutputs` makes that unreachable for a
@@ -605,7 +671,12 @@ export class Engine {
 
   /** Native callbacks may enqueue work, but never mutate a tree during its traversal. */
   private commit(change: () => boolean | void = () => {}): void {
-    if (!this._started || this._disposed || this._closing) return;
+    // `_paused` and not `_suspended`: the engine commits freely over a lock screen today (it keeps
+    // reconciling geometry so the session is correct the moment it unlocks), and nothing about Task 2
+    // changes that. Tiling switched off is the opposite -- no layout, no geometry, no decorations, no
+    // parking -- and this one line is what makes it so for every path, including every deferred
+    // continuation, rather than at each of commit()'s thirty callers.
+    if (!this._started || this._disposed || this._closing || this._paused) return;
     this._queued.push(change);
     if (this._committing) return;
     this._committing = true;
@@ -722,6 +793,9 @@ export class Engine {
         for (const id of this._windows.keys()) this._forced.add(id);
         this._monitorInvalidation = false;
       }
+      // Task 1: after the layout loop (which owns tiled geometry) and before the floating drain below,
+      // because this pass both reads and writes `_floatingRects`.
+      this._followFloatingFrames(tree, topology);
       const changes = this._reconciler.plan(expected, this._forced);
       for (const id of expected.keys()) this._forced.delete(id);
       for (const [id, rect] of this._floatingRects) changes.set(id, rect);
@@ -907,11 +981,42 @@ export class Engine {
       // such a window remember whichever workspace happened to be visible when it first appeared and
       // stick to that forever, rather than adopting normally -- onto whatever is current -- the first
       // time it actually becomes eligible for the tree.
-      this._minimized.set(id, this._minimized.get(id) ?? {
+      const remembered = this._minimized.get(id) ?? {
         floating: this._floating(info),
         workspace: existing?.workspace,
-      });
+      };
+      this._minimized.set(id, remembered);
       tree.remove(id);
+      // `_flushAttic`'s mirror, in the other direction: the attic has exactly one way out for a window
+      // the tree cannot see, and this is it.
+      //
+      // `_parkOrShow` returns a window to LIVE only as it ENTERS the tree, and this branch is the one
+      // that keeps it out. So an excluded window sitting on `ATTIC_WORKSPACE` -- a workspace Mutter
+      // refuses to render -- has nothing left that would ever move it: it is audible and impossible to
+      // find, which is the failure this whole project was started to fix. It is reachable on a fresh
+      // `enable()` (the user's own GNOME workspace 2 becomes the attic the moment `settings.apply`
+      // forces the count to two) and the Quick Settings toggle makes it routine, because every OFF hands
+      // the user their workspaces back and every ON takes them away again.
+      //
+      // Gated on `workspace === undefined`, which is NOT a proxy for anything: a remembered workspace
+      // means the window was in the tree when it was evicted, so wherever it is now is where the engine
+      // deliberately put it -- parked because that i3 workspace is hidden -- and `_parkOrShow` will bring
+      // it back when it rejoins. `undefined` means the opposite: it has no workspace to be hidden on at
+      // all (excluded from birth, or re-adopted after the tree was rebuilt), so the attic cannot be where
+      // it belongs and nothing will reconsider. In steady state the condition simply never fires: GNOME
+      // has two workspaces, a window is mapped onto the active one, and the engine never parks a window
+      // it has not first given a workspace.
+      //
+      // Only a window that is not already live is asked about -- matching `_flushAttic`'s and
+      // `_reconcileParking`'s own guard, and here it is termination rather than thrift: Mutter reports
+      // every workspace change back, so a move issued for a window already on LIVE re-enters this branch
+      // through the queued commit that report raises and issues the move again, forever. Dropping this
+      // clause does not fail a test, it hangs the suite.
+      if (remembered.workspace === undefined && info.workspace !== LIVE_WORKSPACE) {
+        if (!this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE))
+          this._ports.log.warn(`could not return window ${id} from the attic; it may stay hidden`);
+        if (this._disposed) return;
+      }
     } else {
       const evicted = this._minimized.get(id);
       if (evicted !== undefined) { this._manualFloating.set(id, evicted.floating); this._minimized.delete(id); }
@@ -1054,6 +1159,112 @@ export class Engine {
     this._parkOrShow(id, target);
   }
 
+  /**
+   * Task 1, the mirror image of D6: a floating window whose frame is still on the output its workspace
+   * has LEFT is given a frame on the output its workspace now lives on.
+   *
+   * D6 (`_rehomeFloating` above) is "the frame moved, follow it with the tree": the user drags a window
+   * onto another display and its tree membership follows. This is "the tree moved, follow it with the
+   * frame", and it is the half that was missing. `move container to output`, `move container to
+   * workspace N`, a directional `move` that crossed an output edge, `move workspace to output` and a
+   * workspace shown on a different output after being parked all move a floating window's workspace
+   * without touching its frame. (A replug is NOT in that list, and was wrongly claimed to be in the first
+   * round: an output that has left takes its work area with it, so there is no source to scale a
+   * proportion against, and the `source === undefined` arm below skips the window. Mutter relocates such a
+   * frame itself, and once it reports the surviving monitor the monitor and the output agree, so this pass
+   * is silent by design -- see the report for why covering it is not worth the state.) The measured symptom: the window stays drawn on the display it
+   * left and then appears to VANISH when that display switches away from the workspace it now belongs
+   * to. The commit's port calls were `["moveTo:1:0","decorations","decorations"]` -- no rect at all.
+   *
+   * LEVEL-TRIGGERED, and on exactly the fact D6's own guard is edge-triggered on: does the monitor the
+   * compositor reports for this window disagree with the output showing its tree workspace? That is why
+   * this is one pass instead of a call at each of the five commands that can cause it -- and why there is
+   * no sixth place for the next command to forget.
+   *
+   * It cannot resurrect the mid-drag hazard D6's edge trigger exists to avoid. Mid-drag, before Mutter
+   * reports the new monitor, `info.monitor` still names the old output AND the workspace is still on the
+   * old output: they agree, so nothing happens. Once Mutter reports it, `_rehomeFloating` moves the tree
+   * and they agree again. Only a tree-side move leaves them disagreeing, and only then does this write.
+   * (`_syncWindow` runs for every window earlier in this same commit, so `_windows` already holds the
+   * fresh monitor by the time this reads it -- the same view `_crossedOutput` compares against.)
+   *
+   * Three exclusions, each its own sentence because each is its own reason:
+   *
+   * - **A workspace no output is showing is skipped**, by construction: this iterates `tree.visible`, so
+   *   a parked workspace is never reached. A parked window is in the attic where its frame is
+   *   unobservable, and it gets its frame the moment some output shows that workspace -- which is this
+   *   same pass, on the commit that shows it.
+   * - **A fullscreen window is skipped.** Mutter owns a fullscreen window's geometry (main spec 19), and
+   *   the layout pass above excludes it for the same reason; writing a rect here would fight the
+   *   compositor and could leave the window the size of the output it came from.
+   * - **A rect already in `_floatingRects` is translated, not overwritten** -- `this._floatingRects.get(id)
+   *   ?? info.rect`. This is a defensive composition invariant with NO caller today and it is not pinned by
+   *   any test: every command drains `_floatingRects` through its own `commit()` before the next one runs,
+   *   so the map is empty whenever this pass reads it (measured, including from a `for_window` rule whose
+   *   commands run inside a drain). It is the correct read order for a map this pass itself writes, and if
+   *   a later task ever queues a rect and re-homes in one commit, composing is right and clobbering would
+   *   silently discard the user's own command. Round 1 justified it with `move container to output right,
+   *   move position center`; that sequence is REFUSED by the engine, because `move position` reads the
+   *   selection of the focused output's workspace and the move has just carried the window off it.
+   * - **A frame this pass has already carried to that output is left alone**, which is what makes a
+   *   level-triggered pass safe to run on every commit. Writing the frame raises a geometry signal the
+   *   engine commits on, and the compositor MAY not report the window's new monitor by then -- the fake
+   *   never does, and whether real Mutter does is unproven here, since nothing in this repo has observed
+   *   it natively (`Meta.Window` recomputes its monitor on a move, which is an inference about Mutter, not
+   *   a measurement). Without the record the pass would therefore translate the SAME window again on that
+   *   next commit, and because the result is clamped each pass drags it further into the destination's far
+   *   corner: measured, commit one wrote x=2780 and the next x=3000, the clamp's limit. It keys on "already
+   *   carried" and NOT on where the frame happens to be: round 1 asked `originWithin(current, destination)`
+   *   instead, and a frame straddling the boundary -- 400px wide at x=1900, which Mutter hands to the
+   *   output on the right -- then got no rect at all on `move container to output left`, leaving the window
+   *   drawn on the display it was told to leave. That is the defect this pass exists to fix, so the key had
+   *   to be the fact and not a proxy.
+   *
+   *   **Exactly when the suppression ends, and what it still covers that it should not.** It ends on the
+   *   first report of any monitor other than the `from` of the carry, on a carry to a different output, and
+   *   in `_forget`. It does NOT end while the compositor goes on reporting the output the frame was carried
+   *   from, and that is a real residual, not a theoretical one: a client that refuses the rect (the
+   *   README's `stubborn` clients) is reported on `from` indefinitely, and so is a window the user is still
+   *   dragging within `from` when the command lands. In both of those the next carry back to the same
+   *   output is suppressed, so the frame stays where the client left it until the window is carried
+   *   elsewhere or closed. Measured, and written down in `docs/acceptance/phase-5.md` with the rest of this
+   *   task's uncovered cases, because this comment is where a maintainer meets the trade: round 1 claimed
+   *   here that "the suppression lasts exactly as long as the uncertainty", and that was simply false.
+   * - It is an addition to the monitor test and not a replacement for it: the monitor test is what leaves
+   *   a window the user is mid-drag alone.
+   */
+  private _followFloatingFrames(tree: Tree, topology: Topology): void {
+    // Shaped like the layout loop in `_layoutAndPublish`, deliberately and line for line: over
+    // `topology.monitors`, taking the index from `tree.visible` and asserting the work area, because the
+    // `_ready` gate at the top of that method has already established that every monitor in this topology
+    // has one. Iterating the topology rather than `tree.visible` also means an output that has left can
+    // never be reached, so there is no third unreachable branch to justify.
+    for (const output of topology.monitors) {
+      const index = tree.visible.get(output.id);
+      if (index === undefined) continue;
+      const destination = topology.workAreas.get(output.id)!;
+      for (const id of tree.workspace(index).floating) {
+        const info = this._windows.get(id);
+        if (!info || info.monitor === null) continue;
+        // The compositor has moved on from where the carry started -- to the output it was carried to, or
+        // to any other -- so the carry is no longer in doubt and the record must go, or it would suppress
+        // the next genuine carry back to that same output. `!== from`, and not `=== to`, because a frame
+        // the client refused is never reported at `to` at all (fix round 2, I5).
+        if ((this._carriedFloating.get(id)?.from ?? info.monitor) !== info.monitor)
+          this._carriedFloating.delete(id);
+        if (info.monitor === output.id || info.fullscreen) continue;
+        if (this._carriedFloating.get(id)?.to === output.id) continue;
+        // Reachable, unlike the two above: the compositor can name a monitor that has already left the
+        // topology, and there is then no source work area to scale the frame against.
+        const source = topology.workAreas.get(info.monitor);
+        if (source === undefined) continue;
+        this._floatingRects.set(id, fixFloatingCoordinates(this._floatingRects.get(id) ?? info.rect,
+          source, destination));
+        this._carriedFloating.set(id, {from: info.monitor, to: output.id});
+      }
+    }
+  }
+
   private _forget(id: WindowId): void {
     this._tree?.remove(id);
     this._windows.delete(id);
@@ -1064,6 +1275,7 @@ export class Engine {
     this._unmaximizeAttempts.delete(id);
     this._forced.delete(id);
     this._floatingRects.delete(id);
+    this._carriedFloating.delete(id);
     this._borderOverrides.delete(id);
     this._firedRules.delete(id);
     this._reconciler.forget(id);
@@ -1319,16 +1531,88 @@ export class Engine {
     return true;
   }
 
-  private _activateSelection(timestamp: number): void {
-    const selection = this._tree?.selection();
+  /**
+   * The ONE way this engine pushes focus outward, unchanged in that respect.
+   *
+   * `workspace` defaults to the active one, which is every existing caller and the only shape the
+   * spec's rule describes. It is a parameter at all for `_handOffFocus` below, which has to reach the
+   * selection of a workspace that is not the active one -- and reaching it THROUGH this method is the
+   * point: `_expectedFocus` is maintained in one place, so the D8 suppression cannot be bypassed by a
+   * second route to `windows.activate`.
+   *
+   * Returns the window it actually focused, or null, so a caller looking for *some* window to hand the
+   * keyboard to can tell "this workspace had nobody" from "done" -- and can name the window in a log.
+   */
+  private _activateSelection(timestamp: number, workspace?: number): WindowId | null {
+    const selection = this._tree?.selection(workspace);
     const id = selection?.kind === 'floating' ? selection.window : selection?.kind === 'tiled'
       ? descendFocused(selection.con)?.window : undefined;
     this._expectedFocus.clear();
-    if (id === undefined) return;
+    if (id === undefined) return null;
     this._expectedFocus.add(id);
     const activated = this._ports.windows.activate(id, timestamp);
-    if (this._disposed) return;
-    if (!activated) this._expectedFocus.delete(id);
+    if (this._disposed) return activated ? id : null;
+    if (!activated) {
+      this._expectedFocus.delete(id);
+      // Silent until now, and it is the fact that separates "there was nobody to focus" from "the window
+      // was there and the activation was refused". Two native rounds were spent not knowing which, on a
+      // path (`_handOffFocus`) where the two have completely different fixes.
+      this._ports.log.warn(`could not focus window ${id}; the activation was refused`);
+      return null;
+    }
+    return id;
+  }
+
+  /**
+   * Give the keyboard to a window, once, on the way out of managing focus.
+   *
+   * Fix round 1, from the native run: switching tiling off left NOTHING focused. `modalCount == 0` and
+   * `grabbed == 0` both passed -- nothing was holding the keyboard -- and the user still had to click a
+   * window before they could type, because with `_paused` set the engine stops managing focus, the
+   * launcher's actor is gone, and nothing hands it on. "Nothing is holding it" and "something is
+   * receiving it" are different claims, and only the first was ever true here.
+   *
+   * The order of preference is the order of what the user was looking at:
+   *
+   * 1. the active workspace's own selection -- the window that had focus, i3's own answer;
+   * 2. the selection of each workspace an output is SHOWING, for the case the first one is empty;
+   * 3. the selection of any workspace at all, because by the time this runs the flush has put every
+   *    parked window on the live GNOME workspace, so "not visible" no longer means anything: the user is
+   *    looking at all of them.
+   *
+   * MUST run after `_flushAttic`, and that is not stylistic: activating a window still on
+   * ATTIC_WORKSPACE asks Mutter to show a workspace no output is showing, which is the exact opposite of
+   * what switching off is for.
+   *
+   * It cannot run twice. Its only caller is inside the OFF branch of `setTilingEnabled`, past the
+   * `enabled === !this._paused` early return, so a second OFF never reaches it ("is idempotent:
+   * switching off twice flushes once").
+   *
+   * No window is a legitimate answer -- an empty desktop has nothing to focus -- so it is silent.
+   */
+  private _handOffFocus(): void {
+    const tree = this._tree;
+    if (!tree) {
+      this._ports.log.info('tiling off: there is no tree, so no window to hand the keyboard to');
+      return;
+    }
+    // `undefined` first IS tier 1: it means "the active workspace" to `selection()`, so one loop covers
+    // all three tiers and the trace below reports them uniformly.
+    const tried: string[] = [];
+    for (const workspace of [undefined, ...tree.visible.values(), ...tree.workspaces.keys()]) {
+      if (this._disposed) return;
+      const id = this._activateSelection(0, workspace);
+      tried.push(`${workspace ?? 'active'}=${id ?? '-'}`);
+      if (id !== null) {
+        // Logged, for the same reason `involuntary focus:` is: this is the one moment the engine hands
+        // the keyboard over and then stops managing focus, the native suite reads it out of the journal,
+        // and when the user cannot type after switching off this line is the whole diagnosis. `-` means
+        // that workspace's selection named no window; a refusal warns separately, above.
+        this._ports.log.info(`tiling off: keyboard handed to window ${id} (tried ${tried.join(' ')})`);
+        return;
+      }
+    }
+    this._ports.log.info(`tiling off: no window to hand the keyboard to (tried ${tried.join(' ')})`);
   }
 
   /**
@@ -1466,13 +1750,15 @@ export class Engine {
    * most of them will never write a `bindgesture` line, so a bare swipe must cost nothing and say nothing.
    * Which direction means `workspace next` lives entirely in that config -- nothing here knows.
    *
-   * The `_locked` guard is the one thing this does that `onBinding` does not need. `onLocked()` drops
-   * every accelerator grab, so a binding physically cannot fire over a lock screen; the stage
-   * subscription a swipe arrives on has no equivalent and stays live, which would otherwise make the lock
-   * screen the one place where gestures still ran commands.
+   * The `_suspended` guard is the one thing this does that `onBinding` does not need. `onLocked()` and
+   * `setTilingEnabled(false)` both drop every accelerator grab, so a binding physically cannot fire over
+   * a lock screen or with tiling switched off; the stage subscription a swipe arrives on has no
+   * equivalent and stays live, which would otherwise make those the two places where gestures still ran
+   * commands. (`run()` would refuse the paused case a second time; this keeps the gesture from ever
+   * reaching it, and keeps both pause causes answering the question the same way.)
    */
   onSwipe(direction: 'left' | 'right', timestamp: number): void {
-    if (this._locked) return;
+    if (this._suspended) return;
     const gesture = this._config.gestures.get(`swipe:${direction}`);
     if (!gesture) return;
     const {commands, diagnostics} = parseCommands(gesture.command);
@@ -1484,6 +1770,10 @@ export class Engine {
   /** Executes commands in order; returns a short human-readable result (also the D-Bus reply). */
   run(commands: Command[], timestamp: number): string {
     if (this._disposed) return 'stopped';
+    // Commands are refused outright rather than silently dropped by the paused `commit()`. `reload` and
+    // `restart` do real work OUTSIDE commit() -- they load a config and push settings -- so letting them
+    // run while paused would leave a config half-applied with no layout behind it.
+    if (this._paused) return 'tiling is switched off';
     const commandFrames = new Map<WindowId, Rect>();
     const messages = commands.map(c => this._runOne(c, timestamp, commandFrames)).filter(m => m !== '');
     return messages.length > 0 ? messages.join('; ') : 'ok';
@@ -1501,6 +1791,9 @@ export class Engine {
   onUnlocked(): void {
     if (!this._started || this._disposed) return;
     this._locked = false;
+    // Review Focus 3: tiling is switched off at the toggle, so unlocking restores the lock's own state
+    // and nothing more. Without this, the lock screen is a second, invisible ON switch.
+    if (this._paused) return;
     this._ports.indicator.setVisible(true);
     if (this._disposed) return;
     this._ports.keys.setBindings(this._modeBindings('default'));
@@ -1511,6 +1804,124 @@ export class Engine {
         if (this._disposed) return false;
       }
     });
+  }
+
+  get tilingEnabled(): boolean {
+    return !this._paused;
+  }
+
+  /**
+   * The Quick Settings toggle. OFF is a pause, not a disable -- the toggle has to survive it or there is
+   * no way back on, so every object stays alive and `commit()` simply stops running.
+   *
+   * OFF, in this order, and the order is the substance:
+   *
+   * 1. Close the launcher. It holds a modal grab, and a grab left behind takes the keyboard away from the
+   *    whole session -- the same reason `reload`, `restart` and `onLocked` all close it first.
+   * 2. Set `_paused`, BEFORE `_enterMode`, so the mode reset below does not re-grab what step 5 drops.
+   * 3. Hide the pills and empty the decorations. The renderer is told explicitly rather than left to
+   *    infer teardown from a commit that will never come, which is the contract the `decorations` port
+   *    comment states: it receives a fresh plan on every commit, including the one that empties it.
+   * 4. Flush the attic -- see `_flushAttic`. BEFORE step 6.
+   * 5. Drop every accelerator grab, so the user's own key bindings belong to GNOME again.
+   * 6. Restore the GSettings this extension overrode, through the port's existing `restoreAll()`.
+   *
+   * ON re-adopts everything the way a fresh enable does, which is the path `restart` already uses and
+   * which `A14 re-enable adopts the live windows in MRU order and retiles them` covers: clear `_paused`,
+   * re-apply the settings (so GNOME is back to live + attic BEFORE anything is parked against it), re-grab
+   * unless the screen is locked, then null the tree inside a commit so `_layoutAndPublish` rebuilds it and
+   * adopts every window the port lists in `'startup'` mode -- each on its own monitor's workspace, which
+   * is D7's ruling for adoption that predates the tree and is exactly what this is.
+   */
+  setTilingEnabled(enabled: boolean): void {
+    if (!this._started || this._disposed) return;
+    if (enabled === !this._paused) return;
+    if (!enabled) {
+      this._ports.launcher.close();
+      this._paused = true;
+      this._ports.indicator.setVisible(false);
+      this._ports.decorations.apply({borders: [], frames: [], titleRows: []});
+      this._enterMode('default');
+      this._flushAttic();
+      if (this._disposed) return;
+      // 4b. Hand the keyboard to a window -- see `_handOffFocus`. After the flush, so the window it
+      // picks is one Mutter will actually render; before the ungrab only because nothing here depends on
+      // the order of those two.
+      this._handOffFocus();
+      if (this._disposed) return;
+      this._ports.keys.ungrabAll();
+      this._ports.settings.restoreAll();
+      return;
+    }
+    this._paused = false;
+    this._ports.indicator.setVisible(!this._locked);
+    this._ports.settings.apply(this._config, this._workspaceCount);
+    if (this._disposed) return;
+    if (!this._locked) this._ports.keys.setBindings(this._modeBindings('default'));
+    if (this._disposed) return;
+    this.commit(() => {
+      this._tree = null;
+      this._manualFloating.clear();
+      this._minimized.clear();
+      this._raiseOrders.clear();
+      this._lastFocus = null;
+      // NOT a second maintenance site: `_activateSelection` is still the only place that puts an id in
+      // here, so the D8 suppression keeps its single route. This is the same per-enable reset as the
+      // six beside it. The set holds the id of a focus the engine ASKED for and has not yet seen
+      // reported, and the OFF path always leaves one there -- `_handOffFocus` activates a window and
+      // the report that activation raises is dropped by the paused `commit()`, so it cannot resolve
+      // itself the way a running engine's would. Kept across the pause, that id makes the rebuild's own
+      // `_acceptFocus(this._ports.windows.focused())` return early -- before the involuntary-focus check
+      // and before the selection reconciliation -- in the COMMON case where the window the hand-off
+      // focused is the one still holding the keyboard: the tree's selection would then be whatever the
+      // restore loop happened to pick, and the first directional `focus` would move from the wrong
+      // window. A fresh enable has asked for nothing yet.
+      this._expectedFocus.clear();
+      this._shownOnFocusedOutput = null;
+      // Task 1's carry records, cleared here and not in `_flushAttic`: each one suppresses ONE repeat
+      // translation of a floating frame while the compositor is still reporting the output the frame was
+      // carried away from, and that uncertainty cannot outlive a pause of arbitrary length. Keeping them
+      // across an ON could only suppress a genuine later carry back to the same output -- a frame left
+      // behind on the display the user told it to leave -- and a fresh enable starts with none.
+      this._carriedFloating.clear();
+    });
+    if (this._disposed) return;
+    // The ON path ADOPTS the compositor's focus rather than pushing its own -- `_layoutAndPublish`'s
+    // `isNew` branch ends in `_acceptFocus(windows.focused())` -- and that is right: the user spent the
+    // paused interval clicking windows, and whatever they left focused is what the rebuilt tree has to
+    // agree with. Re-asserting the tree's own selection here would take the keyboard off it.
+    //
+    // The hole is the state where the answer is "nothing": no focus to adopt, and no command yet to push
+    // one. `commit()` above is synchronous, so the tree the hand-off reads has already been rebuilt.
+    if (this._ports.windows.focused() === null) this._handOffFocus();
+  }
+
+  /**
+   * Every window the engine parked goes back to the live GNOME workspace.
+   *
+   * This is the substantive half of switching off. An i3 workspace no output is showing has its windows
+   * on `ATTIC_WORKSPACE`, which Mutter refuses to render -- that refusal IS the hiding primitive. Leaving
+   * them there with the engine no longer committing would leave them invisible and unreachable with
+   * nothing running to bring them back: the "audible but invisible window" failure this project was
+   * started to fix, caused by its own off switch.
+   *
+   * It iterates `_windows`, the engine's own record of every window it tracks, NOT the tree. A window
+   * that is minimized, sticky or skip-taskbar is evicted from the tree and held in `_minimized`, and if it
+   * was parked before it was evicted it is sitting in the attic with no tree membership at all. A
+   * tree walk would leave exactly those windows behind, and a minimized window is the commonest thing on
+   * a desktop. `_windows` is also the view every other reader in this file uses for a native workspace
+   * (`_reconcileParking` compares against the same field), so this adds no second source of truth.
+   *
+   * Only a window that is not already live is asked about, matching `_reconcileParking`'s own guard: a
+   * flush that re-asserted every window's workspace would be one port call per window for no change.
+   */
+  private _flushAttic(): void {
+    for (const [id, info] of this._windows) {
+      if (info.workspace === LIVE_WORKSPACE) continue;
+      if (!this._ports.windows.moveToWorkspace(id, LIVE_WORKSPACE))
+        this._ports.log.warn(`could not return window ${id} from the attic; it may stay hidden`);
+      if (this._disposed) return;
+    }
   }
 
   private _copyFlatPills(): PillState[] {
@@ -1533,7 +1944,7 @@ export class Engine {
       return false;
     }
     this._mode = name;
-    if (!this._locked)
+    if (!this._suspended)
       this._ports.keys.setBindings(this._modeBindings(name));
     this._ports.indicator.setMode(name === 'default' ? null : name);
     return true;
@@ -1578,7 +1989,7 @@ export class Engine {
       this._ports.settings.apply(config, count);
       if (this._disposed) return;
       this._mode = 'default';
-      if (!this._locked) {
+      if (!this._suspended) {
         const report = this._ports.keys.setBindings(this._modeBindings('default'));
         if (this._disposed) return;
         if (report.failed.length > 0)
@@ -1588,7 +1999,7 @@ export class Engine {
       if (this._disposed) return;
       this._pushColors();
       if (this._disposed) return;
-      this._ports.indicator.setVisible(!this._locked);
+      this._ports.indicator.setVisible(!this._suspended);
       if (this._disposed) return;
 
       if (warnings.length > 0)
@@ -2084,6 +2495,9 @@ export class Engine {
       case 'mode':
         return this._enterMode(command.name) ? `mode ${command.name}` : `mode "${command.name}" is not defined`;
       case 'launcher': {
+        // No `_paused` twin for this: `run()` refuses every command before `_runOne` is reached, so a
+        // second refusal here would be unreachable code. `_applyRules` is the only other caller and it
+        // runs from inside a commit, which is itself paused.
         if (this._locked) return 'launcher: refused while the session is locked';
         const area = this._launcherArea();
         if (!area) {
@@ -2108,6 +2522,17 @@ export class Engine {
           this._minimized.clear();
           this._raiseOrders.clear();
           this._lastFocus = null;
+          // The same per-enable reset `setTilingEnabled(true)` makes, and no more a second maintenance
+          // site here than there: a restart nulls the tree, so it lands in the `isNew` branch whose
+          // `_acceptFocus(focused())` adopts the compositor's focus -- and an activation the engine
+          // asked for just before the restart, whose report has not arrived yet, would suppress exactly
+          // that adoption and leave the selection wherever the restore loop put it.
+          this._expectedFocus.clear();
+          // Beside the resets above for the same reason `setTilingEnabled(true)` clears it: a carry record
+          // suppresses ONE repeat translation while the compositor still reports the output the frame was
+          // carried away from, and a restart is a fresh enable, which starts with none. Kept, it would
+          // suppress a genuine later carry back to that same output.
+          this._carriedFloating.clear();
         });
         return 'restarted';
       case 'nop':

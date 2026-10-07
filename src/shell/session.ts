@@ -11,6 +11,11 @@ export class SessionWatcher {
 
   constructor(tracker: SignalTracker, onLocked: () => void, onUnlocked: () => void) {
     this._state = new SessionState(Main.sessionMode.isLocked || !Main.sessionMode.hasWindows, onLocked, onUnlocked);
+    // UNCHECKED CONNECT, and deliberately not `connectUnchecked`. @girs declares
+    // `export declare const sessionMode: any` (`main.d.ts:85`), so `HandlerFor` takes its `IsAny` branch
+    // and this handler's shape is not checked -- the hatch would add nothing an `any` emitter does not
+    // already give. Marked anyway, because `rg connectUnchecked src/` finds one hatch while TWO sites are
+    // unchecked, and an audit by grep would otherwise undercount. Grep both names to get the real number.
     tracker.connect(Main.sessionMode, 'updated', () =>
       this._state.update(Main.sessionMode.isLocked || !Main.sessionMode.hasWindows));
   }

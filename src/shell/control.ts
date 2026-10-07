@@ -1,6 +1,7 @@
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import type {Engine} from '../engine';
@@ -8,6 +9,7 @@ import {ControlObject} from './controlObject';
 import type {Launcher} from './launcher';
 import {log} from './log';
 import type {SessionWatcher} from './session';
+import type {TilingToggle} from './tilingToggle';
 import {guard} from './util/signals';
 
 const BUS_NAME = 'org.i3shell.Control';
@@ -50,6 +52,21 @@ const DEBUG_IFACE = `<node>
       <arg type="s" direction="in" name="direction"/>
       <arg type="b" direction="out" name="ok"/>
     </method>
+    <method name="SetTiling">
+      <arg type="b" direction="in" name="enabled"/>
+      <arg type="s" direction="out" name="json"/>
+    </method>
+    <method name="MutterWindows"><arg type="s" direction="out" name="json"/></method>
+    <method name="TilingToggleBox"><arg type="s" direction="out" name="json"/></method>
+    <method name="QuickSettingsMenu">
+      <arg type="b" direction="in" name="open"/>
+      <arg type="b" direction="out" name="ok"/>
+    </method>
+    <method name="ClickAt">
+      <arg type="i" direction="in" name="x"/>
+      <arg type="i" direction="in" name="y"/>
+      <arg type="b" direction="out" name="ok"/>
+    </method>
   </interface>
 </node>`;
 
@@ -80,12 +97,241 @@ export function accelToKeyvals(accel: string): number[] | null {
   return keyvals;
 }
 
+/**
+ * One window as MUTTER describes it. Every field is read off `Meta.Window` itself, never off anything
+ * this extension remembers; see `MutterWindows` for why that distinction is the whole point.
+ */
+interface MutterWindowReading {
+  /** `Meta.Window.get_id()`. Not the engine's `WindowId`, which is a counter the engine owns. */
+  nativeId: number;
+  title: string;
+  /** `get_workspace().index()`, or -1 when Mutter says the window is on no workspace at all. */
+  workspace: number;
+  minimized: boolean;
+  skipTaskbar: boolean;
+  sticky: boolean;
+  /** Which enumeration found it: `tabList`, and/or `workspace<N>`. See `MutterWindows`. */
+  sources: string[];
+}
+
+/** Mutter's own answer to "how many workspaces are there and what is on each of them". */
+interface MutterReading {
+  nWorkspaces: number;
+  activeWorkspace: number;
+  /** `Main.modalCount`: the Shell's own count of live modal grabs, not the launcher's bookkeeping. */
+  modalCount: number;
+  /**
+   * `global.display.focus_window`: WHO HAS THE KEYBOARD, as Mutter has it. Permanent, and added after two
+   * native rounds were spent on a focus failure that could not report this -- `GetWindows` publishes no
+   * focused flag, and the harness's only other oracle is "type a key and see where it lands", which
+   * cannot distinguish "nobody is focused" from "the focused window is not receiving".
+   */
+  focusedWindow: {nativeId: number; title: string} | null;
+  /**
+   * `global.stage.get_key_focus()`, as a readable string. Clutter's key focus and Mutter's
+   * `focus_window` can disagree: while any Shell actor holds the key focus the keyboard goes there and
+   * not to the focused window, whatever `focus_window` says, and `modalCount` can already be back to 0.
+   *
+   * NULL IS THE ORDINARY ANSWER, measured on native run 3: this Clutter returns null when no actor holds
+   * the key focus, which is exactly the state in which the keyboard belongs to `focusedWindow`. It is
+   * also what GNOME's own `Main.popModal` restores after a Shell grab whose `pushModal` saved a null --
+   * i.e. whenever a window rather than a Shell actor had the keyboard when the grab was taken. A non-null
+   * St actor here is the interesting case, not this one.
+   */
+  stageKeyFocus: string | null;
+  windows: MutterWindowReading[];
+}
+
 /** Test-build only: lets the integration harness press keys and fake the lock screen. */
 export class DebugObject {
   private _keyboard: Clutter.VirtualInputDevice | null = null;
+  private _pointer: Clutter.VirtualInputDevice | null = null;
 
   constructor(private readonly _session: SessionWatcher, private readonly _engine: Engine,
-    private readonly _launcher: Launcher) {}
+    private readonly _launcher: Launcher, private readonly _toggle: TilingToggle,
+    private readonly _setTiling: (enabled: boolean) => void) {}
+
+  /**
+   * Switch tiling off or on exactly as the Quick Settings switch does, and report what MUTTER had
+   * either side of the call.
+   *
+   * `_setTiling` is the closure `src/extension.ts` hands to `TilingToggle` -- `Engine.setTilingEnabled`
+   * followed by `TilingToggle.setChecked(engine.tilingEnabled)` -- and not `Engine.setTilingEnabled`
+   * directly. One route in, deliberately: a scenario driving the engine past the snap-back would leave
+   * the visible switch free to disagree with the engine and nothing would ever notice, and the snap-back
+   * is the line that makes a REFUSED change show the truth instead of inverting every click after it.
+   *
+   * WHY THIS RETURNS A READING AND NOT NOTHING. The OFF path flushes the attic and THEN restores the
+   * user's GSettings, including their workspace count: a flush that ran after the restore would have
+   * moved windows onto workspaces that no longer exist. Nothing a client can poll afterwards can tell
+   * those two orders apart, because by then Mutter has acted on the restored settings either way. These
+   * two readings can: both are taken inside this one D-Bus call, so no main-loop turn separates them
+   * from the flush, and `before.nWorkspaces === after.nWorkspaces === 2` with an empty attic in `after`
+   * says the moves landed while the attic still existed. GSettings dispatches its `changed` signals from
+   * the main loop, so the restore cannot have reached Mutter before `after` is read.
+   */
+  SetTiling(enabled: boolean): string {
+    try {
+      const before = this._readMutter();
+      this._setTiling(enabled);
+      return JSON.stringify({requested: enabled, before, after: this._readMutter()});
+    } catch (error) {
+      log.error(`SetTiling ${enabled} failed`, error);
+      return JSON.stringify({error: String(error)});
+    }
+  }
+
+  /**
+   * Where Mutter -- not this extension -- says every window is.
+   *
+   * This exists because asking the extension whether it moved a window is circular. `GetWindows`
+   * publishes `info.workspace` from the engine's own cache, and the question a toggle scenario asks is
+   * precisely whether that cache agrees with the compositor: a scenario built on it would pass with every
+   * single `moveToWorkspace` silently refused.
+   *
+   * TWO ENUMERATIONS, UNIONED, and the second one is not belt-and-braces. `get_tab_list` drops every
+   * skip-taskbar window at the source (`meta_window_is_in_tab_chain` returns FALSE for one, for every
+   * tab-list type), and a skip-taskbar window is one of the three things `Engine._flushAttic` exists to
+   * rescue -- so a reader built on the tab list alone would report an empty attic for exactly the window
+   * most likely to be stranded in it. `Meta.Workspace.list_windows()` has no such filter. `sources` says
+   * which pass saw each window, so a failure shows whether a window was found only by the workspace walk.
+   *
+   * NORMAL_ALL, not NORMAL: `NORMAL` drops minimized windows, and a minimized window parked before it
+   * was minimized is the other thing the flush exists to rescue.
+   */
+  MutterWindows(): string {
+    try {
+      return JSON.stringify(this._readMutter());
+    } catch (error) {
+      log.error('MutterWindows failed', error);
+      return JSON.stringify({error: String(error)});
+    }
+  }
+
+  /**
+   * The Quick Settings switch as ST has it: its own `checked`, and the on-screen box a real click needs.
+   *
+   * `checked` is read off the widget, never off what this extension believes, because the one thing no
+   * unit fake can answer is what GNOME 50's `St.Button` does with `checked` around its own `clicked`
+   * emission -- the single assumption `src/shell/tilingToggle.ts` is built to survive either way.
+   * `enabled` beside it is what the class last recorded from the engine, so a failure separates "the
+   * engine never answered" from "the answer never reached the widget".
+   */
+  TilingToggleBox(): string {
+    try {
+      const menu = Main.panel.statusArea.quickSettings?.menu;
+      return JSON.stringify({...this._toggle.debugState(), menuOpen: menu ? menu.isOpen : false});
+    } catch (error) {
+      log.error('TilingToggleBox failed', error);
+      return JSON.stringify({error: String(error)});
+    }
+  }
+
+  /**
+   * Open or close the Quick Settings menu, with no animation.
+   *
+   * A quick toggle is unmapped and unclickable while the menu is shut, so this is the price of clicking
+   * the real widget rather than calling into it. It is the ONLY part of the click that is synthesised:
+   * the press itself goes through `ClickAt`'s virtual pointer and reaches `St.Button` as an ordinary
+   * event, which is what makes the `clicked`-versus-`checked` ordering a measured fact for once.
+   */
+  QuickSettingsMenu(open: boolean): boolean {
+    try {
+      const quickSettings = Main.panel.statusArea.quickSettings;
+      if (!quickSettings) {
+        log.error('QuickSettingsMenu: this session mode has no quick settings');
+        return false;
+      }
+      if (open)
+        quickSettings.menu.open();
+      else
+        quickSettings.menu.close();
+      return quickSettings.menu.isOpen === open;
+    } catch (error) {
+      log.error(`QuickSettingsMenu ${open} failed`, error);
+      return false;
+    }
+  }
+
+  /**
+   * One real primary-button click at an absolute screen position.
+   *
+   * A virtual pointer device, not `St.Button.emit('clicked')` and not `WarpPointer` plus a synthetic
+   * signal: the three events below enter Clutter's event queue in order on one device and are delivered
+   * by the compositor, so whatever GNOME 50's click gesture does to `checked` relative to `clicked`
+   * happens for real. That ordering is the one assumption `TilingToggle` cannot observe from inside, and
+   * this project has shipped four defects that lived exactly where a fake answered for the compositor.
+   *
+   * `Clutter.BUTTON_PRIMARY`, not an evdev code: the virtual-device API takes Clutter button numbers and
+   * each backend translates (the native backend to `BTN_LEFT`, the nested X11 one to X button 1).
+   */
+  ClickAt(x: number, y: number): boolean {
+    try {
+      this._pointer ??= Clutter.get_default_backend().get_default_seat()
+        .create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+      const pointer = this._pointer;
+      const now = (): number => GLib.get_monotonic_time();
+      pointer.notify_absolute_motion(now(), Math.round(x), Math.round(y));
+      pointer.notify_button(now(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
+      pointer.notify_button(now(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
+      return true;
+    } catch (error) {
+      log.error(`ClickAt ${x},${y} failed`, error);
+      return false;
+    }
+  }
+
+  private _readMutter(): MutterReading {
+    const manager = global.workspace_manager;
+    const order: Meta.Window[] = [];
+    const sources = new Map<Meta.Window, string[]>();
+    const mark = (window: Meta.Window, source: string): void => {
+      const seen = sources.get(window);
+      if (seen) {
+        seen.push(source);
+        return;
+      }
+      sources.set(window, [source]);
+      order.push(window);
+    };
+    for (const window of global.display.get_tab_list(Meta.TabList.NORMAL_ALL, null))
+      mark(window, 'tabList');
+    const nWorkspaces = manager.get_n_workspaces();
+    for (let index = 0; index < nWorkspaces; index++) {
+      const workspace = manager.get_workspace_by_index(index);
+      if (!workspace) continue;
+      for (const window of workspace.list_windows())
+        mark(window, `workspace${index}`);
+    }
+    // @girs types both of these non-nullable; Mutter has no focused window whenever the Shell itself
+    // holds the focus, and Clutter returns null for the key focus in the same situations.
+    const focus = global.display.focus_window as Meta.Window | null;
+    const keyFocus = global.stage.get_key_focus() as Clutter.Actor | null;
+    return {
+      nWorkspaces,
+      activeWorkspace: manager.get_active_workspace_index(),
+      focusedWindow: focus === null ? null : {nativeId: focus.get_id(), title: focus.get_title() ?? ''},
+      stageKeyFocus: keyFocus === null ? null
+        : `${keyFocus.constructor.name} ${String(keyFocus.name ?? '')}`.trim(),
+      // Typed `any` by @girs (ui/main.d.ts); it is a plain number at runtime, and it is the Shell's own
+      // count rather than anything the launcher remembers about its grab.
+      modalCount: Number(Main.modalCount),
+      windows: order.map(window => {
+        // @girs types this non-nullable, as it does get_compositor_private(); Mutter returns null for a
+        // window that is on no workspace, and -1 is out of band for every real index.
+        const workspace = window.get_workspace() as Meta.Workspace | null;
+        return {
+          nativeId: window.get_id(),
+          title: window.get_title() ?? '',
+          workspace: workspace ? workspace.index() : -1,
+          minimized: window.minimized,
+          skipTaskbar: window.is_skip_taskbar(),
+          sticky: window.is_on_all_workspaces(),
+          sources: sources.get(window) ?? [],
+        };
+      }),
+    };
+  }
 
   SimulateSessionMode(locked: boolean): void {
     try {
@@ -203,6 +449,14 @@ export class DebugObject {
 
 export class DBusControl {
   private readonly _control: Gio.DBusExportedObject;
+  // Tracked beside `_control` rather than by nulling it, deliberately. `g_dbus_interface_skeleton_unexport`
+  // is a `g_return_if_fail (connections != NULL)`: called on a skeleton that is not exported it logs
+  // GLib-GIO-CRITICAL and RETURNS, so the only defence is not to call it twice. `_debug` gets that for free
+  // by being nulled, but `_control` is also the TreeChanged emit target and is held for the object's whole
+  // life; making it nullable would put a `?.` at a call site whose real precondition is `_publishing`, and
+  // leave two differently-meaning null checks for a reader to tell apart. A boolean names the one GLib
+  // precondition it stands for, and a later export (a re-enable constructs a new DBusControl) sets it again.
+  private _controlExported = false;
   private _debug: Gio.DBusExportedObject | null = null;
   private _ownerId = 0;
   private _unsubscribe: (() => void) | null = null;
@@ -223,10 +477,15 @@ export class DBusControl {
       new ControlObject(engine, () => global.get_current_time(), shellState, log));
     try {
       this._control.export(Gio.DBus.session, OBJECT_PATH);
+      this._controlExported = true;
       // __I3SHELL_TEST__ is a compile-time literal, so release builds drop this branch and DEBUG_IFACE with it.
       if (__I3SHELL_TEST__ && debug !== null) {
-        this._debug = Gio.DBusExportedObject.wrapJSObject(DEBUG_IFACE, debug);
-        this._debug.export(Gio.DBus.session, OBJECT_PATH);
+        const debugSkeleton = Gio.DBusExportedObject.wrapJSObject(DEBUG_IFACE, debug);
+        // Assigned only after the export succeeded, for the same reason `_controlExported` exists:
+        // `_stopPublishing` unexports whatever `_debug` holds, and a skeleton stored before a throwing
+        // export would be unexported without ever having been exported -- the same silent critical.
+        debugSkeleton.export(Gio.DBus.session, OBJECT_PATH);
+        this._debug = debugSkeleton;
         log.info('test build: org.i3shell.Debug exported');
       }
       this._publishing = true;
@@ -267,7 +526,15 @@ export class DBusControl {
     }
     try { this._debug?.unexport(); } catch (error) { log.error('debug D-Bus unexport failed', error); }
     this._debug = null;
-    try { this._control.unexport(); } catch (error) { log.error('control D-Bus unexport failed', error); }
+    // Reachable three times over one object's life -- the name-loss callback, the constructor's catch and
+    // destroy() -- and --name-conflict really does hit two of them in that order. The `try` below cannot
+    // stand in for this guard: an unexport of an already-unexported skeleton does not throw, it logs a
+    // critical and returns, which is why the double unexport went unnoticed until the gate was widened to
+    // see GLib-GIO-CRITICAL. The flag is cleared first so a throwing unexport cannot leave it set.
+    if (this._controlExported) {
+      this._controlExported = false;
+      try { this._control.unexport(); } catch (error) { log.error('control D-Bus unexport failed', error); }
+    }
     if (releaseOwnership && this._ownerId !== 0) {
       const ownerId = this._ownerId;
       this._ownerId = 0;

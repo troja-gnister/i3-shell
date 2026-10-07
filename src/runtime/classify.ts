@@ -1,5 +1,25 @@
 import type {WindowFacts, WindowInfo, WindowKind} from './model';
 
+/**
+ * i3's own classification, and the whole of what this project does with `transient`.
+ *
+ * `transient` makes a window FLOAT and nothing else. It does not place the window: a transient joins the
+ * FOCUSED workspace like any other new window (see `Engine._adoptionWorkspace`, D7). That is i3's
+ * behaviour, measured rather than assumed -- every `transient_for` string in the installed i3 4.25.1
+ * binary was read (i3's source was not available, so this is strong evidence, not absolute proof); it
+ * uses WM_TRANSIENT_FOR for exactly two things, "This window is transient for another window, setting floating" and
+ * `con_find_transient_for_window`, which answers `popup_during_fullscreen smart`. There is no
+ * parent-following placement rule in i3 and there is none here.
+ *
+ * Why that is also the right answer for this project, so the question is not re-opened: a modal dialog
+ * that followed its parent onto a workspace on a display the user is not looking at would be a modal grab
+ * on an invisible window -- the parent blocked, the dialog unreachable, and no obvious way back.
+ *
+ * Deliberately NOT carried on `WindowInfo`: a `transientFor` window id would be a new fact to keep in
+ * sync with Mutter and read by nothing, since the only consumer that would want it is
+ * `popup_during_fullscreen`, which is unimplemented and unbound in the user's config.
+ * (Ruling: docs/superpowers/plans/2026-10-06-cleanup-and-toggle.md, Task 3.)
+ */
 export function classifyWindow(f: WindowFacts): WindowKind | null {
   if (f.type === 'ignored') return null;
   if (f.type !== 'normal' || f.transient || f.attached || !f.resizable)

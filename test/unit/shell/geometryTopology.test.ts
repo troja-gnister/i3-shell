@@ -12,21 +12,46 @@ interface FakeWorkspace {
   areas: ReadonlyMap<number, Rect>;
 }
 
+/**
+ * `logicalCount` is Mutter's OWN logical-monitor count, and it is a required argument rather than
+ * something derived from `indexes` on purpose: the whole class of defect this file guards is the two
+ * disagreeing, so a fixture that computed one from the other could never express it.
+ */
 function source(
   monitors: readonly FakeMonitor[],
   indexes: ReadonlyMap<string, number>,
   primary: number,
   workspaces: readonly FakeWorkspace[],
+  logicalCount: number,
 ): TopologySource<FakeMonitor, FakeWorkspace> {
   return {
     monitors: () => monitors,
     isActive: monitor => monitor.active,
     connector: monitor => monitor.connector,
     indexForConnector: connector => indexes.get(connector) ?? -1,
+    logicalMonitorCount: () => logicalCount,
     primaryIndex: () => primary,
     workspaceCount: () => workspaces.length,
     workspace: index => workspaces[index] ?? null,
     workArea: (workspace, index) => workspace.areas.get(index) ?? null,
+  };
+}
+
+/** Wraps a source so the test can see every monitor number that actually reached `workArea`. */
+function recording(base: TopologySource<FakeMonitor, FakeWorkspace>): {
+  source: TopologySource<FakeMonitor, FakeWorkspace>;
+  asked: number[];
+} {
+  const asked: number[] = [];
+  return {
+    asked,
+    source: {
+      ...base,
+      workArea: (workspace, index) => {
+        asked.push(index);
+        return base.workArea(workspace, index);
+      },
+    },
   };
 }
 
@@ -47,6 +72,7 @@ describe('readTopology', () => {
       new Map([['HDMI-1', 1], [connector, index]]),
       1,
       [{areas: new Map([[1, {x: 0, y: 0, width: 1000, height: 700}]])}],
+      2,
     ));
 
     expect(result).toBeNull();
@@ -62,6 +88,7 @@ describe('readTopology', () => {
       new Map([['HDMI-1', 1]]),
       2,
       [{areas: new Map([[1, {x: 0, y: 0, width: 1000, height: 700}]])}],
+      2,
     ))).toBeNull();
     expect(ids.id(0)).toBe(oldId);
     expect(ids.id(1)).toBeUndefined();
@@ -75,6 +102,7 @@ describe('readTopology', () => {
       new Map([['HDMI-1', 1]]),
       1,
       [{areas: new Map([[1, {x: 0, y: 0, width: 0, height: 700}]])}],
+      2,
     ))).toBeNull();
     expect(ids.id(0)).toBe(oldId);
     expect(ids.id(1)).toBeUndefined();
@@ -101,6 +129,7 @@ describe('readTopology', () => {
           [1, {x: 1200, y: 0, width: 1600, height: 900}],
         ])},
       ],
+      2,
     ));
 
     const internal = ids.id(0)!;
@@ -129,6 +158,7 @@ describe('readTopology', () => {
         [0, {x: 0, y: 32, width: 3840, height: 1048}],
         [1, {x: 3840, y: 28, width: 1920, height: 1052}],
       ])})),
+      2,
     ));
 
     expect(topology).not.toBeNull();
@@ -148,9 +178,103 @@ describe('readTopology', () => {
         [0, {x: 0, y: 32, width: 3840, height: 1048}],
         [1, {x: 3840, y: 28, width: 1920, height: 1052}],
       ])}],
+      2,
     ));
 
     expect(topology).not.toBeNull();
     expect(topology!.workAreas.size).toBe(2);
+  });
+
+  // ------------------------------------------------------------------------
+  // A logical-monitor number Mutter's logical-monitor list does not hold
+  // ------------------------------------------------------------------------
+  //
+  // THIS IS NOT A REGRESSION TEST FOR THE --hotplug CRITICALS. `phase5-checks.py --hotplug` does make
+  // Mutter log this pair:
+  //
+  //   libmutter-CRITICAL meta_monitor_manager_get_logical_monitor_from_number:
+  //       assertion '(unsigned int) number < g_list_length (manager->logical_monitors)' failed
+  //   libmutter-CRITICAL meta_workspace_get_work_area_for_monitor:
+  //       assertion 'logical_monitor != NULL' failed
+  //
+  // but the caller is not this extension. src/shell/geometry.ts holds the project's only call into
+  // either API; it was instrumented to log the index it passes and the live
+  // `get_logical_monitors().length` on every call, and over a `--hotplug` run all 106 calls had
+  // index < count, with the first work-area call of the reconfiguration arriving 39 ms AFTER the
+  // criticals were already logged. test/integration/criticals.sh excludes both texts by name and records
+  // that measurement; `readTopology`'s guard has never been observed to fire.
+  //
+  // WHAT THIS TEST IS FOR. Because the gate now excludes
+  // `meta_workspace_get_work_area_for_monitor: assertion 'logical_monitor != NULL' failed` -- which is
+  // also what a bad call of OURS would print -- this test is the only thing left that can catch one. The
+  // two Mutter questions index two different lists (`get_monitor_for_connector` the monitor list,
+  // `get_work_area_for_monitor` the logical-monitor list), nothing promises a number from the first is
+  // valid for the second, so the guard holds the invariant that no such number reaches Mutter.
+  //
+  // THE FIXTURE CARRIES THREE OUTPUTS, and that is the whole point of it. The stale number is exactly
+  // the logical count, so every OTHER count in reach of this function accepts it -- `monitors()` is 3,
+  // the active monitors are 3, `groups.size` is 3, `workspaceCount()` is 7 -- and only Mutter's own
+  // logical-monitor count rejects it. With two outputs the same fixture would pass against a guard
+  // written on any of those, which is how this file has produced vacuous tests before.
+  it('never asks Mutter for the work area of a logical monitor number it no longer has', () => {
+    const {ids, oldId} = seededIds();
+    // The fake answers a zeroed rect for the number Mutter would refuse. That models what a
+    // `g_return_if_fail` early return plausibly leaves behind; it is this fixture's assumption about
+    // Mutter, not something measured. Nothing asserted below depends on it: the guard's job is that
+    // the number never reaches `workArea` at all, so the rect is never read.
+    const zeroed = {x: 0, y: 0, width: 0, height: 0};
+    const {source: probe, asked} = recording(source(
+      [
+        {active: true, connector: 'DP-1'},
+        {active: true, connector: 'DP-2'},
+        {active: true, connector: 'HDMI-1'},
+      ],
+      new Map([['DP-1', 0], ['DP-2', 1], ['HDMI-1', 2]]),
+      0,
+      Array.from({length: 7}, () => ({areas: new Map([
+        [0, {x: 0, y: 32, width: 1920, height: 1048}],
+        [1, {x: 1920, y: 32, width: 1280, height: 688}],
+        [2, zeroed],
+      ])})),
+      2,
+    ));
+
+    const result = readTopology(ids, probe);
+
+    // The assertion that fails if the `index >= logicalCount` guard is removed: 2 reaches Mutter.
+    expect(asked).not.toContain(2);
+    expect(asked).toEqual([]);
+    expect(result).toBeNull();
+    expect(ids.id(0)).toBe(oldId);
+    expect(ids.id(2)).toBeUndefined();
+  });
+
+  it('still publishes every output when Mutter has a logical monitor for each of three', () => {
+    // The complementary prediction, so the guard above cannot be satisfied by refusing a real desk: the
+    // same three outputs with a logical monitor each must still produce three work areas, and the
+    // highest number (2) must still be asked for.
+    const ids = new MonitorIds();
+    const {source: probe, asked} = recording(source(
+      [
+        {active: true, connector: 'DP-1'},
+        {active: true, connector: 'DP-2'},
+        {active: true, connector: 'HDMI-1'},
+      ],
+      new Map([['DP-1', 0], ['DP-2', 1], ['HDMI-1', 2]]),
+      0,
+      Array.from({length: 7}, () => ({areas: new Map([
+        [0, {x: 0, y: 32, width: 1920, height: 1048}],
+        [1, {x: 1920, y: 32, width: 1280, height: 688}],
+        [2, {x: 3200, y: 32, width: 2560, height: 1408}],
+      ])})),
+      3,
+    ));
+
+    const topology = readTopology(ids, probe);
+
+    expect(asked).toEqual([0, 1, 2]);
+    expect(topology).not.toBeNull();
+    expect(topology!.monitors.map(m => m.index)).toEqual([0, 1, 2]);
+    expect(topology!.workAreas.get(ids.id(2)!)).toEqual({x: 3200, y: 32, width: 2560, height: 1408});
   });
 });

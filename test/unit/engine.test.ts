@@ -289,6 +289,56 @@ describe('Engine', () => {
     });
   });
 
+  // Task 3, the transient ruling. i3 4.25.1 uses WM_TRANSIENT_FOR for two things only -- it floats the
+  // window, and it answers `popup_during_fullscreen smart` -- and places a transient on the FOCUSED
+  // workspace like any other new window. These tests exist so that a future patch which "makes dialogs
+  // follow their parent" fails loudly instead of silently moving a modal grab onto a display nobody is
+  // looking at. See the ruling in docs/superpowers/plans/2026-10-06-cleanup-and-toggle.md, Task 3.
+  //
+  // The engine cannot see `transient_for` (the adapter reduces it to kind: 'floating'), so "a dialog"
+  // here is a floating window whose Mutter monitor is its parent's.
+  //
+  // BLIND SPOT: these catch a D7 revert or a follow-Mutter's-monitor patch, NOT a real parent-following
+  // one. That patch must add `transientFor` to WindowInfo, and these fixtures never set it, so its new
+  // clause would see null and fall through to D7. Whoever adds `transientFor` must ALSO set it in these
+  // fixtures (parent = window 1) or these tests stay green.
+  //
+  // Fixture: the parent is on the
+  // NON-focused output and the dialog's `monitor` names that same output, so "follow the parent" and
+  // "follow Mutter's monitor" both answer workspace 1 while "follow the focus" answers workspace 0.
+  describe('a transient opens where the user is, the way i3 places one', () => {
+    const twoOutputs = () => fakePorts(referenceText,
+      {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});
+
+    it('a dialog lands on the focused output workspace, not on its parent’s', () => {
+      const f = twoOutputs();
+      f.engine.start();
+      f.mapOn(1, 1);   // the parent, on output 1's workspace 1
+      expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: false});
+      // The user goes back to the primary, then the parent opens a dialog beside itself.
+      expect(f.engine.run([{type: 'focus_output', target: 'left'}], 1)).toBe('focus output');
+      expect(f.tree().focusedOutput).toBe(0);
+      f.add(2, {monitor: 1, kind: 'floating'}); f.flush();
+
+      expect(f.tree().location(2)).toEqual({workspace: 0, output: 0, floating: true});
+      expect(f.engine.state().focusedOutput).toBe(0);
+    });
+
+    it('a dialog whose parent is not in the tree still lands on the focused output workspace', () => {
+      // A parent that is sticky (or skip-taskbar, or closed between map and sync) has no tree location to
+      // follow. Nothing consults the parent today; this makes a parent-following patch fail rather than
+      // throw or park the dialog in the attic.
+      const f = twoOutputs();
+      f.engine.start();
+      f.mapOn(1, 1, {sticky: true});
+      expect(f.tree().location(1)).toBeNull();   // sticky is excluded from the tree from birth
+      expect(f.engine.run([{type: 'focus_output', target: 'left'}], 1)).toBe('focus output');
+      f.add(2, {monitor: 1, kind: 'floating'}); f.flush();
+
+      expect(f.tree().location(2)).toEqual({workspace: 0, output: 0, floating: true});
+    });
+  });
+
   describe('showOnOutputForTest (the attic swap)', () => {
     it('parks the outgoing workspace’s windows and un-parks the incoming ones', () => {
       const f = fakePorts(referenceText, {monitors: [{id: 0, index: 0}, {id: 1, index: 1}], primary: 0, workspaceCount: 10});

@@ -1115,6 +1115,129 @@ describe('workspace and focus on two displays (Task 19)', () => {
     expect(f.engine.state().focusedOutput).toBe(2);
     expect(f.engine.state().activeWorkspace).toBe(0);
   });
+
+  // Task 4, D8's gap under `focus_follows_mouse no`. The suppression is durable and ends only when the
+  // focused output moves or its workspace gains a window; with the pointer inert there is no crossing to
+  // end it, so a deliberate click on another display was ignored for focus purposes. A click needs the
+  // pointer over the window, so the crossing reported by src/shell/pointer.ts is the evidence -- and it
+  // arrives even when `focus_follows_mouse no` forbids acting on it.
+  describe('a pointer crossing ends the involuntary-focus suppression', () => {
+    // What discriminates here is the INTERMEDIATE `expect(focusedOutput).toBe(1)` after the crossing, not
+    // the output count. An implementation that ended the suppression by *moving* the focused output (i.e.
+    // one that ignored `focus_follows_mouse`) fails there, with `expected 2 to be 1`, and never reaches
+    // the final assertion.
+    //
+    // Fix round 1, I1: these tests used to claim the third output was load-bearing -- that a
+    // focused-output move would make the final assertion answer 2. Measured, that is false twice over:
+    // such an implementation dies at the intermediate assertion first, and had it got past it the answer
+    // would be 3 anyway, because once the stale record no longer equals `focusedOutput` clause 1 of
+    // `_involuntaryFocus` fails, the report is honoured and D5 claims output 3 by itself. The reviewer
+    // reduced the fixture to two outputs and all four tests passed on HEAD and failed identically under
+    // every mutation below. The rationale had been copied from the D8 report, where the lapse genuinely
+    // WAS a focused-output move and a third output did separate the two answers; this lapse writes no
+    // output at all, so that trap cannot arise. Three outputs are kept only because they match the D8
+    // lapse test next door and keep "the display crossed to" and "the display reported" visibly distinct
+    // in the fixture -- no assertion here depends on the count.
+    const threeOutputs = (text: string) => fakeEngine(text, {
+      monitors: [{id: 1, index: 0}, {id: 2, index: 1}, {id: 3, index: 2}], primary: 1, workspaceCount: 10,
+    });
+
+    it('honours a focus report on another display once the pointer has crossed, with the pointer inert', () => {
+      const f = threeOutputs('focus_follows_mouse no\nbindsym Mod4+q kill');
+      f.engine.start();
+      f.mapOn(3, 7);                        // a window on output 3's workspace
+      f.mapOn(1, 8);                        // and one on the primary, which holds native focus
+      f.focus(8);
+      // The user switches the primary to an empty workspace: the premise of D8. Mutter has nothing on
+      // this display to focus, so it reports window 7 on output 3 and the suppression holds.
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: 5, name: '5'}}], 1);
+      // The fake emits the replacement pick the real compositor does (fakeEngine's moveToWorkspace), so
+      // the suppressed report has already arrived by here; asserting it is the premise of the test.
+      expect(f.engine.state().focusedOutput).toBe(1);
+
+      // Now the user moves the mouse onto output 2 and clicks a window on output 3. (Two steps, because
+      // that is what it takes: `focus_follows_mouse no` means the crossing itself moves nothing.)
+      f.engine.onPointerOutput(2);
+      expect(f.engine.state().focusedOutput).toBe(1);   // the crossing alone moves nothing
+      // `focus(null)` first, and it is not padding: `_acceptFocus` drops a report whose id equals the
+      // last one, and Mutter really does unset the input focus between picks -- the measured behaviour
+      // the D8 report's round 2 is built on. Without it this second report is a duplicate and the test
+      // would pass or fail for a reason that has nothing to do with the lapse.
+      f.focus(null);
+      f.focus(7);
+      expect(f.engine.state().focusedOutput).toBe(3);   // the report after the crossing is the user's
+    });
+
+    it('keeps suppressing when the pointer crosses back onto the focused output itself', () => {
+      // D8's own native scenario warps the pointer onto the FOCUSED output, so a lapse on any crossing
+      // at all would have broken D8 on the run that found it.
+      const f = threeOutputs('focus_follows_mouse no\nbindsym Mod4+q kill');
+      f.engine.start();
+      f.mapOn(3, 7);
+      f.mapOn(1, 8);
+      f.focus(8);
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: 5, name: '5'}}], 1);
+      expect(f.engine.state().focusedOutput).toBe(1);
+
+      f.engine.onPointerOutput(1);
+      f.focus(null);
+      f.focus(7);
+      expect(f.engine.state().focusedOutput).toBe(1);
+    });
+
+    it('still lapses with focus_follows_mouse on, where the crossing also moves the focused output', () => {
+      // The default config. The crossing moves the focused output (rule 4), which already ended the
+      // suppression through clause 1 -- so this test exists to prove Task 4 did not change that path.
+      const f = threeOutputs('bindsym Mod4+q kill');
+      f.engine.start();
+      f.mapOn(3, 7);
+      f.mapOn(1, 8);
+      f.focus(8);
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: 5, name: '5'}}], 1);
+      expect(f.engine.state().focusedOutput).toBe(1);
+
+      f.engine.onPointerOutput(2);
+      expect(f.engine.state().focusedOutput).toBe(2);
+      f.focus(null);
+      f.focus(7);
+      expect(f.engine.state().focusedOutput).toBe(3);
+    });
+
+    // Fix round 1, I3: the one reachable difference this change makes for a `focus_follows_mouse yes`
+    // user -- the default, and the user's own config -- and it is a strict improvement, not the
+    // redundancy the first report claimed. D8 rules that "a failed clause clears the record for good
+    // rather than merely answering false, so a focused output that wanders away and comes back cannot
+    // resurrect a suppression the user has already overruled". A pointer crossing was the one way to
+    // wander away that did NOT clear it: rule 4 moved `focusedOutput`, so clause 1 would merely have
+    // answered false at the next report -- but if the user came back by command before any report
+    // arrived, the record equalled `focusedOutput` again and the suppression was resurrected. The
+    // existing `does not resurrect the suppression when the user comes back to that display` drives that
+    // path with `focus_output` on both legs and so never reached this hole.
+    //
+    // What discriminates: the `focus_output` BACK onto output 1 between the crossing and the report.
+    // Without it the crossing's own move of `focusedOutput` would fail clause 1 all by itself and the
+    // report would be honoured with or without the clear, so the test would pass either way.
+    it('does not let a command back onto that display resurrect the suppression after a crossing', () => {
+      const f = threeOutputs('bindsym Mod4+q kill');     // the default: focus_follows_mouse yes
+      f.engine.start();
+      f.mapOn(3, 7);
+      f.mapOn(1, 8);
+      f.focus(8);
+      f.engine.run([{type: 'workspace', target: {kind: 'number', number: 5, name: '5'}}], 1);
+      expect(f.engine.state().focusedOutput).toBe(1);    // armed for output 1, showing empty workspace 4
+
+      f.engine.onPointerOutput(2);                      // the user wanders off to the middle display
+      expect(f.engine.state().focusedOutput).toBe(2);
+      f.engine.run([{type: 'focus_output', target: {name: 'fixture-1'}}], 2);   // ... and comes back
+      expect(f.engine.state().focusedOutput).toBe(1);
+      expect(f.tree().visible.get(1)).toBe(4);           // nothing re-armed: `visible` never changed
+      expect(f.tree().occupied(4)).toBe(false);          // ... and clause 2 would still hold
+
+      f.focus(null);
+      f.focus(7);
+      expect(f.engine.state().focusedOutput).toBe(3);    // overruled once, overruled for good
+    });
+  });
 });
 
 /**
@@ -1178,5 +1301,354 @@ describe('onSwipe', () => {
     f.engine.onLocked();
     f.engine.onSwipe('left', 7);
     expect(f.engine.state().activeWorkspace).toBe(0);
+  });
+});
+
+// Task 1: the mirror image of D6. D6 is "the frame moved, follow it with the tree"; this is "the tree
+// moved, follow it with the frame". The defect the Phase 5 ledger carried: a commanded move re-homes a
+// floating window and emits no rect at all, so it stays drawn on the display it left and then appears
+// to vanish when that display switches away from the workspace it now belongs to. Measured port calls
+// at the failure: ["moveTo:1:0","decorations","decorations"].
+describe('a floating window moved by command follows the tree with its frame', () => {
+  // THREE outputs, all of DIFFERENT SIZE, for both reasons this project has learned the hard way:
+  // - different sizes, so a proportional translation and a plain origin offset differ;
+  // - three of them, so "translate into the focused output" and "translate into the output showing the
+  //   destination workspace" are different answers. With two outputs they coincide, which is how three
+  //   earlier tests in this repo passed while testing nothing.
+  const WIDE = {x: 0, y: 0, width: 1920, height: 1080};
+  const NARROW = {x: 1920, y: 0, width: 1280, height: 720};
+  const TALL = {x: 3200, y: 0, width: 1024, height: 1280};
+  const threeOutputs = (text = 'bindsym Mod4+q kill') => fakeEngine(text, {
+    monitors: [{id: 0, index: 0, area: WIDE}, {id: 1, index: 1, area: NARROW}, {id: 2, index: 2, area: TALL}],
+    primary: 0,
+    workspaceCount: 10,
+  });
+  // Centre at x = 1440 (75% of WIDE) and y = 540 (50% of WIDE).
+  const floatingOnWide = {kind: 'floating' as const, rect: {x: 1340, y: 490, width: 200, height: 100}};
+
+  it('move container to output carries the frame onto the destination display', () => {
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1))
+      .toBe('move container to output');
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    // 75% of 1280 is 960; + NARROW.x (1920) - half the width (100) = 2780. y: 50% of 720 - 50 = 310.
+    expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
+  });
+
+  it('move container to workspace uses the output showing that workspace, not the focused one', () => {
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    // Workspace 3 (index 2) is the one output 2 is showing, and the user is standing on output 0.
+    expect(f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 3, name: '3'}}], 1))
+      .toBe('moved to workspace 3');
+    expect(f.tree().location(1)).toEqual({workspace: 2, output: 2, floating: true});
+    // 75% of 1024 is 768; + TALL.x (3200) - 100 = 3868. y: 50% of 1280 - 50 = 590.
+    expect(f.appliedRects().get(1)).toEqual({x: 3868, y: 590, width: 200, height: 100});
+  });
+
+  it('writes nothing while the window sits on a workspace no output is showing, and catches up when it is shown', () => {
+    // Workspace 6 is PINNED to output 1 by the config, and output 1 is showing workspace 2. So after the
+    // move the window's workspace belongs to an output other than the one its frame is on and is on no
+    // output's screen -- the two halves this test needs at once. Without the pin every spare workspace is
+    // homed on output 0 (`workspacesOn(0)` is [0,3,4,5,6,7,8,9] in this fixture), the parked workspace
+    // would come back on the very output the frame is already on, and the first half would hold for the
+    // wrong reason: nothing to translate rather than a parked window left alone.
+    const f = threeOutputs('bindsym Mod4+q kill\nworkspace 6 output fixture-1\n');
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    // Workspace 6 (index 5) is on no output's screen: the window is parked, and a parked frame is
+    // unobservable, so there is nothing to translate it against.
+    expect(f.engine.run([{type: 'move_to_workspace', target: {kind: 'number', number: 6, name: '6'}}], 1))
+      .toBe('moved to workspace 6');
+    expect(f.tree().location(1)).toEqual({workspace: 5, output: 1, floating: true});
+    expect([...f.tree().visible]).toEqual([[0, 0], [1, 1], [2, 2]]);
+    expect(f.appliedRects().get(1)).toBeUndefined();
+
+    // Now show workspace 6, which brings it up on output 1 where it lives. The frame is still on output
+    // 0, so this is the moment it has an answer -- and a commanded move that parked the window must not
+    // lose the follow-up.
+    expect(f.engine.run([{type: 'workspace', target: {kind: 'number', number: 6, name: '6'}}], 2))
+      .toBe('workspace 6');
+    expect([...f.tree().visible]).toEqual([[0, 0], [1, 5], [2, 2]]);
+    expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
+  });
+
+  it('writes no frame for a fullscreen floating window', () => {
+    // Review Focus 5. Mutter owns a fullscreen window's frame; a rect written at it fights the
+    // compositor and can leave the window the size of the output it came from.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, {...floatingOnWide, fullscreen: true});
+    f.flush();
+    f.applied.length = 0;
+
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1))
+      .toBe('move container to output');
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    expect(f.appliedRects().get(1)).toBeUndefined();
+  });
+
+  it('writes no frame for a tiled window, which the layout pass owns', () => {
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1);
+    f.flush();
+    f.applied.length = 0;
+
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1))
+      .toBe('move container to output');
+    // The layout pass gives it the whole of NARROW; the follow pass must not also have queued one.
+    expect(f.appliedRects().get(1)).toEqual({x: 1920, y: 0, width: 1280, height: 720});
+  });
+
+  it('translates the frame as the command line left it, so a centred window lands centred on the destination', () => {
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    // Two commands in one run(): `move position center` centres the window on output 0, and the move
+    // then re-homes it. The follow pass has to translate the frame as THAT command left it -- the centre
+    // of output 0 -- so the window ends up centred on the output it moved to, and not merely somewhere
+    // proportional to where it started. This order and not the reverse: `move position` reads the
+    // *selection* of the focused output's workspace, and once the move has carried the window to output
+    // 1's workspace the user is no longer standing on it, so the reverse order makes `move position`
+    // refuse with "move position applies only to a tracked floating window" and tests nothing.
+    f.engine.run([
+      {type: 'move_position', position: 'center'},
+      {type: 'move_container_to_output', target: 'right'},
+    ], 1);
+    const rect = f.appliedRects().get(1)!;
+    expect(rect.x + rect.width / 2).toBe(NARROW.x + NARROW.width / 2);
+    expect(rect.y + rect.height / 2).toBe(NARROW.y + NARROW.height / 2);
+  });
+
+  it('leaves a dragged window alone: D6 moves the tree to the frame and the two then agree', () => {
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    // The drag: Mutter reports the window on output 1 with the frame STRADDLING the boundary -- most of
+    // it over NARROW, which is why the compositor has handed it to output 1, but its top-left corner
+    // still over WIDE. D6 re-homes it; this pass must then write nothing, or it would yank the window
+    // out from under the pointer. The straddle is the point: a frame wholly inside NARROW would be left
+    // alone by the already-in-the-destination guard whether the monitor guard existed or not, so the
+    // test could not tell the two apart. Here only the monitor guard keeps the pass quiet -- without it
+    // the clamp would snap the corner to NARROW's left edge mid-drag.
+    f.change(1, {monitor: 1, rect: {x: 1850, y: 100, width: 200, height: 100}}, 'frame');
+    f.flush();
+
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    expect(f.appliedRects().get(1)).toBeUndefined();
+  });
+
+  it('writes nothing, and does not throw, while Mutter names a monitor the topology no longer has', () => {
+    // Mid-unplug the compositor can report a window on a monitor index that has already gone from the
+    // topology, and there is then no source work area to scale the frame against. Without the guard this
+    // divided a rect by `undefined` and threw out of the commit, taking the whole relayout with it.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    // The window reaches output 1 by a DRAG, so D6 re-homes the tree and this pass has carried nothing --
+    // and only then does the compositor name a monitor that is gone. Both halves are needed to reach the
+    // source lookup at all: a window this pass had carried to output 1 would be held by its carry record
+    // one line earlier (and in fix round 1, with the geometric guard, a frame already inside the
+    // destination stopped it one line earlier still -- which is how the first draft of this test passed
+    // whether the guard was there or not).
+    f.change(1, {monitor: 1, rect: {x: 2000, y: 100, width: 200, height: 100}}, 'frame');
+    f.flush();
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    f.applied.length = 0;
+
+    f.change(1, {monitor: 99}, 'frame');
+    f.flush();
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    expect(f.appliedRects().get(1)).toBeUndefined();
+  });
+
+  it('translates once, and not again on each commit that follows while Mutter still reports the old monitor', () => {
+    // The pass is level-triggered and runs on every commit, while the compositor may not report the
+    // window's new monitor until a later one -- the engine's own geometry write raises a signal it commits
+    // on, and this fake never updates `monitor` at all. Without the carry record the second pass
+    // re-translated the frame it had just moved and the clamp pinned it at x=3000 instead of 2780, so the
+    // window crept into the destination's far corner by itself.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1);
+    f.flush();
+    expect(f.applied.map(rects => [...rects])).toEqual([[[1, {x: 2780, y: 310, width: 200, height: 100}]]]);
+
+    // Another commit, with Mutter still naming output 0 as the window's monitor.
+    f.applied.length = 0;
+    f.change(1, {}, 'frame');
+    f.flush();
+    expect(f.windows.get(1)!.monitor).toBe(0);
+    expect(f.appliedRects().get(1)).toBeUndefined();
+  });
+
+  it('carries a frame that straddles the boundary with its corner already over the destination', () => {
+    // Fix round 1, I1. The window the user has just dragged to the seam: 400 wide at x=1900, so 20px over
+    // WIDE and 380 over NARROW, which is why the compositor hands it to output 1 and D6 re-homes the tree
+    // there. Its top-left corner is now over NARROW while the window is NOT the one this pass carried, so
+    // a guard keyed on GEOMETRY mistook it for a frame already carried and wrote nothing at all on the
+    // move below -- the original defect, in the one geometry a 1728-wide panel beside a 1920-wide display
+    // makes routine. Keyed on "already carried" there is no such false negative.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.change(1, {monitor: 1, rect: {x: 1900, y: 100, width: 400, height: 200}}, 'frame');
+    f.flush();
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    f.applied.length = 0;
+
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'left'}], 1))
+      .toBe('move container to output');
+    expect(f.tree().location(1)).toEqual({workspace: 0, output: 0, floating: true});
+    // Centre x = 2100, which is 14.0625% across NARROW; the same fraction of WIDE is 270, less half the
+    // width = 70. Centre y = 200, 27.7...% of 720; the same fraction of 1080 is 300, less 100 = 200.
+    expect(f.appliedRects().get(1)).toEqual({x: 70, y: 200, width: 400, height: 200});
+  });
+
+  it('drops the carry record once the compositor confirms it, so a later move across carries again', () => {
+    // The walk: command the window across (carried, record held), the compositor catches up, the user
+    // drags it back by hand (D6 moves the tree, nothing carried), then commands it across again. If the
+    // record were never dropped it would still name output 1 and would suppress that second carry, and the
+    // window would stay drawn on the display it was told to leave -- the original defect, once per window.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1);
+    expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
+
+    // The compositor confirms the carry: the record has done its work.
+    f.change(1, {monitor: 1, rect: {x: 2780, y: 310, width: 200, height: 100}}, 'frame');
+    f.flush();
+    // Dragged back to output 0 by hand. D6 re-homes the tree; this pass carries nothing.
+    f.change(1, {monitor: 0, rect: {x: 1340, y: 490, width: 200, height: 100}}, 'frame');
+    f.flush();
+    expect(f.tree().location(1)).toEqual({workspace: 0, output: 0, floating: true});
+    // The hand that dragged it also focused it; the first command left the selection behind on output 0's
+    // workspace, so without this the command below has nothing to act on ("nothing moved").
+    f.focus(1);
+    f.flush();
+    f.applied.length = 0;
+
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 2))
+      .toBe('move container to output');
+    expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
+  });
+
+  it('carries again once the compositor reports the frame anywhere other than where it started', () => {
+    // Fix round 2, I5. A client that refuses the frame -- the `stubborn` clients the README names -- never
+    // lets the carry land, so the compositor never reports the output the frame was carried TO. The record
+    // must still end, or it suppresses the next genuine carry back to that output forever: the original
+    // defect, for that window, with no catch-up. It ends on the first report of ANY monitor other than the
+    // one the frame was carried FROM, because that report already proves the frame is no longer where the
+    // carry started -- which is the whole of the uncertainty the record exists to cover.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+
+    // The carry is attempted and refused: a rect is written, the frame does not move, monitor stays 0.
+    f.refuseGeometry = true;
+    f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1);
+    f.refuseGeometry = false;
+    expect(f.windows.get(1)!.rect).toEqual({x: 1340, y: 490, width: 200, height: 100});
+
+    // The user drags it to output 2 by hand. D6 re-homes the tree; the record still names output 1.
+    f.change(1, {monitor: 2, rect: {x: 3300, y: 100, width: 200, height: 100}}, 'frame');
+    f.focus(1);
+    f.flush();
+    expect(f.tree().location(1)).toEqual({workspace: 2, output: 2, floating: true});
+    f.applied.length = 0;
+
+    // And commands it back to output 1 -- the output the stale record names.
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'left'}], 2))
+      .toBe('move container to output');
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    // Centre (3400, 150) is 19.53125% and 11.71875% across TALL; the same fractions of NARROW are 250 and
+    // 84.375, less half the width and height = 2070 and 34.
+    expect(f.appliedRects().get(1)).toEqual({x: 2070, y: 34, width: 200, height: 100});
+  });
+
+  it('does not let a carry record outlive the window it was kept for', () => {
+    // The record suppresses a second carry to the same output while the compositor has not confirmed the
+    // first. If `_forget` did not drop it, the next window to be given this id would inherit the
+    // suppression and get no frame at all -- the defect again, for one window, with no way to recover.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1);
+    expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
+
+    f.remove(1);
+    f.flush();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.applied.length = 0;
+
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 2))
+      .toBe('move container to output');
+    expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
+  });
+
+  it('does not let a carry record outlive a restart, which rebuilds everything else', () => {
+    // `restart` nulls the tree and clears `_manualFloating`, `_minimized`, `_raiseOrders` and
+    // `_lastFocus`: it is a fresh enable in all but name, and `setTilingEnabled(true)` clears the carry
+    // records beside those same four for exactly that reason. A record that outlived it would suppress the
+    // user's next genuine carry back to the same output -- a floating window left drawn on the display it
+    // was just told to leave, which is the defect this whole mechanism exists to fix.
+    //
+    // The client REFUSES the frame, which is the only state in which a surviving record is observable: a
+    // record lives until the compositor reports the frame somewhere other than where it started, and this
+    // fake's `geometry.apply` never moves `monitor` (see `translates once` above), so with the frame
+    // accepted the record would still be there and the second carry would be suppressed either way. With
+    // the refusal, the one thing that can drop the record is `restart` itself.
+    const f = threeOutputs();
+    f.engine.start();
+    f.mapOn(0, 1, floatingOnWide);
+    f.flush();
+    f.refuseGeometry = true;
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 1))
+      .toBe('move container to output');
+    f.refuseGeometry = false;
+    expect(f.windows.get(1)!.monitor).toBe(0);
+
+    expect(f.engine.run([{type: 'restart'}], 2)).toBe('restarted');
+    f.flush();
+    // Re-adopted on its own monitor's workspace, which is where the frame still is.
+    expect(f.tree().location(1)).toEqual({workspace: 0, output: 0, floating: true});
+    f.applied.length = 0;
+
+    expect(f.engine.run([{type: 'move_container_to_output', target: 'right'}], 3))
+      .toBe('move container to output');
+    expect(f.tree().location(1)).toEqual({workspace: 1, output: 1, floating: true});
+    expect(f.appliedRects().get(1)).toEqual({x: 2780, y: 310, width: 200, height: 100});
   });
 });

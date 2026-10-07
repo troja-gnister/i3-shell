@@ -26,6 +26,8 @@ export function resetActors(): void {
   layout.untracked.length = 0;
   layout.removed.length = 0;
   uiGroup.children.splice(0);
+  quickSettings.present = true;
+  quickSettings.external.length = 0;
 }
 
 type Handler = (...args: unknown[]) => unknown;
@@ -103,6 +105,24 @@ export class FakeActor {
     this.touch('set_size');
     this._width = width;
     this._height = height;
+  }
+
+  /**
+   * Clutter's `mapped`: false for an actor whose parent is hidden, which is every quick-settings item
+   * while the Quick Settings menu is shut. A test that cares sets it directly, since these doubles model
+   * no parent visibility chain.
+   */
+  mapped = true;
+
+  /** Stage coordinates. The doubles have one coordinate space, so this is the last set_position(). */
+  get_transformed_position(): [number, number] {
+    this.touch('get_transformed_position');
+    return [this._x, this._y];
+  }
+
+  get_transformed_size(): [number, number] {
+    this.touch('get_transformed_size');
+    return [this._width, this._height];
   }
 
   connect(signal: string, callback: Handler): number {
@@ -475,6 +495,84 @@ export const panel = {
   activities,
 };
 
+/**
+ * Main.panel.statusArea.quickSettings. `present` is settable so a test can model the session modes in
+ * which GNOME has not built it: the stubs type it `quickSettings?: QuickSettings`, so the extension has
+ * to survive its absence rather than take `enable()` down with it.
+ */
+export const quickSettings = {
+  present: true,
+  external: [] as FakeActor[],
+};
+
+const quickSettingsImpl = {
+  addExternalIndicator(indicator: FakeActor, _colSpan?: number): void {
+    indicator.touch('addExternalIndicator');
+    quickSettings.external.push(indicator);
+  },
+};
+
+/**
+ * The three shapes a press on an St.Button can have, from this repo's point of view:
+ *
+ * - `flip-then-emit`: the widget flips its own `checked` and THEN emits `clicked` -- what St.Button in
+ *   toggle mode is believed to do, and what every handler that reads `this.checked` assumes.
+ * - `emit-then-flip`: the same widget, the other way round.
+ * - `no-flip`: the widget touches `checked` at all only if it was asked to toggle itself.
+ *
+ * Which of the first two real St does is a fact about the compositor's C code that nothing in this repo
+ * can observe (fix round 1, I3), so the adapter has to be right for both and these let a test say so. A
+ * button that was not asked for `toggleMode` flips nothing, whichever order is named -- which is itself
+ * the property that makes "the widget cannot race us" testable.
+ */
+export type ClickOrder = 'flip-then-emit' | 'emit-then-flip' | 'no-flip';
+
+/** The `resource:///org/gnome/shell/ui/quickSettings.js` module, for the two classes this repo uses. */
+export const fakeQuickSettings = {
+  QuickToggle: class FakeQuickToggle extends FakeActor {
+    /**
+     * How many times `checked` was WRITTEN, not what it is. `checked` is a GObject property on the real
+     * St.Button, and a property write is the access that matters here twice over: GJS logs a critical for
+     * one made to a disposed actor (hence `touch`), and a redundant one is what `setChecked`'s own
+     * equality guard exists to avoid -- unobservable through the value alone, since the value is the same
+     * either way.
+     */
+    checkedWrites = 0;
+    private _checked: boolean;
+
+    constructor(props: Record<string, unknown> = {}) {
+      super('QuickToggle', props);
+      this._checked = props.checked === true;
+    }
+
+    get checked(): boolean { return this._checked; }
+
+    set checked(value: boolean) {
+      this.touch('checked');
+      this.checkedWrites++;
+      this._checked = value;
+    }
+
+    /**
+     * A real press, modelled as St.Button's release path: the widget flips `checked` ITSELF only in toggle
+     * mode, and `order` says which side of `clicked` that flip lands on. `emit` alone would model only the
+     * signal and would quietly assume the answer to the one question here that is open.
+     */
+    click(order: ClickOrder = 'no-flip'): void {
+      const togglesItself = this.props.toggleMode === true;
+      if (togglesItself && order === 'flip-then-emit') this.checked = !this.checked;
+      this.emit('clicked');
+      if (togglesItself && order === 'emit-then-flip') this.checked = !this.checked;
+    }
+  },
+  SystemIndicator: class FakeSystemIndicator extends FakeActor {
+    readonly quickSettingsItems: FakeActor[] = [];
+    constructor() {
+      super('SystemIndicator');
+    }
+  },
+};
+
 /** One entry of Main.layoutManager.monitors: the fields chrome placement reads. */
 export interface FakeMonitor {
   index: number;
@@ -553,7 +651,12 @@ export const fakeMain = {
   },
   panel: {
     addToStatusArea(_name: string, button: FakeActor): void { panel.button = button; },
-    statusArea: {activities},
+    statusArea: {
+      activities,
+      get quickSettings(): typeof quickSettingsImpl | undefined {
+        return quickSettings.present ? quickSettingsImpl : undefined;
+      },
+    },
   },
   layoutManager: {
     uiGroup,

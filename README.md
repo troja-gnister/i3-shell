@@ -16,10 +16,15 @@ as in i3 and sway.
 implemented; **Phase 5 — per-output workspaces — is implemented on the `phase-5` branch** and awaits its
 live walk: [docs/acceptance/phase-5.md](docs/acceptance/phase-5.md), A50–A66, deliberately unticked,
 because a second physical display, a real pointer and a real unplug are the only evidence for most of it.
-Verification at the time of writing: **1160 unit tests in 71 files**, both TypeScript programs, the
-Layer 0 import gate, the tree lint, and the private nested integration suite under `test/integration/` —
-**637 assertions, exit 0, zero `LIMITATION` branches**, its first full green run for Phase 5 (2026-10-01,
-at `863a8ec`), covering real output removal and restore rather than skipping those branches.
+The Quick Settings tiling switch described below, plus six cleanup tasks, are on `cleanup-and-toggle` on
+top of that branch. Verification at the time of writing: **1292 unit tests in 76 files**, both TypeScript
+programs, the Layer 0 import gate, the tree lint, and the private nested integration suite under
+`test/integration/` — **867 assertions, exit 0, zero `LIMITATION` branches**, at `0867e37` on 2026-10-06,
+which is the newest commit on this branch that changes behaviour -- everything above it is
+documentation -- so every line of code here has had a native run. It covers real output removal and
+restore rather than skipping those branches, and includes the Quick Settings toggle's own native scenario
+(`scenario_toggle_flushes_the_attic`). PROJECT.md is the canonical verification record and lists the
+superseded figures. Take every count here from a run, never from arithmetic.
 
 ---
 
@@ -256,6 +261,27 @@ accelerators can also fail to arrive**, differing between sessions, even though 
 IBus absent every probed accelerator worked every time. If a binding silently does nothing, suspect this
 first.
 
+## Switching tiling off
+
+A **Tiling** switch sits in GNOME's Quick Settings (the system menu, top right). Turning it off:
+
+- drops every key grab, so your `bindsym` lines belong to GNOME again;
+- restores every GNOME setting i3-shell overrode, including `num-workspaces`;
+- hides the workspace pills and every border, frame and tab bar;
+- **brings every hidden window back.** i3-shell hides a workspace by parking its windows on a second
+  GNOME workspace Mutter will not render. Switching off returns all of them to the live workspace, so
+  nothing is left invisible with nothing running to bring it back.
+
+While it is off, commands are refused rather than queued — including over D-Bus, so `i3-msg`-style calls
+answer `tiling is switched off` instead of half-applying a `reload`.
+
+Turning it on again re-adopts every window on screen and tiles them, the same way enabling the
+extension does. The switch is **not remembered**: every new session starts with tiling on. It is not the
+same as disabling the extension — the switch itself would disappear with it, and there would be no way
+back on.
+
+If the screen locks while tiling is off, unlocking leaves it off.
+
 ## Control it like i3-msg
 
 ```sh
@@ -363,11 +389,13 @@ workspace to the display you are looking at when nothing else is showing it. Bin
 - **Workspaces or windows jumped after you ran the integration suite.** `npm run test:integration`
   rebuilds `dist/`; it restores a release bundle on exit, but only `make install` refreshes the live
   symlink. Finish with `make install`.
-- **A floating window you moved with a key is still drawn on the old display — and then vanishes.**
-  `move container to output` and `move container to workspace N` re-home a floating window in the tree
-  but emit no frame change, so it stays painted where it was; the moment the other display switches away
-  from the workspace it now belongs to, it disappears. It is not lost (`GetTree` shows it on the new
-  workspace). Drag it with the mouse, which does move the frame, or `floating disable` and move it tiled.
+- **A floating window you moved with a key landed somewhere you did not expect on the new display.**
+  Its frame follows its workspace now, the way i3 does it: the size is kept and the centre keeps the same
+  fraction of the work area it had on the display it left, so on a smaller display it lands nearer the
+  middle than you may expect. One deliberate difference from i3: the position is clamped so the top-left
+  corner stays inside the destination, which is what makes `move container to output primary` a usable
+  rescue for a window stranded on a display you cannot see. A window wider or taller than the destination
+  sits at its left or top edge, at its original size, and overhangs the far edge.
 - **`$mod+N` opened the overview and took the keyboard.** A workspace switch that crosses displays warps
   the pointer (i3's `mouse_warping output` default). A warp out of the **top-left corner** trips GNOME's
   hot-corner pressure barrier. Either veto the warp with `mouse_warping none` in your config, or turn the
@@ -382,7 +410,7 @@ workspace to the display you are looking at when nothing else is showing it. Bin
 ## Develop
 
 ```sh
-npm test                      # unit suite: pure core + adapter doubles, on Node (1160 tests, 71 files)
+npm test                      # unit suite: pure core + adapter doubles, on Node (1292 tests, 76 files)
 npm run typecheck             # two programs: tsconfig.json (src + GNOME types), tsconfig.test.json (tests + Layer 0)
 npm run check:layer0          # fails if Layer 0 imports gi:// / resource:// / src/shell
 npm run lint:tree             # eslint over src/tree and its tests
@@ -408,5 +436,34 @@ Shell with its own settings, runtime directory, Wayland socket and D-Bus; `--dis
 extension off so a scenario can capture untouched GNOME originals. It differs from a real session in two
 disclosed ways: `--no-x11` (Xwayland clients and visible mode are unverified) and IBus is suppressed (so
 the conflict above is not covered). Release builds must never contain the `org.i3shell.Debug` surface.
+
+**The suite fails a run when GNOME Shell logs a CRITICAL, and that gate is scanned in two scopes.** The
+harness appends a marker to `shell.log` immediately before it signals gnome-shell. *Before* the marker —
+the session proper — nothing is excused: every mid-run `disable()` is covered, including the three
+disable/enable cycles of the `--name-conflict` step. *After* the marker, where GNOME is tearing down its
+own widgets, a critical is attributed by **the stack trace GJS prints under it, not by the name of the
+object it mentions**: with a trace block it fails the run if and only if some frame of that block names
+this extension (its directory is always spelled `i3-shell@troja`, GNOME's own JS is loaded from a
+GResource and has no filesystem path at all); with no trace block — which is how libmutter's C-side
+criticals arrive — it fails unless the text matches one of **two** named GNOME-owned allowances,
+`Invalid work id` and `Attempting to call back into JSAPI during the sweeping phase of GC`. Three upstream
+Mutter assertions are excluded by exact text in *both* scopes. Every allowance that fires is printed as a
+note, with a count, so an allowance that starts firing is visible rather than silent.
+
+Three costs, carried up from `criticals.sh`'s own header rather than left in it:
+
+1. The GC-sweeping text is **also the signature of an actor this extension failed to destroy**, so a
+   leaked actor collected only during the final teardown no longer fails a run. A leak on any `disable()`
+   still does, which is what the pre-marker scope is for.
+2. The price of attributing by trace: a critical from **our own code** that GJS prints with no stack trace
+   at all, after the marker, is now allowed where matching the object's name might have caught it. Whether
+   that case occurs is unmeasured, not impossible.
+3. The narrower half of the same trade: a disposed-object critical naming an actor of ours but raised
+   entirely from GNOME's frames is allowed. What that gives up was shown not to work — GNOME builds
+   `St.BoxLayout` too, and reading ownership out of the object name produced a false positive on GNOME's
+   own Background Apps toggle.
+
+The implementation and the full reasoning are in `test/integration/criticals.sh`; its self-test,
+`test/integration/criticals-selftest.sh`, runs first in the suite and needs no GNOME session.
 
 License: GPL-2.0-or-later.

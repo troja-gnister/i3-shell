@@ -19,6 +19,7 @@ import {spawnShell} from './shell/exec';
 import {ShellAccent} from './shell/accent';
 import {Decorations} from './shell/decorations';
 import {Indicator} from './shell/indicator';
+import {TilingToggle} from './shell/tilingToggle';
 import {KeyBinder} from './shell/keys';
 import {Launcher} from './shell/launcher';
 import type {RecencyStore} from './shell/launcher';
@@ -40,6 +41,7 @@ export default class I3ShellExtension extends Extension {
   private _engine: Engine | null = null;
   private _keys: KeyBinder | null = null;
   private _indicator: Indicator | null = null;
+  private _toggle: TilingToggle | null = null;
   private _bars: MonitorBars | null = null;
   private _decorations: Decorations | null = null;
   private _accent: ShellAccent | null = null;
@@ -241,6 +243,28 @@ export default class I3ShellExtension extends Extension {
     });
     this._engine = engine;
 
+    // The Quick Settings switch. Constructed AFTER the engine, because its callback drives the engine,
+    // and before the session watcher, so a lock arriving during enable finds it already built. It owns
+    // its two actors and one teardown route, `destroy()` in disable(); it registers nothing with the
+    // SignalTracker, exactly as src/shell/indicator.ts does not.
+    //
+    // `applyTiling`'s second line is not decoration (fix round 1, I3): `TilingToggle` holds no state of its
+    // own beyond what the engine tells it, deliberately, so that nothing depends on what GNOME did to the
+    // widget's own `checked` around the click. That line is how the engine's answer gets back -- including
+    // when the engine refuses, in which case the switch snaps back to the truth instead of showing a lie
+    // and inverting every click after it.
+    const toggle = new TilingToggle(enabled => { applyTiling(enabled); });
+    this._toggle = toggle;
+    // Hoisted (`function`, not `const`) so it can name `toggle` while `toggle`'s own callback names it.
+    // ONE route from "tiling should be `enabled`" to the engine and back to the switch, which the test
+    // build's `Debug.SetTiling` also goes through: a second route that skipped the second line would let
+    // a scenario move the engine while leaving the visible switch free to disagree, and that disagreement
+    // is exactly what inverts every click afterwards.
+    function applyTiling(enabled: boolean): void {
+      engine.setTilingEnabled(enabled);
+      toggle.setChecked(engine.tilingEnabled);
+    }
+
     const session = new SessionWatcher(tracker,
       closing.unlessClosing(() => { engine.onLocked(); }),
       closing.unlessClosing(() => { engine.onUnlocked(); indicator.hideActivities(); }));
@@ -268,7 +292,9 @@ export default class I3ShellExtension extends Extension {
       bars.monitorsChanged();
       engine.setRowHeight(measureRowHeight());
     };
-    tracker.connect(Main.layoutManager, 'monitors-changed', closing.unlessClosing(() => {
+    // `monitors-changed` is real on Main.layoutManager; @girs's layout.d.ts is hand-written and declares
+    // no SignalSignatures, so the class carries only GObject.Object's map. See connectUnchecked.
+    tracker.connectUnchecked(Main.layoutManager, 'monitors-changed', closing.unlessClosing(() => {
       remeasure();
       engine.onMonitorsChanged();
     }));
@@ -290,7 +316,7 @@ export default class I3ShellExtension extends Extension {
     // first $PATH scan and the first read of every installed .desktop file
     // would otherwise both land on the keystroke the user is waiting on.
     defer(() => catalogue.prime());
-    const debug = __I3SHELL_TEST__ ? new DebugObject(session, engine, launcher) : null;
+    const debug = __I3SHELL_TEST__ ? new DebugObject(session, engine, launcher, toggle, applyTiling) : null;
     this._dbus = new DBusControl(engine, debug, notify);
     log.info(`ready: ${engine.state().grabbed} bindings grabbed, config from ${engine.lastLoad.source} (${engine.lastLoad.path})`);
   }
@@ -318,6 +344,8 @@ export default class I3ShellExtension extends Extension {
     this._keys = null;
     this._indicator?.destroy();
     this._indicator = null;
+    this._toggle?.destroy();
+    this._toggle = null;
     this._bars?.destroy();
     this._bars = null;
     this._decorations?.destroy();

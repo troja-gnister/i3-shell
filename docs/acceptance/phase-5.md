@@ -359,7 +359,14 @@ gnome-extensions enable i3-shell@troja
       whole walk shows nothing new attributable to i3-shell — in particular not during a workspace swap,
       which moves several windows in one go.
 - [x] Nothing new appears during the unplug/replug of A62, the gesture of A63, or the disable/enable of
-      A64.
+      A64. The unplug/replug is not silent, and this is what to expect rather than file: the nested
+      suite's `--hotplug` scenario passes every assertion, and mutter logs a pair of criticals while it
+      runs — `meta_monitor_manager_get_logical_monitor_from_number: assertion '(unsigned int) number <
+      g_list_length (manager->logical_monitors)' failed` and `meta_workspace_get_work_area_for_monitor:
+      assertion 'logical_monitor != NULL' failed`, twice, inside one millisecond. Instrumenting this
+      project's only work-area call site showed them landing 39 ms *before* the extension's first
+      work-area call of the reconfiguration, so they belong to GNOME's own hotplug handling;
+      `test/integration/criticals.sh` excludes both by exact text and reports them whenever they appear.
 - [x] Log out at the end: no burst of criticals on shutdown.
 
 ---
@@ -389,14 +396,57 @@ gnome-extensions enable i3-shell@troja
 - **`move container to output` is implemented but unbound.** i3 ships no default binding for it either;
   bind it yourself if you want it (`bindsym $mod+Ctrl+p move container to output primary` is the useful
   one).
-- **A floating window moved by *command* keeps its old frame.** `move container to output` and
-  `move container to workspace N` re-home a floating window in the tree but emit **no frame change**, so
-  it stays drawn exactly where it was — and then appears to *vanish* when the other display switches away
-  from the workspace it now belongs to. Confirmed by execution, not inference: the commit's port calls
-  are `["moveTo:1:0","decorations","decorations"]`, with no rect. The D6 cross-output re-home cannot
-  correct it either, because no monitor *change* occurred. Workaround: drag the window instead, or
-  `floating disable` first and move it tiled. Pre-existing, but Phase 5 is what made `$mod+Shift+N` a
-  cross-display operation, so expect to meet it.
+- **A floating window moved by command now carries its frame, proportionally.** `move container to
+  output`, `move container to workspace N`, a directional `move` across an output edge, `move workspace
+  to output` and a workspace shown on a different output after being parked all give a floating window a
+  frame on the output its workspace now lives on: the size is unchanged and the centre keeps the same
+  fraction of the work area, which is i3's own `floating_fix_coordinates`. Each of those five was
+  confirmed by execution. One divergence from i3: the position is clamped so the frame's top-left
+  corner stays inside the destination work area, because i3-shell's destination may be a display you
+  cannot see and `move container to output primary` is the documented rescue for that case. A window
+  wider or taller than the destination therefore sits at its left or top edge and overhangs the far
+  one, at its original size. (Was a Known Limitation through Phase 5; fixed 2026-10-06.)
+- **A dialog opens on the workspace you are looking at, not on its parent's.** i3 does the same, as far as can be
+  established: every `transient_for` string in the installed i3 4.25.1 binary was read (its source was not
+  available) and none places a window by its parent. It uses `WM_TRANSIENT_FOR` to make the window float and to answer `popup_during_fullscreen`, and places the
+  dialog on the focused workspace like any other new window. So a background application that raises a
+  dialog puts it in front of you rather than on the workspace its main window is parked on. Deliberate,
+  and the opposite would put a modal grab on a window you cannot see.
+- **A frame the compositor keeps reporting on the output the carry started from is carried once, and not
+  again.** To avoid carrying the same frame twice (each pass clamping it further into the far corner), the
+  engine remembers the output it carried each floating frame *from* and *to*, and stops suppressing as soon
+  as the compositor reports that window on any output other than the one it started on. Two cases never
+  produce such a report, and in both the window keeps the frame its client left it with until it is carried
+  to a different output or closed. Measured, three outputs, with `move container to output`:
+  - a client that **refuses the rect** (the `stubborn` clients the README names): the carry is written and
+    ignored, the compositor goes on reporting the original output, and a later command back to the same
+    output writes nothing — `APPLIED=[]`. **Corrected 2026-10-06** (whole-branch review of
+    `cleanup-and-toggle`): this used to read "where the same walk with the refusal removed writes
+    `{x: 2070, y: 34}`", which is wrong twice over, and the re-run is what reproduces today. Removing the
+    refusal changes nothing about the walk: both variants write `{x: 2780, y: 310, 200×100}` for the first
+    carry and then nothing at all for the command back, because the record ends on the *compositor's* report
+    of a monitor other than the one the frame started on — and accepting the rect is not that report.
+    (Nothing in the walk makes the compositor re-report, and the unit fake's `geometry.apply` writes the
+    rect without touching `monitor`, so the two variants are indistinguishable there.) `{x: 2070, y: 34}`
+    belongs to a different walk: it is what the carry back to output 1 writes once the window has been
+    **dragged** onto output 2 first, which is the parenthetical below, measured by
+    `carries again once the compositor reports the frame anywhere other than where it started`. So the
+    discriminator is the compositor confirmation, never the refusal. (Dragging it anywhere else first
+    *does* clear the record, which is what the `from` half of the record buys and what fix round 2
+    repaired: before it, any third output left the record stale forever.)
+  - a **command pressed while the window is still being dragged on the output it is leaving**: the carry
+    lands (`applied [[1,{x:395,y:205,…}]]`), the drag's own motions then overwrite the frame, the monitor is
+    reported unchanged throughout, and nothing catches up after release — final state `monitor 1`,
+    `rect {x:1950,…}` (over the right-hand output) with the workspace on the left-hand one. The alternative
+    is to re-carry on every motion, which fights the pointer; i3 leaves a dropped window where it was
+    dropped, so this is a trade and not a pure defect.
+- **A replug is NOT one of them**, and the first version of the bullet above wrongly said it was. An
+  output that leaves takes its work area with it, so there is no source rectangle to scale a proportion
+  against and the pass skips the window; by the time the compositor reports the surviving monitor, that
+  monitor and the output showing the workspace agree, so the pass is silent for the same reason it leaves
+  a dragged window alone. Mutter relocates such a frame itself, which is why the window is still visible.
+  Measured, not inferred: with `NARROW` removed from the topology the pass applied nothing, before and
+  after the monitor report. (Task 1 fix round 1, finding I3.)
 - **GNOME's hot corner can swallow the pointer warp.** `workspace N` warps the pointer when the switch
   crosses displays (i3's `mouse_warping output` default, A61). Warping *out of* the top-left corner trips
   Mutter's pressure barrier, which opens the overview and takes the keyboard — mid-walk, from a key you
@@ -410,6 +460,8 @@ gnome-extensions enable i3-shell@troja
   varying subset of accelerators. See `docs/acceptance/phase-3.md` and `phase-3b.md`.
 
 ## Automated evidence (not acceptance)
+
+Phase 4's own criteria (A38-A49) are walked separately, in `docs/acceptance/phase-4.md`.
 
 **Unit suite: 1160 tests in 71 files**, green at the tip of `phase-5`, alongside both TypeScript
 programs, the Layer 0 import gate and the tree lint. **Nested integration suite: 637 assertions, exit 0,
