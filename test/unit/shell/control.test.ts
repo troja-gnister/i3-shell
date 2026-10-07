@@ -10,8 +10,22 @@ const owning: {
   unowned: number[];
 } = {name: '', flags: -1, acquired: null, lost: null, unowned: []};
 
-const exported: Array<{path: string; unexported: boolean}> = [];
+/**
+ * One per skeleton the code wraps, in creation order (control first, then the test-build debug one).
+ * `unexports` counts every call that reached `unexport()`; `unexportedWhileNotExported` counts the ones
+ * GLib would have refused -- see the Gio double below for why that is a count and not a thrown error.
+ */
+const exported: Array<{
+  path: string; unexported: boolean; unexports: number; unexportedWhileNotExported: number;
+}> = [];
 const logCalls: Array<[string, string, unknown]> = [];
+
+/**
+ * Set by a test to make one `export()` call of the run fail, counted from 1 in call order: 1 is the
+ * control skeleton's, 2 is the test build's debug skeleton.
+ */
+const faults = {failExportNumber: 0};
+let exportCalls = 0;
 
 vi.mock('gi://Gio', () => ({
   default: {
@@ -20,11 +34,32 @@ vi.mock('gi://Gio', () => ({
     BusNameOwnerFlags: {NONE: 0},
     DBusExportedObject: {
       wrapJSObject: () => {
-        const entry = {path: '', unexported: false};
+        const entry = {path: '', unexported: false, unexports: 0, unexportedWhileNotExported: 0};
         exported.push(entry);
+        let live = false;
         return {
-          export: (_connection: unknown, path: string) => { entry.path = path; },
-          unexport: () => { entry.unexported = true; },
+          export: (_connection: unknown, path: string) => {
+            if (++exportCalls === faults.failExportNumber)
+              throw new Error('export refused');
+            entry.path = path;
+            live = true;
+          },
+          // THE DOUBLE UNEXPORT IS COUNTED, NOT THROWN, because GLib does not throw either:
+          // `g_dbus_interface_skeleton_unexport` is a `g_return_if_fail (connections != NULL)`, so on an
+          // already-unexported skeleton it logs `GLib-GIO-CRITICAL` and returns. A double that threw would
+          // be testing a GLib that does not exist, AND the throw would land in `_stopPublishing`'s own
+          // `try`/`catch` -- which is exactly why the real bug produced a passing suite for this long.
+          // So what this fake makes impossible is a test that passes because nothing threw: the second
+          // unexport is silent here, as it is in production, and only the counters can tell it happened.
+          unexport: () => {
+            entry.unexports++;
+            if (!live) {
+              entry.unexportedWhileNotExported++;
+              return;
+            }
+            live = false;
+            entry.unexported = true;
+          },
           emit_signal: () => {},
         };
       },
@@ -77,15 +112,19 @@ const {DBusControl, DebugObject} = await vi.importActual<{
 
 const NAME_LOST = 'D-Bus name org.i3shell.Control was not acquired or was lost';
 
-function control(notify = vi.fn()): {control: {destroy(): void}; notify: typeof notify} {
+function control(notify = vi.fn(), debug: unknown = null): {
+  control: {destroy(): void}; notify: typeof notify;
+} {
   const engine = fakeEngine().engine as unknown;
-  return {control: new DBusControl(engine, null, notify), notify};
+  return {control: new DBusControl(engine, debug, notify), notify};
 }
 
 describe('D-Bus control name ownership', () => {
   beforeEach(() => {
     logCalls.length = 0;
     exported.length = 0;
+    faults.failExportNumber = 0;
+    exportCalls = 0;
     owning.acquired = null;
     owning.lost = null;
     owning.unowned.length = 0;
@@ -122,6 +161,58 @@ describe('D-Bus control name ownership', () => {
     expect(notify).toHaveBeenCalledTimes(1);
     expect(exported.every(entry => entry.unexported)).toBe(true);
     expect(owning.unowned).toEqual([7]);
+  });
+
+  it('unexports the control skeleton once when a lost name is followed by a disable', () => {
+    // The real sequence from /tmp/i3-shell-nested.egGsmS/shell.log, where phase2-checks.py
+    // --name-conflict takes the name away and then disables the extension 1 ms later: _stopPublishing
+    // runs from the name-loss callback and then again from destroy(). The second pass used to call
+    // `unexport()` on the already-unexported control skeleton, and GLib logged
+    // `g_dbus_interface_skeleton_unexport: assertion 'interface_->priv->connections != NULL' failed`.
+    // Asserting "it did not throw" would pass against the bug -- not throwing is what the bug does --
+    // so this counts the calls instead.
+    const {control: dbus} = control();
+
+    owning.lost!(null, 'org.i3shell.Control');
+    dbus.destroy();
+
+    expect(exported).toHaveLength(1);
+    expect(exported[0]!.unexports).toBe(1);
+    expect(exported[0]!.unexportedWhileNotExported).toBe(0);
+    // ...and the name is still released exactly once, which is the behaviour this must not have changed.
+    expect(owning.unowned).toEqual([7]);
+  });
+
+  it('unexports again after a re-enable, so the guard is per export and not once per process', () => {
+    // A disable/enable cycle builds a new DBusControl around a new skeleton. If the fix had been "never
+    // unexport twice" at too coarse a scope, the second lifecycle would leak an exported object onto the
+    // bus and the third --name-conflict cycle would find the name taken by us.
+    const first = control().control;
+    first.destroy();
+    const second = control().control;
+    second.destroy();
+
+    expect(exported.map(entry => entry.unexports)).toEqual([1, 1]);
+    expect(exported.map(entry => entry.unexportedWhileNotExported)).toEqual([0, 0]);
+  });
+
+  it('never unexports a skeleton whose own export threw', () => {
+    // The constructor's catch is the third caller of _stopPublishing, and it runs on the one path where
+    // the skeleton exists but was never exported -- the same GLib precondition, reached without any
+    // second pass. Both skeletons are checked because both are created before they are exported.
+    faults.failExportNumber = 1;
+    expect(() => control()).toThrow('export refused');
+    expect(exported).toHaveLength(1);
+    expect(exported[0]!.unexports).toBe(0);
+
+    exported.length = 0;
+    exportCalls = 0;
+    (globalThis as unknown as {__I3SHELL_TEST__: boolean}).__I3SHELL_TEST__ = true;
+    faults.failExportNumber = 2;
+    expect(() => control(vi.fn(), {})).toThrow('export refused');
+    expect(exported).toHaveLength(2);
+    expect(exported.map(entry => entry.unexports)).toEqual([1, 0]);
+    expect(exported.map(entry => entry.unexportedWhileNotExported)).toEqual([0, 0]);
   });
 });
 

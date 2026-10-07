@@ -49,7 +49,33 @@ SHUTDOWN_MARKER='--- i3-shell harness: gnome-shell shutdown begins ---'
 # scanner in `_by_trace` all have to agree on this exactly, and three copies of one ERE are three things
 # to keep in step. Plain ERE, the same in grep -E and in awk: an alternation of subsystem prefixes, no
 # metacharacter that depends on the dialect.
-CRITICAL_SUBSYSTEMS='(Gjs|GLib(-GObject)?|libmutter|GNOME Shell)-CRITICAL'
+#
+# GLIB'S SUB-DOMAIN IS A WILDCARD, not a list, and that is a fix for a gate hole rather than tidiness.
+# This read `GLib(-GObject)?-CRITICAL` and therefore did not match `GLib-GIO-CRITICAL`, so
+# /tmp/i3-shell-nested.egGsmS/shell.log line 129 --
+# `g_dbus_interface_skeleton_unexport: assertion 'interface_->priv->connections != NULL' failed`, a double
+# unexport of our OWN control skeleton, logged in the session scope 1 ms after an [i3-shell] disable --
+# was read by the gate and silently dropped, in the one scope where nothing is excused. GLib logs under a
+# domain per subsystem (GLib, GLib-GObject, GLib-GIO, GLib-GModule, GLib-Net...), so naming them one at a
+# time means one commit per subsystem that ever fails, each of them written after a run that passed when
+# it should not have.
+#
+# MEASURED, not assumed, over the four nested shell.logs from this session: the only `*-CRITICAL` domains
+# that actually appear are Gjs (3), libmutter (12) and GLib-GIO (1). Widening to `-[A-Za-z]+` adds exactly
+# one line across all four files, and it is that one.
+#
+# `[A-Za-z]+` and not `.*`: `.*` would let any text at all sit between `GLib` and `-CRITICAL`, so a
+# critical's own MESSAGE could supply the match -- a line that merely mentions GLib and a subsystem would
+# count as a critical of that subsystem. A sub-domain is one alphabetic word. `-WARNING` and `-Message`
+# lines still do not match, which the self-test pins.
+#
+# WHAT THIS STILL DOES NOT COVER, said rather than left to be discovered: the alternation is a closed list
+# outside GLib, so `Clutter-CRITICAL`, `St-CRITICAL` and a bare `Shell-CRITICAL` (the domain GNOME Shell's
+# C side uses for warnings, distinct from the `GNOME Shell` of its JS) would be read and dropped the same
+# way GLib-GIO was. None appears in any of the four logs -- 34 Clutter-WARNING and 36 Shell-WARNING do --
+# so this is an untested hole and not a measured one, and widening it is a change that has to be made with
+# a native run to judge it, not folded into this one.
+CRITICAL_SUBSYSTEMS='(Gjs|GLib(-[A-Za-z]+)?|libmutter|GNOME Shell)-CRITICAL'
 
 # THREE upstream Mutter assertions are excluded, by exact text, in BOTH scopes: this one, and the
 # hotplug pair after it. This one first. The suite

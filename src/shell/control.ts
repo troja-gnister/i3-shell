@@ -449,6 +449,14 @@ export class DebugObject {
 
 export class DBusControl {
   private readonly _control: Gio.DBusExportedObject;
+  // Tracked beside `_control` rather than by nulling it, deliberately. `g_dbus_interface_skeleton_unexport`
+  // is a `g_return_if_fail (connections != NULL)`: called on a skeleton that is not exported it logs
+  // GLib-GIO-CRITICAL and RETURNS, so the only defence is not to call it twice. `_debug` gets that for free
+  // by being nulled, but `_control` is also the TreeChanged emit target and is held for the object's whole
+  // life; making it nullable would put a `?.` at a call site whose real precondition is `_publishing`, and
+  // leave two differently-meaning null checks for a reader to tell apart. A boolean names the one GLib
+  // precondition it stands for, and a later export (a re-enable constructs a new DBusControl) sets it again.
+  private _controlExported = false;
   private _debug: Gio.DBusExportedObject | null = null;
   private _ownerId = 0;
   private _unsubscribe: (() => void) | null = null;
@@ -469,10 +477,15 @@ export class DBusControl {
       new ControlObject(engine, () => global.get_current_time(), shellState, log));
     try {
       this._control.export(Gio.DBus.session, OBJECT_PATH);
+      this._controlExported = true;
       // __I3SHELL_TEST__ is a compile-time literal, so release builds drop this branch and DEBUG_IFACE with it.
       if (__I3SHELL_TEST__ && debug !== null) {
-        this._debug = Gio.DBusExportedObject.wrapJSObject(DEBUG_IFACE, debug);
-        this._debug.export(Gio.DBus.session, OBJECT_PATH);
+        const debugSkeleton = Gio.DBusExportedObject.wrapJSObject(DEBUG_IFACE, debug);
+        // Assigned only after the export succeeded, for the same reason `_controlExported` exists:
+        // `_stopPublishing` unexports whatever `_debug` holds, and a skeleton stored before a throwing
+        // export would be unexported without ever having been exported -- the same silent critical.
+        debugSkeleton.export(Gio.DBus.session, OBJECT_PATH);
+        this._debug = debugSkeleton;
         log.info('test build: org.i3shell.Debug exported');
       }
       this._publishing = true;
@@ -513,7 +526,15 @@ export class DBusControl {
     }
     try { this._debug?.unexport(); } catch (error) { log.error('debug D-Bus unexport failed', error); }
     this._debug = null;
-    try { this._control.unexport(); } catch (error) { log.error('control D-Bus unexport failed', error); }
+    // Reachable three times over one object's life -- the name-loss callback, the constructor's catch and
+    // destroy() -- and --name-conflict really does hit two of them in that order. The `try` below cannot
+    // stand in for this guard: an unexport of an already-unexported skeleton does not throw, it logs a
+    // critical and returns, which is why the double unexport went unnoticed until the gate was widened to
+    // see GLib-GIO-CRITICAL. The flag is cleared first so a throwing unexport cannot leave it set.
+    if (this._controlExported) {
+      this._controlExported = false;
+      try { this._control.unexport(); } catch (error) { log.error('control D-Bus unexport failed', error); }
+    }
     if (releaseOwnership && this._ownerId !== 0) {
       const ownerId = this._ownerId;
       this._ownerId = 0;

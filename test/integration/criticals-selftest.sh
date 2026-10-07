@@ -299,6 +299,75 @@ check 'a critical separated from its trace block is treated as untraced' "$TOGGL
 check 'inside.sh reports the stack-trace attribution allowance' \
   '1' "$(grep -cF 'gnome_traced_shutdown_notes "$LOG"' "$ROOT/test/integration/inside.sh")"
 
+# 17. WHICH DOMAINS COUNT AS CRITICALS AT ALL -- the gate hole that hid a real bug of ours. Until
+#     CRITICAL_SUBSYSTEMS allowed any GLib sub-domain it read `GLib(-GObject)?`, so `GLib-GIO-CRITICAL`
+#     matched nothing, was dropped by every one of the three users of that variable, and the line below --
+#     our own control skeleton being unexported twice, 1 ms after an [i3-shell] disable, in the session
+#     scope where nothing is excused -- passed the gate. Every check in this section fails if the pattern
+#     is narrowed back: an unmatched line is not a critical, so each expected-fatal becomes empty.
+#     Verbatim from /tmp/i3-shell-nested.egGsmS/shell.log line 129, process prefix and all. It carries NO
+#     stack trace there, which is what a C-side g_return_if_fail looks like.
+GIO_UNEXPORT="(gnome-shell:290300): GLib-GIO-CRITICAL **: 18:29:37.416: g_dbus_interface_skeleton_unexport: assertion 'interface_->priv->connections != NULL' failed"
+# A second GLib sub-domain, to say that the fix is the wildcard and not a second hard-coded name.
+GLIB_GMODULE="GLib-GModule-CRITICAL **: 10:00:00.010: g_module_open_full: assertion 'file_name != NULL' failed"
+
+gio_before=$(log gio_before 'GNOME Shell-Message: [i3-shell] disable' "$GIO_UNEXPORT" "$SHUTDOWN_MARKER")
+check 'a GLib-GIO critical in the session scope is fatal' "$GIO_UNEXPORT" "$(session_criticals "$gio_before")"
+gmodule_before=$(log gmodule_before "$GLIB_GMODULE" "$SHUTDOWN_MARKER")
+check 'any GLib sub-domain critical is fatal in the session scope' "$GLIB_GMODULE" \
+  "$(session_criticals "$gmodule_before")"
+check 'a plain GLib critical is still fatal in the session scope' \
+  'GLib-CRITICAL **: 10:00:00.011: g_hash_table_lookup: assertion failed' \
+  "$(session_criticals "$(log glib_plain 'GLib-CRITICAL **: 10:00:00.011: g_hash_table_lookup: assertion failed' "$SHUTDOWN_MARKER")")"
+
+# 17a. The same line after the marker, untraced -- which is how a C-side critical really arrives. It
+#      matches no named text allowance, so the no-trace rule keeps it fatal there too. This is the check
+#      that proves `_by_trace`'s awk copy of the pattern recognises the domain as well: if the awk did not
+#      match it, the line would reach neither stream and this would read empty.
+gio_after=$(log gio_after "$SHUTDOWN_MARKER" "$GIO_UNEXPORT")
+check 'an untraced GLib-GIO critical is fatal after shutdown too' "$GIO_UNEXPORT" \
+  "$(shutdown_criticals "$gio_after")"
+check 'an untraced GLib-GIO critical is not reported as a traced GNOME note' '' \
+  "$(gnome_traced_shutdown_notes "$gio_after")"
+
+# 17b. ...and the trace rule applies to the new domain exactly as to the old ones, in both directions.
+#      Same critical line both times; only the frames differ. GIO criticals from C carry no trace, so
+#      these two fixtures are synthetic -- they exist to pin that the trace rule and the widened domain
+#      compose, rather than that GIO logs this way.
+gio_traced_gnome=$(log gio_traced_gnome "$SHUTDOWN_MARKER" "$GIO_UNEXPORT" "$TRACE_HEADER" "$FRAME_GNOME")
+check 'a GLib-GIO critical traced to GNOME only is allowed after shutdown' '' \
+  "$(shutdown_criticals "$gio_traced_gnome")"
+check 'a GLib-GIO critical traced to GNOME only is reported as a note' "$GIO_UNEXPORT" \
+  "$(gnome_traced_shutdown_notes "$gio_traced_gnome")"
+gio_traced_ours=$(log gio_traced_ours "$SHUTDOWN_MARKER" "$GIO_UNEXPORT" "$TRACE_HEADER" "$FRAME_OURS")
+check 'a GLib-GIO critical with a frame of ours is fatal after shutdown' "$GIO_UNEXPORT" \
+  "$(shutdown_criticals "$gio_traced_ours")"
+
+# 17c. WHAT THE WILDCARD MUST NOT START MATCHING. Only `-CRITICAL` lines are criticals: GLib's own
+#      warnings and messages, under any sub-domain, stay out of every scope.
+glib_noise=$(log glib_noise \
+  'GLib-GIO-WARNING **: 10:00:00.012: Failed to load module' \
+  'GLib-GIO-Message: 10:00:00.013: Using the memory GSettings backend' \
+  'GLib-GObject-WARNING **: 10:00:00.014: invalid cast' "$SHUTDOWN_MARKER")
+check 'GLib warnings and messages are not criticals' '' "$(session_criticals "$glib_noise")"
+
+# 17d. ...and the sub-domain is ONE ALPHABETIC WORD, not `.*`. This line is synthetic -- nothing logs it --
+#      and exists for one purpose, the same as section 13's ERE lookalike: with `GLib(-.*)?-CRITICAL` the
+#      `.*` would run from `GLib-` through the message to the `-CRITICAL` later in the text and report a
+#      WARNING line as a critical. The sub-domain has to be adjacent to `-CRITICAL` for the line to count.
+GLIB_IN_MESSAGE='GNOME Shell-WARNING **: 10:00:00.015: [i3-shell] gate: domain GLib-GIO, suffix -CRITICAL'
+glib_in_message=$(log glib_in_message "$GLIB_IN_MESSAGE" "$SHUTDOWN_MARKER")
+check 'a warning whose message mentions GLib and -CRITICAL is not a critical' '' \
+  "$(session_criticals "$glib_in_message")"
+
+# 17e. THE THREE USERS SHARE ONE VARIABLE. `_critical_lines`, `_by_trace`'s awk and
+#      `upstream_hotplug_notes` each reference `$CRITICAL_SUBSYSTEMS`; 17 and 17a exercise the first two
+#      directly, and the third cannot be reached with a GIO line because its second filter is the two
+#      fixed hotplug texts, which only libmutter prints. So pin the sharing structurally instead: a fourth
+#      spelling of the alternation copied into one of them is how these three silently stop agreeing.
+check 'all three critical scanners reference the one shared pattern' '3' \
+  "$(grep -cF '"$CRITICAL_SUBSYSTEMS"' "$ROOT/test/integration/criticals.sh")"
+
 if ((failures > 0)); then
   echo "$failures critical-gate assertion(s) failed" >&2
   exit 1
